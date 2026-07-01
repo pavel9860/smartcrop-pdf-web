@@ -1,0 +1,7 @@
+1. Separate architecture from the specification.
+2. All function calls produce errors.
+3. Offset settings in advance should be all visible, in one line
+4. Delete button is red- should be as others.
+5. Use icons the same like in win app.
+6. Filter strength buttons should be below "Strength" text. whole tab ide, all same width
+7. All elements of the menu should be the same as in win app, including switches, field, etc.
