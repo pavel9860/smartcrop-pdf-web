@@ -106,3 +106,14 @@ export const UNDO_DEPTH_OPTIONS: readonly number[] = [4, 10, 20, 50]
 export const UNDO_DEPTH_MIN = 1
 export const UNDO_DEPTH_MAX = 50
 export const DEFAULT_DEWARP_SUPERSAMPLE = 2.0
+
+// Dewarp model (pdf/imaging.ts) — pstwh/docuwarp, a two-stage ONNX pipeline: uvdoc.onnx (a CNN
+// predicting a coarse warp-field grid) + bilinear_unwarping.onnx (GridSample-based resampler).
+// DEWARP_MODEL_W/H are the CNN's FIXED input size baked into the trained weights (docuwarp
+// Unwarp.image_size = (488, 712), PIL (width, height) order) — not tunable, not a style choice.
+export const DEWARP_MODEL_W = 488
+export const DEWARP_MODEL_H = 712
+export const DEWARP_UVDOC_URL          = '/models/uvdoc.onnx'
+export const DEWARP_BILINEAR_URL       = '/models/bilinear_unwarping.onnx'
+export const DEWARP_UVDOC_CACHE_KEY    = 'docuwarp-uvdoc-v1'
+export const DEWARP_BILINEAR_CACHE_KEY = 'docuwarp-bilinear-v1'

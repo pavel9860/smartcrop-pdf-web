@@ -1,5 +1,11 @@
-1. Separate architecture from the specification.
-2. All function calls produce errors.
+1. DONE (2026-07-01) — Separate architecture from the specification. Now three docs:
+   docs/SmartCrop_PDF_Specification.md (canonical behavior, copied from desktop repo),
+   docs/SmartCrop_PDF_Specification_Web.md (web deviations/additions, §W1-W7),
+   ARCHITECTURE.md (mechanism only).
+2. All function calls produce errors. — Investigated: root cause was a real delete_pages()
+   bug (page count never shrank after delete) plus test-mock bugs; both fixed, 122/122
+   tests pass, tsc/eslint clean. Broader E2E pass on Export/Split/Delete via real browser
+   still open.
 3. Offset settings in advance should be all visible, in one line
 4. Delete button is red- should be as others.
 5. Use icons the same like in win app.

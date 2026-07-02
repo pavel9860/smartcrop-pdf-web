@@ -139,6 +139,12 @@ export class AppModel {
   private _current_bitmap: ImageBitmap | null = null
   private _is_loading = false
 
+  // Logical page index -> original adapter page index. The adapter (pdf.js) has no page-deletion
+  // primitive — unlike desktop's PyMuPDF `doc.delete_pages()`, which physically shrinks the
+  // document so indices simply renumber — so delete_pages() here removes entries from this map
+  // instead. Every adapter call that takes a page index must translate through it (_get_work).
+  private _page_map: number[] = []
+
   constructor(private readonly _adapter: RendererAdapter) {}
 
   // ---------------------------------------------------------------------------
@@ -181,10 +187,11 @@ export class AppModel {
     this._work_cache.clear()
     this._output_cache.clear()
     this._current_bitmap = null
+    this._page_map = this._doc ? Array.from({ length: this._doc.page_count }, (_, i) => i) : []
   }
 
   get has_document(): boolean { return this._doc !== null }
-  page_count(): number { return this._doc?.page_count ?? 0 }
+  page_count(): number { return this._page_map.length }
 
   // ---------------------------------------------------------------------------
   // Navigation
@@ -192,7 +199,7 @@ export class AppModel {
 
   get view_total(): number {
     if (!this._doc) return 0
-    return output_page_count(this._doc.page_count, this.document.applied)
+    return output_page_count(this.page_count(), this.document.applied)
   }
 
   get view_position(): number { return this._view_pos }
@@ -205,7 +212,7 @@ export class AppModel {
     if (!this._doc) return
     const clamped = Math.max(1, Math.min(this.view_total, pos))
     this._view_pos = clamped
-    const { src_page } = view_to_source(clamped, this._doc.page_count, this.document.applied)
+    const { src_page } = view_to_source(clamped, this.page_count(), this.document.applied)
     this._current_page = src_page
     // Follow toggle: keep pattern in sync
     if (this._current_follow && this._pages_mode === PagesMode.SELECT) {
@@ -238,7 +245,7 @@ export class AppModel {
 
   resolve_pages(): number[] {
     if (!this._doc) return []
-    return resolve_pages(this._pages_mode, this._doc.page_count, this._select_pattern)
+    return resolve_pages(this._pages_mode, this.page_count(), this._select_pattern)
   }
 
   // ---------------------------------------------------------------------------
@@ -282,9 +289,11 @@ export class AppModel {
     this.document.auto_active = true
 
     this._refresh_committed_crops_after_detect(pages, union)
-    if (!this._keep_ratio) {
-      const sz = this._page_dims(this._current_page)
-      this._ratio = sz.width / sz.height
+    // Ratio source is the detection UNION's aspect ratio, not the page's (model.py:375-376
+    // _finish_detect) — keep-ratio locks the crop to the shape of the detected content, not
+    // the whole page. A prior version of this port used _page_dims() here, which is wrong.
+    if (!this._keep_ratio && union && box_height(union) > 0) {
+      this._ratio = box_width(union) / box_height(union)
     }
 
     ctrl.complete(new Ok())
@@ -422,14 +431,20 @@ export class AppModel {
   }
 
   set_keep_ratio(on: boolean, ratio?: number): void {
+    // Capture BEFORE mutating _keep_ratio below — `on && !this._keep_ratio` checked against
+    // the just-assigned value always evaluated false when turning ratio on, so the
+    // pre-populate branch below was dead code (confirmed via test; real regression, not a
+    // hypothetical). Mirrors model.py:435-438's off->on edge, adapted for the fact this port
+    // has no "unset" sentinel for _ratio (always a float, default 1.0).
+    const was_off = !this._keep_ratio
     this._keep_ratio = on
     if (ratio !== undefined && ratio > 0) this._ratio = ratio
-    else if (on && !this._keep_ratio) {
-      // Pre-populate from current page size (spec §7.4)
-      if (this._doc) {
-        const sz = this._page_dims(this._current_page)
-        this._ratio = sz.width / sz.height
-      }
+    else if (on && was_off) {
+      // Pre-populate from the detection union's aspect ratio, not the page's (model.py:435-441
+      // uses document.union, same source as _run_detect above) — keep-ratio locks to the
+      // shape of the detected content.
+      const u = this.document.union
+      if (u && box_height(u) > 0) this._ratio = box_width(u) / box_height(u)
     }
   }
 
@@ -819,21 +834,39 @@ export class AppModel {
     if (!doc) return
     const pages = this.resolve_pages()
     if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
-    if (pages.length >= doc.page_count) throw new DeleteAllPagesError('Cannot delete all pages')
+    if (pages.length >= this.page_count()) throw new DeleteAllPagesError('Cannot delete all pages')
 
     const sorted = [...pages].sort((a, b) => a - b)
+    const removed = new Set(sorted)
 
-    this.history.push(this.document)
+    // Delete is destructive, not undoable (model.py:596 clears history rather than snapshotting;
+    // spec §13 states Rotate is "Fully undoable" in explicit contrast). It can't be made undoable
+    // here regardless: _page_map (below) lives outside DocumentState, so a restored
+    // applied/rotation map could reference original page indices the map no longer has — the same
+    // class of desync bug as the set_keep_ratio fix above, just for a field History can't reach.
+    this.history.clear()
 
     // Reindex per-page maps (spec §13)
     this.document.applied      = reindex_map(this.document.applied,      sorted)
     this.document.rotation     = reindex_map(this.document.rotation,     sorted)
     this.document.processed    = reindex_map(this.document.processed,    sorted)
     this.document.detect_cache = reindex_map(this.document.detect_cache, sorted)
+    if (this.document.auto_active && this.document.detect_cache.size > 0) {
+      this.document.union = detection_union([...this.document.detect_cache.values()])
+    } else {
+      this.document.union = null
+      this.document.auto_active = false
+    }
+
+    // Rebuild the logical->original page index map (model.py:581-583's `doc.delete_pages` +
+    // page_sizes rebuild, adapted since pdf.js has no equivalent in-place deletion primitive).
+    this._page_map = this._page_map.filter((_, i) => !removed.has(i))
 
     this._source_cache.clear()
     this._work_cache.clear()
     this._output_cache.clear()
+    this._current_page = Math.min(this._current_page, this.page_count() - 1)
+    this._view_pos = Math.min(this._view_pos, this.view_total)
     this._invalidate_current_bitmap()
   }
 
@@ -857,16 +890,16 @@ export class AppModel {
 
     const total_views = this.view_total
     const job = new PageBatchJob(`Exporting ${this.settings.export_format}…`, total_views)
-    void this._run_export(job, doc, filename)
+    void this._run_export(job, filename)
     return job
   }
 
-  private async _run_export(job: PageBatchJob, doc: DocInfo, filename: string): Promise<void> {
+  private async _run_export(job: PageBatchJob, filename: string): Promise<void> {
     const ctrl = job.controller
     const target_dpi = DPI_PRESETS[this.settings.compress_preset] ?? null
     const greyscale  = this.settings.output_colours === 'Grayscale'
 
-    const pages_out = await this._render_export_pages(ctrl, doc, target_dpi, greyscale)
+    const pages_out = await this._render_export_pages(ctrl, target_dpi, greyscale)
     if (!pages_out) return
 
     try {
@@ -886,11 +919,11 @@ export class AppModel {
   }
 
   private async _render_export_pages(
-    ctrl: BatchController, doc: DocInfo,
+    ctrl: BatchController,
     target_dpi: number | null, greyscale: boolean,
   ): Promise<OutputPage[] | null> {
     const pages_out: OutputPage[] = []
-    for (let p = 0; p < doc.page_count; p++) {
+    for (let p = 0; p < this.page_count(); p++) {
       if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }
       const sz = this._page_dims(p)
       try {
@@ -939,7 +972,7 @@ export class AppModel {
 
     const sz = this._current_page_size()
     const p  = this._current_page
-    const { split_idx } = view_to_source(this._view_pos, this._doc.page_count, this.document.applied)
+    const { split_idx } = view_to_source(this._view_pos, this.page_count(), this.document.applied)
 
     const committed = this.document.applied.get(p)
     const overlay   = this._build_overlay(p)
@@ -1024,10 +1057,11 @@ export class AppModel {
 
   // Effective page size accounting for the page's current rotation (spec §13: a 90°/270°
   // rotation swaps the reported page dimensions; mirrors desktop model.py's _page_dims).
-  // Callers that need the raw, never-rotated stored size go through doc.page_sizes[p]
-  // directly (only _rotate_page, which needs BOTH: pre-step dims for the box math below).
+  // `p` is a logical (post-delete) index — translate through _page_map to reach the
+  // original-indexed page_sizes array, same boundary _get_work() crosses for the adapter.
   private _page_dims(p: number): PageSize {
-    const sz = this._doc?.page_sizes[p] ?? { width: SYNTH_W, height: SYNTH_H }
+    const orig = this._page_map[p] ?? p
+    const sz = this._doc?.page_sizes[orig] ?? { width: SYNTH_W, height: SYNTH_H }
     const rot = this.document.rotation.get(p) ?? 0
     return rot % 180 === 90 ? { width: sz.height, height: sz.width } : sz
   }
@@ -1043,11 +1077,13 @@ export class AppModel {
     const doc = this._doc
     const dpi = this._mode === Mode.SCANNED ? SRC_DPI : NORMAL_DPI
     const rotation = this.document.rotation.get(p) ?? 0
+    // p is logical (post-delete); the adapter only knows original pdf.js page indices.
+    const orig = this._page_map[p] ?? p
     const src = this._source_cache.get(p)
       ?? await (async (): Promise<ImageBitmap> => {
         const b = doc
-          ? await this._adapter.get_source_image(p, dpi, rotation)
-          : await this._adapter.make_synth_page(p, SYNTH_W, SYNTH_H)
+          ? await this._adapter.get_source_image(orig, dpi, rotation)
+          : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
         this._source_cache.set(p, b)
         return b
       })()
@@ -1059,7 +1095,7 @@ export class AppModel {
 
     const intent = this._page_process_intent(p)
     const work = await this._adapter.get_work_image(
-      p, intent, this.settings.dewarp_supersample, rotation)
+      orig, intent, this.settings.dewarp_supersample, rotation)
     this._work_cache.set(p, work)
     return work
   }

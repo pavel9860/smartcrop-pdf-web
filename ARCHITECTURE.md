@@ -3,16 +3,25 @@
 Status: **implemented (beta), architecture under active correction**. The prior "approved,
 pre-implementation" status line was stale — `src/` is a working ~4,200-line app, not a design
 sketch, and this document is being brought back in line with the real code rather than the other
-way around. Behavioral contract remains `docs/SmartCrop_PDF_Specification.md` §4–§22 unchanged.
-This document governs the web-specific module layout, PDF/imaging stack, worker model, state
-ownership, layout, testing and deployment.
+way around.
+
+**Document split (2026-07-01):** behavior and mechanism used to be mixed in this one file. They
+are now three documents, mirroring the desktop repo's CLAUDE.md/spec split:
+- `docs/SmartCrop_PDF_Specification.md` — the canonical, platform-agnostic behavioral contract
+  (§1–§22), copied verbatim from the desktop repo. Unchanged for the web.
+- `docs/SmartCrop_PDF_Specification_Web.md` — web-specific behavioral supplement: every point
+  where the browser platform forces a real deviation from that contract (§W2), plus browser-only
+  behavior the desktop has no equivalent of at all (layout, shortcuts, file I/O — §W3–§W7).
+- **This file** — mechanism only: module layout, PDF/imaging stack, worker model, state ownership,
+  build/test/deploy. If a fact describes what the user experiences, it belongs in one of the two
+  spec documents above, not here — file it there instead of restating it in this file.
 
 **Implementation status at a glance** (kept current — update this table, not just prose, when
 something changes):
 
 | Area | Status |
 |---|---|
-| Core state/logic (`src/core/*.ts`) | Implemented, 1:1 with desktop `AppModel`/`DocumentState`/`History`/`Settings`/`DragState`/`BatchJob` (§5, §10). **`model.ts` (1130 lines) has 0% test coverage** — violates CLAUDE.md's "every public method has ≥1 test" rule and fails the `--cov-fail-under=80`/90%-on-core gates today. Real gap, not a doc staleness note. |
+| Core state/logic (`src/core/*.ts`) | Implemented, 1:1 with desktop `AppModel`/`DocumentState`/`History`/`Settings`/`DragState`/`BatchJob` (§5, §10). `model.ts` (1167 lines) has a 50-test suite (`tests/core/model.test.ts`) covering every public method — caught and fixed a real `delete_pages()` regression (page count never shrank) during authoring. Branch coverage is 70.91%, below the `vitest.config.ts` 90%-on-core gate in §19 — **gap open, not closed**. |
 | PDF load/classify/render (`src/pdf/loader.ts`) | Implemented — one adapter class, runs on the **main thread**, not `render.worker.ts` (that file no longer exists — see §7a) |
 | OpenCV.js scan processing (`src/pdf/imaging.ts`) | Implemented — also main thread, not `imaging.worker.ts` (deleted — see §7a). Detect/Auto-detect/Crop/B-W/Sharpen all verified working via headless-browser E2E. |
 | PDF glyph shaping (CJK/Bengali/Devanagari/standard-14 fonts) | Implemented — `cMapUrl`/`standardFontDataUrl`/`useWorkerFetch` wired into `getDocument()`, resources served via `vite-plugin-static-copy`. Previously garbled without this. |
@@ -28,7 +37,7 @@ something changes):
 | Help panel (spec §16: Contents card + sections) | Implemented (§2, `help_view.ts`) |
 | Output Quality / Export as two cards (matches desktop `panels.py`, not the merged card an earlier draft shipped) | Implemented |
 | `confirm_overwrite` setting | Stored, **not yet enforced** — no File System Access API overwrite-detection path exists yet (§13); the setting is inert pending that |
-| Test suite (`tests/`) | Partial — `core/geometry`, `viewmodel`, `parsing`, `lru`, `enums` covered (72 tests); `model.ts`, all of `pdf/`, all of `ui/` at 0%. No Playwright e2e suite committed (ad hoc scripts were used to verify this session's fixes, not checked in). |
+| Test suite (`tests/`) | `tests/core/` complete — `geometry`, `viewmodel`, `parsing`, `lru`, `enums`, `model` (122 tests total, all passing, `tsc`/`eslint` clean). All of `pdf/` and `ui/` still at 0% (need Playwright, not Vitest — global 80%-lines gate fails at 41% because of this). No Playwright e2e suite committed yet (ad hoc scripts verified prior fixes, not checked in). |
 
 Where this document and the running code disagree, that is a bug in the document (or a
 regression in the code) — file it as such, not as an acceptable drift.
@@ -303,55 +312,23 @@ C:/DOCS/Code/SmartCroPDF-Web/
 
 ---
 
-## 3. Three-column layout (web-specific)
+## 3. Three-column layout — DOM/CSS mechanism
 
-```
-+--SmartCrop PDF — filename.pdf-----------------------------------------+
-| [left sidebar 320px]  [detail panel 380px, slides in]  [canvas: flex] |
-|                                                                        |
-| Document & State      ← Settings or Help content        page bitmap   |
-| Pages to Process        appears here when active.                      |
-| Scan Processing         Slides in with CSS transition.  crop frame     |
-| Split Each Page Into    Canvas shrinks to fill          overlay        |
-| Detect Text Borders     remaining space (min 400px).                   |
-| ▸ Advanced                                                             |
-| Actions                                                                |
-| Output Quality                                                        |
-| Export                 (scrollable stack)                              |
-| ─────────────────────                                                  |
-| Settings  Help                                                         |
-| Undo  Redo  Reset                                                      |
-| <  [n] / total  >     (pinned, outside scroll)                        |
-+------------------------------------------------------------------------+
-```
+Behavior (card order/content, detail-panel open/close semantics, status-text placement) is
+specified in `docs/SmartCrop_PDF_Specification_Web.md` §W3 — this section is the CSS/DOM
+implementation of that behavior only.
 
-### 3.1 Left sidebar
+**Left sidebar** — fixed width `PANEL_WIDTH` (320px), `<div>` with `overflow-y: auto`. Pinned
+bottom bar sits outside the scroll container as a sibling, not inside it.
 
-Fixed width `PANEL_WIDTH` (320px). Scrollable card stack (same card order as spec §6):
-Document & State → Pages to Process → Scan Processing (scanned only, no gap when hidden) →
-Split Each Page Into → Detect Text Borders → ▸ Advanced → Actions → Output Quality → Export.
+**Detail panel** — a `<div>` between the sidebar and canvas. Collapsed state: `width: 0`. Open
+state: `width: DETAIL_PANEL_WIDTH` (380px), transitioned via CSS `transition: width 180ms ease`.
+Canvas column is `flex: 1` so it fills whatever space remains (clamped to a 400px minimum in CSS).
+No modal, no overlay, no z-index stacking — the panel is a normal DOM sibling.
 
-Pinned bottom bar (outside scroll): Settings + Help buttons | Undo / Redo / Reset | page nav.
-
-### 3.2 Detail panel (Settings / Help)
-
-A `<div>` between the sidebar and the canvas. Default state: collapsed (width 0, display none).
-When Settings or Help is clicked:
-- Panel transitions to width `DETAIL_PANEL_WIDTH` (380px) with a CSS `transition: width 180ms ease`
-- Canvas `flex: 1` so it fills the remaining space (never below 400px — sidebar hides detail if
-  viewport too narrow)
-- Panel header shows "Settings" or "Help" + a close (×) button
-- Pressing the same button again, or Esc, closes the panel
-- Pressing the other button switches content without closing/reopening (instant swap)
-
-Panel is part of the main page DOM — no modal, no overlay, no z-index stacking.
-
-### 3.3 Status text on the page image
-
-Per spec §6 (and TODO item 4): coordinates + page number drawn **on the page image** at
-top-left with a shadow/backdrop, not a separate bottom bar. Rendered in `canvas_view.ts`
-`paint()` call, same as the desktop `draw_status()` on canvas. Mouse coordinates update on
-`pointermove`, page counter updates on navigation.
+**Status text** — rendered inside `canvas_view.ts`'s `paint()` call directly onto the canvas
+bitmap (same technique as desktop's `draw_status()`), not a separate DOM element. Mouse
+coordinates update on `pointermove`; the page counter updates on navigation.
 
 ---
 
@@ -849,7 +826,9 @@ imaging ops).
 
 ---
 
-## 13. File I/O (browser-native)
+## 13. File I/O — implementation
+
+Behavior specified in `docs/SmartCrop_PDF_Specification_Web.md` §W6. Implementation:
 
 **Load:** `<input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff">` + drag-and-drop
 on canvas/window. `File` objects passed directly to `loader.ts` (no temp files).
@@ -859,8 +838,8 @@ on canvas/window. `File` objects passed directly to `loader.ts` (no temp files).
 - Multi-file formats (JPG/PNG): show Save dialog via **File System Access API** (Chrome/Edge) if
   available; fallback = zip all files with `fflate` (pure JS, ~10KB) → single `.zip` download.
   Firefox/Safari fallback is the only case where a zip is produced.
-- Overwrite confirmation: before any export, if File System Access API is used and the file
-  exists, show a confirmation dialog (spec §15 `confirm_overwrite` setting).
+- Overwrite confirmation is **not implemented** (spec Web §W2 row 6) — no code path checks File
+  System Access API for an existing file before writing.
 
 ---
 
@@ -875,46 +854,27 @@ Implemented in `pdf/loader.ts` as a special `SyntheticDoc` path that generates
 
 ---
 
-## 15. Performance targets (spec §17)
+## 15. Performance targets
 
-| Operation | Target |
-|---|---|
-| Canvas repaint (non-imaging) | < 16 ms (60 fps during drag) |
-| Page navigation | < 100 ms (LRU hit: immediate bitmap draw) |
-| Filter/dewarp per page | < 200 ms (OpenCV.js WASM; spec: ≤150 ms on laptop — WASM is competitive) |
-| Export per page | < 300 ms (JPEG encode + pdf-lib embedding) |
-| Worker init (render.worker) | < 500 ms (PDF.js load, once per session) |
-| Worker init (imaging.worker) | < 3 s (OpenCV.js WASM 8MB, once per session) |
-| ONNX model fetch + init | < 5 s (10MB cached in IndexedDB; 0 ms on repeat sessions) |
-
-LRU `CACHE_WINDOW=16` pages — resident GPU memory stays flat. Export streams one page at a time.
-`ImageBitmap.close()` called on LRU eviction (GPU texture released immediately).
+Targets specified in `docs/SmartCrop_PDF_Specification_Web.md` §W5. Implementation levers:
+LRU `CACHE_WINDOW=16` pages bound resident GPU memory; export streams one page at a time;
+`ImageBitmap.close()` is called on LRU eviction to release the GPU texture immediately.
 
 ---
 
-## 16. Keyboard shortcuts (spec §21, web-mapped)
+## 16. Keyboard shortcuts
 
-| Shortcut | Action |
-|---|---|
-| `Ctrl+O` | Load Files (triggers file input click) |
-| `Ctrl+Enter` | Apply Crop |
-| `Ctrl+S` | Export (current format) |
-| `Ctrl+Z` | Undo |
-| `Ctrl+Y` | Redo |
-| `ArrowLeft` / `ArrowRight` | Prev / Next page |
-| `PageUp` / `PageDown` | Prev / Next page |
-| Mouse wheel over canvas | Prev / Next page |
-| `Ctrl +` / `Ctrl -` | Zoom UI (CSS `font-size` on root, scales rem-based layout) |
-| `Ctrl 0` | Reset zoom |
-| `Enter` in page box | Jump to page |
-| `Esc` | Cancel drag / Close detail panel |
-| Right-click during drag | Cancel drag |
+Behavior/mapping specified in `docs/SmartCrop_PDF_Specification_Web.md` §W4. Implemented as a
+single `keydown` listener in `app.ts` dispatching to the matching `AppModel`/`AppController` call;
+`Ctrl +/-/0` scale via CSS `font-size` on `:root` (rem-based layout scales with it).
 
 ---
 
-## 17. Theme and typography (spec §19)
+## 17. Theme and typography — implementation
 
-CSS custom properties for the two-theme palette (dark/light/system via `prefers-color-scheme`):
+Palette semantics (what each color means, when it's used) specified in
+`docs/SmartCrop_PDF_Specification_Web.md` §W3 and desktop spec §19. Implementation: CSS custom
+properties for the two-theme palette (dark/light/system via `prefers-color-scheme`):
 
 ```css
 :root[data-theme="dark"] {
@@ -926,12 +886,10 @@ CSS custom properties for the two-theme palette (dark/light/system via `prefers-
 ```
 
 All sizes in `rem`; root `font-size` = `FONT_SIZE_DEFAULT` (15px) scaled by the zoom setting.
-Crop frame: dashed border + diamond handles at corners + midpoints (spec §6 TODO item 6 — bigger
-squares, no circles). Split badges: circle with number, 30% larger than base font. Status text:
-drawn on canvas with `ctx.shadowBlur` drop shadow.
-
-Icons: SVG inline, colour via `currentColor` (follows button active/inactive state —
-spec §19; no independent colour channel).
+Crop frame: dashed border + diamond handles at corners + midpoints. Split badges: circle with
+number, 30% larger than base font. Status text: drawn on canvas with `ctx.shadowBlur` drop shadow.
+Icons: SVG inline, colour via `currentColor` (follows button active/inactive state; no independent
+colour channel).
 
 ---
 
@@ -984,7 +942,8 @@ tsc --noEmit && eslint src && vitest run --coverage --reporter=verbose && playwr
 
 ## 20. Spec invariants coverage (§22)
 
-Every §22 invariant is exercised by at least one test:
+Gaps against these invariants are tracked in `docs/SmartCrop_PDF_Specification_Web.md` §W2, not
+here. Every §22 invariant is exercised by at least one test:
 
 | Invariant | Test file |
 |---|---|
@@ -1028,10 +987,6 @@ the desktop itself doesn't have.
 
 ## 21. What does NOT change
 
-All spec §4–§22 behavior; the crop-never-dropped invariant (§9.5, §12.4); the one-render-path
-WYSIWYG guarantee (§12.1); the LRU memory bound (§17); the keep-ratio lock enforced at the
-final normalisation step (§9.7); the batch model fail-fast behavior (§5.5); the error taxonomy
-and dispatch contract (§6); the state ownership rules (§3/§10); the card layout and control
-order (§6). None of these change for the web.
-
-TIFF export: not in this version. File System Access API zip fallback covers the gap.
+See `docs/SmartCrop_PDF_Specification_Web.md` §W7 for the full behavioral invariant list. TIFF
+export is the one item removed outright (not deferred) — the File System Access API + zip fallback
+(§13) covers multi-file output for the formats that remain (JPG/PNG).

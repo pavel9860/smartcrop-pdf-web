@@ -14,7 +14,7 @@ import {
 // ---------------------------------------------------------------------------
 
 function make_bitmap(w = 100, h = 100): ImageBitmap {
-  return { width: w, height: h, close: (): void => { /* no-op */ } } as unknown as ImageBitmap
+  return { width: w, height: h, close: (): void => { /* no-op */ } }
 }
 
 interface MockOpts {
@@ -35,10 +35,11 @@ function make_mock_adapter(opts: MockOpts = {}): {
   const adapter: RendererAdapter = {
     load_files: (files: File[]): Promise<DocInfo> => {
       bump('load_files')
-      const n = files.length || page_count
+      // page_count is independent of files.length — one PDF file can hold many pages, exactly
+      // like the real PdfRendererAdapter derives it from parsed page count, not input count.
       return Promise.resolve({
-        page_count: n,
-        page_sizes: Array.from({ length: n }, () => ({ width: page_w, height: page_h })),
+        page_count,
+        page_sizes: Array.from({ length: page_count }, () => ({ width: page_w, height: page_h })),
         file_names: files.map(f => f.name),
         mode,
       })
@@ -113,14 +114,14 @@ describe('load_files / reset / has_document / page_count', () => {
     model.set_split(2)
     await model.reset()
     expect(model.split_count).toBe(1)          // _reset_state() clears interaction state
-    expect(calls.load_files).toBe(2)            // reset() calls load_files([]) again
+    expect(calls['load_files']).toBe(2)            // reset() calls load_files([]) again
   })
 
   it('reset() is a no-op with no document loaded', async () => {
     const { adapter, calls } = make_mock_adapter()
     const model = new AppModel(adapter)
     await model.reset()
-    expect(calls.load_files).toBeUndefined()
+    expect(calls['load_files']).toBeUndefined()
   })
 })
 
@@ -234,13 +235,15 @@ describe('detect_content / apply_crop', () => {
   })
 
   it('apply_crop with a mismatched split count raises InvalidSplitError', async () => {
-    const model = await loaded_model()
-    model.set_split(2)   // needs exactly 2 crop_rects; set_split seeds them, so clear one to break it
-    model.set_split(1)
-    model.set_split(4)
-    // crop_rects were reseeded by the last set_split(4) to 4 rects — force a mismatch:
-    model.set_split(2)
-    expect(() => model.apply_crop()).not.toThrow()   // set_split always reseeds exactly n rects
+    // split_count is a non-undoable interaction setting (ARCHITECTURE §5.2) but crop_rects
+    // lives in undoable DocumentState — an undo can restore crop_rects from before a
+    // set_split() call while split_count itself stays put, producing a real mismatch.
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()   // history.push, crop_rects=[]
+    model.set_split(4)   // crop_rects now has 4 rects; split_count=4; not itself undoable
+    model.undo()         // restores document to the pre-draw-commit snapshot: crop_rects=[]
+    expect(model.split_count).toBe(4)              // untouched by undo
+    expect(() => { model.apply_crop(); }).toThrow(InvalidSplitError)
   })
 
   it('detect_content raises EmptySelectionError when the page selection is empty', async () => {
@@ -258,18 +261,27 @@ describe('detect_content / apply_crop', () => {
     expect(model.offsets.left).toBeLessThanOrEqual(100)
   })
 
-  it('set_keep_ratio(true) with no explicit ratio pre-populates from the current page size', async () => {
+  it('set_keep_ratio(true) with no union yet leaves the default ratio untouched', async () => {
     const model = await loaded_model({ page_w: 200, page_h: 400 })
     model.set_keep_ratio(true)
     expect(model.keep_ratio).toBe(true)
-    expect(model.ratio).toBeCloseTo(0.5)
+    expect(model.ratio).toBeCloseTo(1.0)   // nothing detected yet — no union to derive a ratio from
+  })
+
+  it('set_keep_ratio(true) pre-populates from the detection UNION, not the page (model.py:435-441)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 400 })
+    model.set_keep_ratio(false)
+    await model.detect_content().result()   // mock detect_content_box -> {20,20,180,380} on 200x400
+    model.set_keep_ratio(true)
+    // union width=160, height=360 (page ratio would have been 200/400=0.5 — must not match that)
+    expect(model.ratio).toBeCloseTo(160 / 360, 5)
   })
 
   it('set_split seeds crop_rects for the requested count', async () => {
     const model = await loaded_model()
     model.set_split(4)
     expect(model.split_count).toBe(4)
-    expect(model.can_apply).toBe(false)   // crop_rects freshly seeded... actually seeded to 4, so true
+    expect(model.can_apply).toBe(true)   // crop_rects freshly seeded to exactly 4 -> matches split_count
   })
 
   it('set_same_size toggles', async () => {
@@ -356,7 +368,7 @@ describe('scan processing', () => {
 
   it('a failing adapter call resolves Failed, not a thrown/unhandled rejection', async () => {
     const { adapter } = make_mock_adapter({ mode: Mode.SCANNED })
-    adapter.get_work_image = () => Promise.reject(new Error('boom'))
+    adapter.get_work_image = (): Promise<ImageBitmap> => Promise.reject(new Error('boom'))
     const model = new AppModel(adapter)
     await model.load_files([FILE()])
     const result = await model.run_dewarp().result()
@@ -438,7 +450,7 @@ describe('rotate_pages', () => {
   it('raises NoDocumentError with no document', () => {
     const { adapter } = make_mock_adapter()
     const model = new AppModel(adapter)
-    expect(() => model.rotate_pages()).toThrow(NoDocumentError)
+    expect(() => { model.rotate_pages(); }).toThrow(NoDocumentError)
   })
 
   it('swaps the reported page_w/page_h for a 90 degree rotation', async () => {
@@ -473,7 +485,7 @@ describe('rotate_pages', () => {
 describe('delete_pages', () => {
   it('raises DeleteAllPagesError when the selection covers every page', async () => {
     const model = await loaded_model({ page_count: 2 })
-    expect(() => model.delete_pages()).toThrow(DeleteAllPagesError)
+    expect(() => { model.delete_pages(); }).toThrow(DeleteAllPagesError)
   })
 
   it('deletes the selected pages and reindexes the rest', async () => {
@@ -510,7 +522,7 @@ describe('export', () => {
     model.set_download_handlers((bytes) => { got_bytes = bytes }, () => { /* unused */ })
     const result = await model.export('out.pdf').result()
     expect(result).toBeInstanceOf(Ok)
-    expect(calls.export_pdf).toBe(1)
+    expect(calls['export_pdf']).toBe(1)
     expect(got_bytes).not.toBeNull()
   })
 
@@ -522,8 +534,8 @@ describe('export', () => {
     let got_blobs: Blob[] | null = null
     model.set_download_handlers(() => { /* unused */ }, (blobs) => { got_blobs = blobs })
     await model.export('out.jpg').result()
-    expect(calls.export_images).toBe(1)
-    expect(calls.export_pdf).toBeUndefined()
+    expect(calls['export_images']).toBe(1)
+    expect(calls['export_pdf']).toBeUndefined()
     expect(got_blobs).not.toBeNull()
   })
 })
