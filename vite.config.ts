@@ -21,7 +21,7 @@ export default defineConfig({
         manualChunks: {
           pdfjs:  ['pdfjs-dist'],
           pdflib: ['pdf-lib'],
-          onnx:   ['onnxruntime-web'],
+          onnx:   ['onnxruntime-web/webgpu'],
         },
       },
     },
@@ -30,7 +30,7 @@ export default defineConfig({
   // avoid pre-bundling the JS wrapper. Model *weights* (public/models/*.onnx) are separate
   // static assets, served via the plugin below, not part of this exclusion.
   optimizeDeps: {
-    exclude: ['onnxruntime-web'],
+    exclude: ['onnxruntime-web', 'onnxruntime-web/webgpu'],
   },
   plugins: [
     // pdf.js needs its cmaps/standard_fonts at runtime for CJK/glyph shaping (loader.ts fetches

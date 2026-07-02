@@ -113,11 +113,26 @@ class RpcWorker {
 }
 
 // ---------------------------------------------------------------------------
+// Per-output-page source map (spec §7.1a): the combined document is PDFs (all their
+// pages, in order) and images (one page each) concatenated in selection order. A single
+// `PDFDocumentProxy` cannot represent that — several PDFs plus loose images coexist — so
+// every output page index maps to its own source: a specific PDF proxy + 1-based page
+// number, or a decoded-on-demand image blob. (Fixes §W2 rows 3–4: multi-file and mixed
+// PDF+image loads. The old single-`_pdf` field dropped every file but the last and made
+// `get_source_image` throw on any image page in a mixed load.)
+// ---------------------------------------------------------------------------
+
+type PageSource =
+  | { kind: 'pdf'; pdf: pdfjs.PDFDocumentProxy; page_num: number }
+  | { kind: 'image'; blob: Blob }
+
+// ---------------------------------------------------------------------------
 // PdfRendererAdapter — implements RendererAdapter for AppModel
 // ---------------------------------------------------------------------------
 
 export class PdfRendererAdapter implements RendererAdapter {
-  private _pdf: pdfjs.PDFDocumentProxy | null = null
+  private _pdfs: pdfjs.PDFDocumentProxy[] = []
+  private _pages: PageSource[] = []
   private _export:  RpcWorker | null = null
   private _doc_info: DocInfo | null  = null
   private _files: File[] = []
@@ -129,6 +144,7 @@ export class PdfRendererAdapter implements RendererAdapter {
     }
     if (files.length === 0) {
       // Synthetic doc — no real files
+      await this._release_sources()
       const synth: DocInfo = {
         page_count: SYNTH_PAGES,
         page_sizes: Array.from({ length: SYNTH_PAGES }, () => ({ width: SYNTH_W, height: SYNTH_H })),
@@ -140,49 +156,60 @@ export class PdfRendererAdapter implements RendererAdapter {
     }
 
     this._files = files
+    await this._release_sources()
 
     const page_sizes: PageSize[] = []
     const file_names: string[]   = []
-    const page_is_native: boolean[] = []
+    let any_native = false
 
-    for (const f of files) {
-      const buf = await f.arrayBuffer()
-      if (f.name.toLowerCase().endsWith('.pdf')) {
-        try {
-          if (this._pdf) await this._pdf.destroy()
+    try {
+      for (const f of files) {
+        if (f.name.toLowerCase().endsWith('.pdf')) {
+          const buf = await f.arrayBuffer()
           // See file-header note: cMap/standard-font resources are still fetched via
           // pdf.worker.mjs (useWorkerFetch), not this main thread, for correct glyph
           // shaping on complex/CID-keyed scripts without doing the fetch twice.
-          this._pdf = await pdfjs.getDocument({
+          const pdf = await pdfjs.getDocument({
             data: buf,
             cMapUrl: '/cmaps/',
             cMapPacked: true,
             standardFontDataUrl: '/standard_fonts/',
             useWorkerFetch: true,
           }).promise
-          for (let i = 1; i <= this._pdf.numPages; i++) {
-            const p  = await this._pdf.getPage(i)
+          this._pdfs.push(pdf)
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const p  = await pdf.getPage(i)
             const vp = p.getViewport({ scale: 1 })
             page_sizes.push({ width: vp.width, height: vp.height })
-            page_is_native.push(await is_native_page(p))
+            this._pages.push({ kind: 'pdf', pdf, page_num: i })
+            // Classify per §4: NORMAL as soon as any page carries vector data. Stop probing
+            // once found — the rest of the pages still register their size + source above.
+            if (!any_native) any_native = await is_native_page(p)
             p.cleanup()
           }
           file_names.push(f.name)
-        } catch (e) {
-          throw new DocumentLoadError(`Failed to load ${f.name}`, e)
+        } else {
+          // Image file: one page, size from the decoded bitmap, never native (spec §4).
+          // A File is a Blob, so it is stored directly and re-decoded on demand in
+          // get_source_image — no decoded raster is retained between views.
+          const bitmap = await createImageBitmap(f)
+          page_sizes.push({ width: bitmap.width, height: bitmap.height })
+          bitmap.close()
+          this._pages.push({ kind: 'image', blob: f })
+          file_names.push(f.name)
         }
-      } else {
-        // Image file: one page, size from bitmap, never counts as native (spec §4)
-        const bitmap = await createImageBitmap(new Blob([buf]))
-        page_sizes.push({ width: bitmap.width, height: bitmap.height })
-        page_is_native.push(false)
-        file_names.push(f.name)
-        bitmap.close()
       }
+    } catch (e) {
+      await this._release_sources()
+      throw new DocumentLoadError('Failed to load the selected files', e)
+    }
+
+    if (page_sizes.length === 0) {
+      throw new DocumentLoadError('No pages to load')
     }
 
     // Classification (spec §4): any native page → NORMAL, else SCANNED
-    const mode = page_is_native.some(Boolean) ? Mode.NORMAL : Mode.SCANNED
+    const mode = any_native ? Mode.NORMAL : Mode.SCANNED
 
     const info: DocInfo = {
       page_count: page_sizes.length,
@@ -195,8 +222,16 @@ export class PdfRendererAdapter implements RendererAdapter {
   }
 
   async get_source_image(page_idx: number, dpi: number, rotation = 0): Promise<ImageBitmap> {
-    if (!this._pdf) throw new Error('No PDF document loaded')
-    const page  = await this._pdf.getPage(page_idx + 1)
+    const source = this._pages[page_idx]
+    if (!source) throw new Error(`No source for page index ${page_idx}`)
+
+    if (source.kind === 'image') {
+      // Image pages are native-resolution rasters; dpi does not add real pixels (they are
+      // treated as SCANNED source @ their own pixel size, spec §4), so it is not applied.
+      return rotate_bitmap_cw(await createImageBitmap(source.blob), rotation)
+    }
+
+    const page  = await source.pdf.getPage(source.page_num)
     const scale = dpi / 72
     const vp     = page.getViewport({ scale })
     const canvas = new OffscreenCanvas(Math.round(vp.width), Math.round(vp.height))
@@ -303,8 +338,20 @@ export class PdfRendererAdapter implements RendererAdapter {
   }
 
   close(): void {
-    void this._pdf?.destroy()
+    void this._release_sources()
     this._export?.terminate()
+  }
+
+  // Destroy every open PDF proxy and drop all page sources — called before a fresh load and
+  // on close(). Multiple PDFs are now retained simultaneously (one per loaded .pdf file), so
+  // this iterates all of them rather than a single handle.
+  private async _release_sources(): Promise<void> {
+    const pdfs = this._pdfs
+    this._pdfs = []
+    this._pages = []
+    for (const pdf of pdfs) {
+      try { await pdf.destroy() } catch { /* proxy already torn down — nothing to free */ }
+    }
   }
 
   private _export_worker(): Promise<RpcWorker> {

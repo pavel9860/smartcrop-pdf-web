@@ -73,14 +73,22 @@ async function ensure_cv(): Promise<void> {
 async function ensure_onnx(): Promise<void> {
   if (_uvdoc_session && _bilinear_session) return
   try {
-    const ort = await import('onnxruntime-web')
+    const ort = await import('onnxruntime-web/webgpu')
+    // GH Pages cannot send COOP/COEP, so SharedArrayBuffer (multi-threaded WASM) is
+    // unavailable — force the single-thread WASM build. WebGPU needs no SAB either and is
+    // tried first where the browser exposes it; single-thread WASM+SIMD is the fallback.
+    ort.env.wasm.numThreads = 1
+    // Only request WebGPU when the browser exposes it; otherwise ORT would have to fall back
+    // internally. Explicit selection keeps behaviour deterministic across Firefox/Safari.
+    const has_webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator
+    const execution_providers = has_webgpu ? ['webgpu', 'wasm'] : ['wasm']
     const [uvdoc_bytes, bilinear_bytes] = await Promise.all([
       fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, DEWARP_UVDOC_URL),
       fetch_with_idb_cache(DEWARP_BILINEAR_CACHE_KEY, DEWARP_BILINEAR_URL),
     ])
     const [uvdoc_session, bilinear_session] = await Promise.all([
-      ort.InferenceSession.create(new Uint8Array(uvdoc_bytes), { executionProviders: ['wasm'] }),
-      ort.InferenceSession.create(new Uint8Array(bilinear_bytes), { executionProviders: ['wasm'] }),
+      ort.InferenceSession.create(new Uint8Array(uvdoc_bytes), { executionProviders: execution_providers }),
+      ort.InferenceSession.create(new Uint8Array(bilinear_bytes), { executionProviders: execution_providers }),
     ])
     _uvdoc_session = uvdoc_session
     _bilinear_session = bilinear_session
@@ -509,7 +517,7 @@ function apply_filter_mat(
 async function apply_dewarp(src: Mat, supersample: number): Promise<Mat> {
   if (!_uvdoc_session || !_bilinear_session) return src   // caller already gates on this; defensive only
 
-  const ort = await import('onnxruntime-web')
+  const ort = await import('onnxruntime-web/webgpu')
   const w = src.cols, h = src.rows
 
   // Stage 1: predict the coarse warp-field grid from a fixed-size downscale of the page.

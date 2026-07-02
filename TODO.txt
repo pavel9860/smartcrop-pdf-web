@@ -1,13 +1,30 @@
 1. DONE (2026-07-01) — Separate architecture from the specification. Now three docs:
-   docs/SmartCrop_PDF_Specification.md (canonical behavior, copied from desktop repo),
+   docs/SmartCrop_PDF_Specification.md (canonical behavior, copied from desktop repo, frozen),
    docs/SmartCrop_PDF_Specification_Web.md (web deviations/additions, §W1-W7),
    ARCHITECTURE.md (mechanism only).
-2. All function calls produce errors. — Investigated: root cause was a real delete_pages()
-   bug (page count never shrank after delete) plus test-mock bugs; both fixed, 122/122
-   tests pass, tsc/eslint clean. Broader E2E pass on Export/Split/Delete via real browser
-   still open.
-3. Offset settings in advance should be all visible, in one line
-4. Delete button is red- should be as others.
-5. Use icons the same like in win app.
-6. Filter strength buttons should be below "Strength" text. whole tab ide, all same width
-7. All elements of the menu should be the same as in win app, including switches, field, etc.
+2. DONE — All function calls produce errors. Root cause was a real delete_pages() bug (page
+   count never shrank after delete) plus test-mock bugs; both fixed, 122/122 tests pass,
+   tsc/eslint clean. Broader E2E pass on Export/Split/Delete via real browser still open
+   (blocked on item 9 below — no Playwright suite yet).
+3. Offset settings in advance should be all visible, in one line — verify against
+   docs/app_design_screenshots/ (advanced/offsets state) before implementing.
+4. Delete button is red — should be as others — verify exact color/state against screenshots.
+5. Use icons the same as in win app — icon set must be sourced/matched from
+   docs/app_design_screenshots/, not approximated.
+6. Filter strength buttons should be below "Strength" text, whole tab side, all same width —
+   verify against scan-processing panel screenshot.
+7. All elements of the menu should be the same as in win app, including switches, fields, etc.
+   — this is now verifiable: docs/app_design_screenshots/ covers different mode workflows,
+   read every relevant screenshot before changing src/ui/ panels; do not guess from spec-web
+   prose alone.
+8. NEW — Stand up tests/e2e/ (Playwright): validates split=1 canvas_view.ts drag/scale fix,
+   confirms in-browser WebGPU/wasm dewarp execution (verified headlessly against raw ONNX
+   models this session, but no browser/GPU available in sandbox to confirm in-app), and closes
+   the coverage gate for ui/ and pdf/ (currently 0%).
+9. NEW — Fix multi-file and mixed PDF+image load in src/pdf/loader.ts (_pdf holds a single
+   PDFDocumentProxy; get_source_image assumes PDF for every page index). Corresponds to
+   spec-web §W2 rows 3–4.
+10. NEW — ARCHITECTURE.md and spec-web §W2 dewarp row are stale: dewarp is a fully implemented
+    two-stage ONNX pipeline (verified against model io/shapes/dtypes, non-identity output), not
+    a no-op stub. Correct both docs; "no-op" only describes behavior when ONNX sessions fail to
+    load, not the default path.

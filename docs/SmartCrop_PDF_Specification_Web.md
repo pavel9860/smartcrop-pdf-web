@@ -1,17 +1,20 @@
 # SmartCrop PDF Web — Specification Supplement
 
 This document supplements `docs/SmartCrop_PDF_Specification.md` (the canonical, platform-agnostic
-behavioral contract — §1–§22, copied verbatim from the desktop repo, unchanged for the web). It
-does not restate that contract. It records only: **§W1** how the two documents relate, **§W2**
-every point where the web platform forces a real behavioral difference from the desktop spec —
-written as current fact, not aspiration — and **§W3–§W7** behavior the desktop has no equivalent
-of at all (browser-native layout, file I/O, shortcuts).
+behavioral contract — §1–§22, copied verbatim from the desktop repo, unchanged for the web, and
+FROZEN — never edit that file). It does not restate that contract. It records only: **§W1** how
+the two documents relate, **§W2** every point where the web platform forces a real behavioral
+difference from the desktop spec — written as current fact, verified against the running
+toolchain, not aspiration — and **§W3–§W7** behavior the desktop has no equivalent of at all
+(browser-native layout, file I/O, shortcuts).
 
 `ARCHITECTURE.md` is the third document in this set: it explains *how* the behavior described here
 and in the desktop spec is implemented in TypeScript (module layout, dependency graph, worker
 model, build/deploy). Behavior lives in the two spec documents; mechanism lives in
 `ARCHITECTURE.md`. Where a fact could belong to either, ask: "does the user experience this?" —
-if yes, spec; if no, architecture.
+if yes, spec; if no, architecture. `docs/app_design_screenshots/` is a fourth reference, UI-only:
+it is the ground truth for exact desktop layout/icon/control fidelity that §W3 describes in
+prose — when the two disagree on a visual detail, the screenshots win.
 
 ---
 
@@ -31,34 +34,36 @@ Window layout (desktop spec §6), Settings window layout (§15), Help window lay
 typography/theme (§19) and shortcuts (§21) describe **desktop widget arrangements** (Tk panes,
 dialog windows) that have no browser equivalent. §W3–§W6 below are this document's own account of
 the same *behavior* (what panels exist, what they contain, what open/closes them, what the palette
-and shortcut set are) adapted to a web page — not a re-derivation of new behavior.
+and shortcut set are) adapted to a web page — not a re-derivation of new behavior. For exact visual
+fidelity (icon set, control grouping, spacing, color of specific controls), `docs/app_design_screenshots/`
+is authoritative over this section's prose.
 
 ---
 
 ## W2. Known behavioral deviations from the desktop spec
 
-Real, user-visible gaps as of this document's last update (2026-07-01) — not documentation
-staleness. Each row names the desktop spec behavior, what the web currently does instead, and
-points to `ARCHITECTURE.md` for the technical reason.
+Real, user-visible gaps as of this document's last update (2026-07-02) — verified against the
+actual running toolchain this update, not documentation staleness.
 
 | # | Area (desktop spec) | Desktop behavior | Web behavior today | Architecture reference |
 |---|---|---|---|---|
-| 1 | Dewarp & Deskew (§10.1) | Removes page curl/fold and skew via the docuwarp/ONNX mesh unwarp | **No-op.** The toggle is interactive, undoable, and idempotent per §10, but the returned raster is unchanged — curl/fold/skew are not corrected. | ARCHITECTURE §9, "Dewarp: known gap" |
+| 1 | Dewarp & Deskew (§10.1) | Removes page curl/fold and skew via the docuwarp/ONNX mesh unwarp | **Implemented, not a no-op.** Full two-stage ONNX pipeline (UVDoc warp-field model + bilinear resample), wired button→AppModel→ensure_onnx→apply_dewarp. Verified this update against the actual model files: io names/dims/dtypes match the code, output raster is non-identity (maxAbs diff 0.95, mean 0.29 vs input) [high]. Execution providers are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no SharedArrayBuffer/COOP-COEP dependency, required for GitHub Pages. In-browser (real GPU) execution and end-to-end visual correctness on an actual scanned page are **not yet confirmed** — verified only headlessly against raw model tensors; needs the Playwright suite (§W2 row 5 infra) to close. | ARCHITECTURE §9 |
 | 2 | Export formats (§12.7) | PDF / JPG / PNG / TIFF | **TIFF is not offered.** Export split-button dropdown lists PDF / JPG / PNG only. | ARCHITECTURE §1 (no maintained browser TIFF encoder) |
-| 3 | Multi-file PDF documents (§7.1a) | Several PDFs combine into one working document, pages in selection order | **Broken.** Loading a second PDF replaces the first internally; only the last-loaded file's pages render. | ARCHITECTURE status table |
-| 4 | Mixed PDF + image documents (§7.1a) | PDFs and images combine freely into one document | **Broken.** A mixed-type load throws once a page index maps to an image in a load that also contains a PDF. | ARCHITECTURE status table |
+| 3 | Multi-file PDF documents (§7.1a) | Several PDFs combine into one working document, pages in selection order | **Broken.** Loading a second PDF replaces the first internally; only the last-loaded file's pages render. Root cause identified: `_pdf` in `pdf/loader.ts` holds a single `PDFDocumentProxy`. Fix not yet applied. | ARCHITECTURE status table |
+| 4 | Mixed PDF + image documents (§7.1a) | PDFs and images combine freely into one document | **Broken.** A mixed-type load throws once a page index maps to an image in a load that also contains a PDF. Same root cause as row 3 (`get_source_image` assumes PDF for every index). Fix not yet applied. | ARCHITECTURE status table |
 | 5 | Batch responsiveness (§14, §17: ~150 ms/page target) | Long operations run off the interaction path via the Tk `after`-tick loop; the window stays responsive between pages | Detect / filter / dewarp run on the **main (UI) thread** — the tab can visibly pause for the duration of each page's processing (still bounded per-page, §W5) rather than staying responsive between pages. | ARCHITECTURE §7a |
 | 6 | `confirm_overwrite` setting (§15) | Warns before silently replacing an existing file on export | **Stored but not enforced.** No overwrite-detection path exists yet; the setting is inert. | §W6 below — no File System Access API overwrite check wired up |
 | 7 | Binarization DPI scaling (§10.2) | Sauvola window / background-kernel / min-area scale with the page's embedded DPI | Fixed kernel sizes — the web's scanned-mode source DPI (`SRC_DPI`) is a constant 200, unlike desktop's variable source DPI, so this mainly affects the B/W filter's kernel size relative to desktop's 150-DPI reference case, not correctness. | ARCHITECTURE §9 — low-severity fidelity residual |
 
-Everything else in the desktop spec is implemented and has been exercised via headless-browser
-end-to-end verification as of this update: classification (§4), coordinate system/canvas fit (§5),
-the full crop-window state machine (§9) including keep-ratio (§9.7) and cancel-drag (§9.3/§9.6),
-auto-detect with a faithful Sauvola port — not an adaptive-threshold approximation (§8), the B/W
-and Sharpen filters (§10.2), pages selection (§11), apply/export/compress (§12), history/reset/
-rotate — including the rotation-pipeline fix described in ARCHITECTURE §5a — and delete, including
-the page-reindex/page-count fix described in ARCHITECTURE's delete_pages notes (§13), and the
-error taxonomy (§20).
+Everything else in the desktop spec — classification (§4), coordinate system/canvas fit (§5), the
+full crop-window state machine (§9) including keep-ratio (§9.7) and cancel-drag (§9.3/§9.6),
+auto-detect (§8), the B/W and Sharpen filters (§10.2), pages selection (§11), apply/export/compress
+(§12), history/reset/rotate/delete (§13), and the error taxonomy (§20) — is implemented and passes
+the unit-test gate (151/151 at HEAD as of this update). **Caveat, corrected from a prior version of
+this document:** there is no committed end-to-end browser suite (`tests/e2e/` does not exist), so
+"exercised via headless-browser end-to-end verification" was an unverifiable claim and has been
+removed. Confidence in this row is [high] for unit-level correctness, [med] for full in-browser
+behavior pending the Playwright suite (tracked in TODO.txt item 8).
 
 ---
 
@@ -96,6 +101,9 @@ Output Quality → Export), renamed "Compress Document" to "Output Quality" and 
 `_build_export` split) rather than the spec prose's single "Compress Document" card title, which is
 stale relative to the desktop app itself. Pinned bottom bar, outside scroll: Settings + Help
 buttons, then Undo/Redo/Reset, then page nav — same content and order as desktop spec §7.8.
+Exact icon set, control widths, switch/field styling, and per-control coloring (e.g. Delete must
+NOT be styled differently from other action buttons — see TODO.txt item 4) must match
+`docs/app_design_screenshots/`, which supersedes this section's prose wherever more specific.
 
 **Detail panel** replaces the desktop's floating Settings/Help windows (§15, §16): a panel between
 the sidebar and canvas, collapsed (width 0) by default. Clicking Settings or Help opens it showing
@@ -138,7 +146,7 @@ constant is identical). Web-specific budgets, given the browser execution enviro
 | Filter/dewarp per page | < 200 ms (OpenCV.js WASM; desktop target ~150 ms/page, §17 — WASM is competitive but not identical) |
 | Export per page | < 300 ms (JPEG encode + pdf-lib embedding) |
 | First OpenCV.js WASM load | < 3 s, once per session (8 MB, lazy — scanned-mode documents only) |
-| First ONNX model fetch + init | < 5 s, once per session (cached in IndexedDB after; 0 ms on repeat sessions) — currently unreachable in practice since dewarp is a no-op (§W2 row 1) |
+| First ONNX model fetch + init | < 5 s, once per session (cached in IndexedDB after; 0 ms on repeat sessions). Dewarp is implemented (§W2 row 1) — this budget is now reachable in practice, pending in-browser timing confirmation via Playwright. |
 
 ---
 
@@ -146,14 +154,17 @@ constant is identical). Web-specific budgets, given the browser execution enviro
 
 **Load:** a file picker (`<input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff">`)
 or drag-and-drop onto the canvas/window. Combine order, per-file page contribution, and mode
-classification follow desktop spec §7.1a unchanged.
+classification follow desktop spec §7.1a unchanged — **except see §W2 rows 3–4: multi-file and
+mixed-type combination is currently broken**, not yet a working equivalent of the desktop
+behavior this row describes.
 
 **Export:**
 - PDF (single file): triggers a browser download directly.
 - JPG/PNG (one file per output page, §12.7): uses the **File System Access API** to let the user
   pick a save target where the browser supports it (Chrome/Edge); falls back to zipping every file
   with `fflate` into one `.zip` download where it isn't available (Firefox/Safari — the only case a
-  zip is produced instead of individual files).
+  zip is produced instead of individual files). `fflate` is a real, declared, installed dependency
+  [high] — this fallback path is grounded, not aspirational.
 - **Overwrite confirmation** (desktop spec §15's `confirm_overwrite` setting) is not yet enforced
   on the web — see §W2 row 6. The setting exists in Settings but has no effect today.
 
