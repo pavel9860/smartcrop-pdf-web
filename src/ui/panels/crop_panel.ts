@@ -52,7 +52,7 @@ export class CropPanel {
 
       <!-- Detect -->
       <div class="card-header mt-2"><span class="card-title">Detect Text Borders</span></div>
-      <button class="btn btn-primary w-full" id="cp-detect">✶  Auto-detect</button>
+      <button class="btn btn-secondary w-full" id="cp-detect">✶  Auto-detect</button>
       <div class="anchor-row">
         <label class="toggle-label">
           <input type="checkbox" id="cp-anchor-l" checked /> Anchor Left
@@ -75,10 +75,10 @@ export class CropPanel {
 
       <!-- Actions -->
       <div class="card-header mt-2"><span class="card-title">Actions</span></div>
-      <button class="btn btn-primary w-full" id="cp-crop">✂ Crop</button>
+      <button class="btn btn-secondary w-full" id="cp-crop">✂ Crop</button>
       <div class="btn-group mt-1">
         <button class="btn btn-secondary flex-1" id="cp-rotate">↻ Rotate</button>
-        <button class="btn btn-danger flex-1"    id="cp-delete">🗑 Delete</button>
+        <button class="btn btn-secondary flex-1" id="cp-delete">🗑 Delete</button>
       </div>`
     container.appendChild(el)
 

@@ -150,6 +150,7 @@ export class PdfRendererAdapter implements RendererAdapter {
         page_sizes: Array.from({ length: SYNTH_PAGES }, () => ({ width: SYNTH_W, height: SYNTH_H })),
         file_names: [],
         mode: Mode.NORMAL,
+        synthetic: true,
       }
       this._doc_info = synth
       return synth
@@ -171,9 +172,9 @@ export class PdfRendererAdapter implements RendererAdapter {
           // shaping on complex/CID-keyed scripts without doing the fetch twice.
           const pdf = await pdfjs.getDocument({
             data: buf,
-            cMapUrl: '/cmaps/',
+            cMapUrl: `${import.meta.env.BASE_URL}cmaps/`,
             cMapPacked: true,
-            standardFontDataUrl: '/standard_fonts/',
+            standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`,
             useWorkerFetch: true,
           }).promise
           this._pdfs.push(pdf)

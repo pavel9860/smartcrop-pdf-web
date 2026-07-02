@@ -107,9 +107,11 @@ export class AppController {
     // Global keyboard shortcuts (spec §21)
     window.addEventListener('keydown', this._on_shortcut)
 
-    // Start with synthetic doc
-    void this._refresh_async()
+    // Start with synthetic placeholder document (frozen spec §1: shown when no file is
+    // open). load_files([]) with no prior files yields the SYNTH_PAGES-page demo doc; the
+    // prior code only called _refresh_async(), leaving has_document false and view_total 0.
     apply_theme('dark')
+    this.dispatch_async(() => this._model.load_files([]))
   }
 
   // ---------------------------------------------------------------------------
@@ -327,6 +329,10 @@ export class AppController {
   // ---------------------------------------------------------------------------
 
   private _on_shortcut = (ev: KeyboardEvent): void => {
+    // Esc closes the detail panel (spec-web §W4; no desktop equivalent — no floating window).
+    // Handled before the Ctrl gate since Esc carries no modifier. Drag-cancel Esc is handled
+    // separately in canvas_view against the canvas element.
+    if (ev.key === 'Escape') { this._close_detail(); return }
     const ctrl = ev.ctrlKey || ev.metaKey
     if (!ctrl) return
     switch (ev.key) {

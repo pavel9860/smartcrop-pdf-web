@@ -82,9 +82,13 @@ async function ensure_onnx(): Promise<void> {
     // internally. Explicit selection keeps behaviour deterministic across Firefox/Safari.
     const has_webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator
     const execution_providers = has_webgpu ? ['webgpu', 'wasm'] : ['wasm']
+    // Prefix with the deployment base so the vendored model weights resolve under a GH Pages
+    // project-page subpath (see vite.config.ts base / constants.ts note). Does not change ORT
+    // execution behaviour — same weights, same providers, only the fetch URL adapts.
+    const base = import.meta.env.BASE_URL
     const [uvdoc_bytes, bilinear_bytes] = await Promise.all([
-      fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, DEWARP_UVDOC_URL),
-      fetch_with_idb_cache(DEWARP_BILINEAR_CACHE_KEY, DEWARP_BILINEAR_URL),
+      fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL),
+      fetch_with_idb_cache(DEWARP_BILINEAR_CACHE_KEY, base + DEWARP_BILINEAR_URL),
     ])
     const [uvdoc_session, bilinear_session] = await Promise.all([
       ort.InferenceSession.create(new Uint8Array(uvdoc_bytes), { executionProviders: execution_providers }),

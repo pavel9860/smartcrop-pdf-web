@@ -22,7 +22,7 @@ export class PagesPanel {
         <span class="card-title">Document &amp; State</span>
         <span class="mode-badge" id="pp-badge">NORMAL</span>
       </div>
-      <button class="btn btn-primary w-full" id="pp-load">⊞ Load PDF / Image Files</button>
+      <button class="btn btn-secondary w-full" id="pp-load">⊞ Load PDF / Image Files</button>
       <input type="file" id="pp-file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" hidden />
 
       <div class="card-header mt-2"><span class="card-title">Pages to Process</span></div>

@@ -95,6 +95,14 @@ input, select { font: inherit; }
   min-width: var(--detail-w);
 }
 
+/* When collapsed (width 0) the contents must be fully removed from layout, not just clipped:
+   a clipped child <select>/<button> keeps its layout box, so it stays focusable and reads as
+   visible to tooling. Removing them matches the "collapsed" intent of spec-web §W3. */
+.detail-panel:not(.open) .detail-panel__header,
+.detail-panel:not(.open) .detail-panel__body {
+  display: none;
+}
+
 .detail-panel__header {
   display: flex;
   align-items: center;
@@ -315,7 +323,40 @@ input, select { font: inherit; }
   cursor: pointer;
   user-select: none;
 }
-.toggle-label input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; }
+/* Pill toggle switches (desktop parity, TODO item 7): Anchor Left/Top, Keep ratio, Same size,
+   and the Settings behaviour toggles render as switches, not native checkboxes. Knob uses
+   --text-inv (always white); --handle-fill is theme-variable (blue in light) and unsuitable. */
+.toggle-label input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 18px;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-hover);
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+.toggle-label input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-inv);
+  transition: transform 140ms ease;
+}
+.toggle-label input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle-label input[type="checkbox"]:checked::after { transform: translateX(14px); }
+.toggle-label input[type="checkbox"]:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ── Mode badge ── */
 .mode-badge {
@@ -346,24 +387,31 @@ input, select { font: inherit; }
 
 .advanced-body { padding: 6px 0 0; }
 
+/* All four offsets on a single row (L T R B), matching the desktop Advanced/offsets layout
+   (docs/app_design_screenshots/1p_splir_dark_theme.png; TODO item 3). */
 .offset-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(4, 1fr);
   gap: 6px;
 }
 .offset-grid label {
   display: flex;
   align-items: center;
   gap: 4px;
+  min-width: 0;
   font-size: 0.8125rem;
   color: var(--text-dim);
 }
+.offset-grid .offset-inp { width: 100%; min-width: 0; }
 
 /* ── Filter group (scan panel) ── */
 .filter-group { display: flex; flex-direction: column; gap: 6px; }
 .filter-group__title { font-size: 0.75rem; color: var(--text-dim); font-weight: 600; }
-.strength-row { display: flex; align-items: center; gap: 8px; }
+/* "Strength" label on its own line with the 1|2|3 buttons full-width beneath it, all equal
+   width (desktop Scan Processing panel; TODO item 6). */
+.strength-row { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
 .strength-row .label { font-size: 0.8125rem; color: var(--text-dim); }
+.strength-row .btn-group { width: 100%; }
 
 /* ── Pattern row ── */
 .pattern-row { display: flex; gap: 4px; }

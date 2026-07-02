@@ -113,7 +113,9 @@ export const DEFAULT_DEWARP_SUPERSAMPLE = 2.0
 // Unwarp.image_size = (488, 712), PIL (width, height) order) — not tunable, not a style choice.
 export const DEWARP_MODEL_W = 488
 export const DEWARP_MODEL_H = 712
-export const DEWARP_UVDOC_URL          = '/models/uvdoc.onnx'
-export const DEWARP_BILINEAR_URL       = '/models/bilinear_unwarping.onnx'
+// Relative to the deployment base (import.meta.env.BASE_URL, prepended in pdf/imaging.ts) so the
+// models resolve under a GitHub Pages project-page subpath, not the domain root. No leading slash.
+export const DEWARP_UVDOC_URL          = 'models/uvdoc.onnx'
+export const DEWARP_BILINEAR_URL       = 'models/bilinear_unwarping.onnx'
 export const DEWARP_UVDOC_CACHE_KEY    = 'docuwarp-uvdoc-v1'
 export const DEWARP_BILINEAR_CACHE_KEY = 'docuwarp-bilinear-v1'

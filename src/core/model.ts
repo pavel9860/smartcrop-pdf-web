@@ -45,6 +45,10 @@ export interface DocInfo {
   page_sizes: PageSize[]
   file_names: string[]   // for window title / suggested export name
   mode: Mode
+  // True only for the no-file-open placeholder document (frozen spec §1). Pages of a
+  // synthetic doc have no PageSource; they must render via make_synth_page, not
+  // get_source_image. Omitted (falsy) for every real load.
+  synthetic?: boolean
 }
 
 export interface OutputPage {
@@ -1081,7 +1085,7 @@ export class AppModel {
     const orig = this._page_map[p] ?? p
     const src = this._source_cache.get(p)
       ?? await (async (): Promise<ImageBitmap> => {
-        const b = doc
+        const b = doc && !doc.synthetic
           ? await this._adapter.get_source_image(orig, dpi, rotation)
           : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
         this._source_cache.set(p, b)

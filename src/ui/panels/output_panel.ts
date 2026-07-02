@@ -36,7 +36,7 @@ export class OutputPanel {
     export_el.innerHTML = `
       <div class="card-header"><span class="card-title">Export</span></div>
       <div class="export-row">
-        <button class="btn btn-primary flex-1" id="op-export">💾  Export PDF</button>
+        <button class="btn btn-secondary flex-1" id="op-export">💾  Export PDF</button>
         <select class="select export-fmt" id="op-format">${format_opts}</select>
       </div>`
     container.appendChild(export_el)

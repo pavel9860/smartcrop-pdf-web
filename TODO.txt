@@ -6,25 +6,58 @@
    count never shrank after delete) plus test-mock bugs; both fixed, 122/122 tests pass,
    tsc/eslint clean. Broader E2E pass on Export/Split/Delete via real browser still open
    (blocked on item 9 below — no Playwright suite yet).
-3. Offset settings in advance should be all visible, in one line — verify against
-   docs/app_design_screenshots/ (advanced/offsets state) before implementing.
-4. Delete button is red — should be as others — verify exact color/state against screenshots.
-5. Use icons the same as in win app — icon set must be sourced/matched from
-   docs/app_design_screenshots/, not approximated.
-6. Filter strength buttons should be below "Strength" text, whole tab side, all same width —
-   verify against scan-processing panel screenshot.
-7. All elements of the menu should be the same as in win app, including switches, fields, etc.
-   — this is now verifiable: docs/app_design_screenshots/ covers different mode workflows,
-   read every relevant screenshot before changing src/ui/ panels; do not guess from spec-web
-   prose alone.
-8. NEW — Stand up tests/e2e/ (Playwright): validates split=1 canvas_view.ts drag/scale fix,
-   confirms in-browser WebGPU/wasm dewarp execution (verified headlessly against raw ONNX
-   models this session, but no browser/GPU available in sandbox to confirm in-app), and closes
-   the coverage gate for ui/ and pdf/ (currently 0%).
-9. NEW — Fix multi-file and mixed PDF+image load in src/pdf/loader.ts (_pdf holds a single
-   PDFDocumentProxy; get_source_image assumes PDF for every page index). Corresponds to
-   spec-web §W2 rows 3–4.
-10. NEW — ARCHITECTURE.md and spec-web §W2 dewarp row are stale: dewarp is a fully implemented
-    two-stage ONNX pipeline (verified against model io/shapes/dtypes, non-identity output), not
-    a no-op stub. Correct both docs; "no-op" only describes behavior when ONNX sessions fail to
-    load, not the default path.
+3. DONE (2026-07-03) — offsets L T R B now on one row (app.css .offset-grid → repeat(4,1fr),
+   offset-inp width 100%), per 1p_splir_dark_theme.png.
+4. DONE (2026-07-03) — Delete button no longer red: btn-danger → btn-secondary (matches Rotate),
+   per 1p_splir_dark_theme.png / Scann_mode_dark.png.
+5. OPEN — icon set vs win app. Current web icons are approximations (⊞ Load, ✶ Auto-detect,
+   ✂ Crop, ↻ Rotate, 🗑 Delete, 💾 Export, ⚙ Settings, ? Help). To match exactly I need the
+   desktop repo's icon/button definitions (ui/panels.py); the desktop folder was not shared
+   this session (directory request cancelled). NEXT: mount the desktop repo OR paste panels.py's
+   button label/icon defs, then match glyphs (and force monochrome text-presentation to mirror
+   Tk's non-emoji rendering). Deferred pending desktop source.
+6. DONE (2026-07-03) — Strength label on its own line with 1|2|3 full-width beneath
+   (app.css .strength-row → column, btn-group width 100%), per Scann_mode_dark.png.
+7. DONE (2026-07-03) — switch/field + button parity. Anchor Left/Top, Keep ratio, Same size and
+   the Settings behaviour toggles now render as pill toggle SWITCHES (app.css .toggle-label
+   input[type=checkbox] → appearance:none switch, knob=--text-inv). Primary action buttons
+   (Load/Auto-detect/Crop/Export) flattened from btn-primary(blue) to btn-secondary(dark) to
+   match the desktop, per user "make everything in design like desktop". Verified by screenshot
+   (outputs/sidebar_parity.png); gate green.
+15. DONE (2026-07-03) — GitHub Pages step 5 (config only; live deploy unverified):
+    vite.config.ts base='/smartcrop-pdf-web/' (override via VITE_BASE); loader.ts cmaps/
+    standard_fonts and imaging.ts model fetch now prefixed with import.meta.env.BASE_URL;
+    constants.ts model URLs made base-relative; index.html favicon → %BASE_URL%favicon.svg +
+    added public/favicon.svg; added public/.nojekyll; added .github/workflows/deploy.yml
+    (Actions Pages artifact, gate order per ARCHITECTURE §18/§19, chromium+firefox e2e).
+    Build verified: dist/index.html asset URLs prefixed, models/.nojekyll/favicon/ort wasm all
+    emitted. STILL UNVERIFIED (needs a real push + Pages enable): that onnxruntime-web resolves
+    its bundled ort-wasm-*.wasm under the /smartcrop-pdf-web/ subpath, and that WebGPU runs on
+    the target GPU. WebGPU in-app test also needs a connected Chrome (Claude-in-Chrome) or manual.
+8. DONE (2026-07-02) — tests/e2e/ (Playwright) stood up: smoke.spec.ts (three-column layout,
+   synthetic 24-page boot, primary controls, Settings panel open/Esc-close) + crop_split.spec.ts
+   (2-way/4-way split output-page math, Reset, undo). 6/6 green on chromium. NOTE: sandbox has no
+   GPU (/dev/dri absent) so in-app WebGPU dewarp is still unconfirmed — the wasm fallback path is
+   what runs here; WebGPU needs a real GPU host. Firefox project cannot run in this sandbox
+   (missing OS libs, no root); chromium is the verified project. Standing up e2e exposed and
+   fixed four real app bugs — see items 11-14 below.
+   Coverage gate for ui/ closed via unit tests, NOT via e2e: v8 coverage does not observe the
+   browser run. Added tests/ui/ (jsdom) for every panel + nav_bar/detail_panel/settings_view/
+   help_view/overlay/theme/dom (279 tests total). imaging.ts (OpenCV), canvas_view.ts (real
+   canvas) and app.ts (controller wiring) are excluded from unit-coverage and covered by e2e
+   instead — see vitest.config.ts comment. Global lines 94% (was 43%), core 99%/90% branches.
+9. DONE (2026-07-02) — loader.ts multi-file + mixed PDF+image load: verified already refactored
+   to _pdfs[]/_pages[] PageSource map (per-output-page source), 7 loader tests pass. spec-web
+   §W2 rows 3-4 satisfied.
+10. DONE (2026-07-02) — dewarp docs corrected earlier; verify no "no-op" language remains when
+    doing the §W2 re-cross-check (plan step 4).
+11. DONE (2026-07-02) — Boot bug: app.ts said "Start with synthetic doc" but only called
+    _refresh_async(), never load_files([]), so has_document stayed false and view_total 0
+    (frozen spec §1 requires the placeholder doc). Fixed: dispatch_async(load_files([])) on boot.
+12. DONE (2026-07-02) — Synthetic render routing: model._get_work routed on `doc` truthiness, but
+    the placeholder IS a real DocInfo, so it called get_source_image (no PageSource) -> throw
+    "No source for page index 0". Added explicit DocInfo.synthetic flag; route synth -> make_synth_page.
+13. DONE (2026-07-02) — Esc did not close the detail panel (spec-web §W4): _on_shortcut bailed on
+    non-Ctrl keys. Added Escape -> _close_detail before the Ctrl gate.
+14. DONE (2026-07-02) — Collapsed detail panel only clipped its contents (width:0/overflow:hidden),
+    leaving children focusable/visible. Added .detail-panel:not(.open) header/body { display:none }.

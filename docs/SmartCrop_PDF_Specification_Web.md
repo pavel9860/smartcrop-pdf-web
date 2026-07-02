@@ -42,15 +42,15 @@ is authoritative over this section's prose.
 
 ## W2. Known behavioral deviations from the desktop spec
 
-Real, user-visible gaps as of this document's last update (2026-07-02) — verified against the
+Real, user-visible gaps as of this document's last update (2026-07-03) — verified against the
 actual running toolchain this update, not documentation staleness.
 
 | # | Area (desktop spec) | Desktop behavior | Web behavior today | Architecture reference |
 |---|---|---|---|---|
-| 1 | Dewarp & Deskew (§10.1) | Removes page curl/fold and skew via the docuwarp/ONNX mesh unwarp | **Implemented, not a no-op.** Full two-stage ONNX pipeline (UVDoc warp-field model + bilinear resample), wired button→AppModel→ensure_onnx→apply_dewarp. Verified this update against the actual model files: io names/dims/dtypes match the code, output raster is non-identity (maxAbs diff 0.95, mean 0.29 vs input) [high]. Execution providers are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no SharedArrayBuffer/COOP-COEP dependency, required for GitHub Pages. In-browser (real GPU) execution and end-to-end visual correctness on an actual scanned page are **not yet confirmed** — verified only headlessly against raw model tensors; needs the Playwright suite (§W2 row 5 infra) to close. | ARCHITECTURE §9 |
+| 1 | Dewarp & Deskew (§10.1) | Removes page curl/fold and skew via the docuwarp/ONNX mesh unwarp | **Implemented, not a no-op.** Full two-stage ONNX pipeline (UVDoc warp-field model + bilinear resample), wired button→AppModel→ensure_onnx→apply_dewarp. Verified this update against the actual model files: io names/dims/dtypes match the code, output raster is non-identity (maxAbs diff 0.95, mean 0.29 vs input) [high]. Execution providers are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no SharedArrayBuffer/COOP-COEP dependency, required for GitHub Pages. In-browser (real GPU) execution and end-to-end visual correctness on an actual scanned page are **not yet confirmed** — verified only headlessly against raw model tensors. The Playwright suite now exists (2026-07-03) but the update sandbox had no GPU, so only the wasm EP ran in-browser; WebGPU-on-real-GPU still needs confirmation on a GPU host (or the GH Pages deploy). | ARCHITECTURE §9 |
 | 2 | Export formats (§12.7) | PDF / JPG / PNG / TIFF | **TIFF is not offered.** Export split-button dropdown lists PDF / JPG / PNG only. | ARCHITECTURE §1 (no maintained browser TIFF encoder) |
-| 3 | Multi-file PDF documents (§7.1a) | Several PDFs combine into one working document, pages in selection order | **Broken.** Loading a second PDF replaces the first internally; only the last-loaded file's pages render. Root cause identified: `_pdf` in `pdf/loader.ts` holds a single `PDFDocumentProxy`. Fix not yet applied. | ARCHITECTURE status table |
-| 4 | Mixed PDF + image documents (§7.1a) | PDFs and images combine freely into one document | **Broken.** A mixed-type load throws once a page index maps to an image in a load that also contains a PDF. Same root cause as row 3 (`get_source_image` assumes PDF for every index). Fix not yet applied. | ARCHITECTURE status table |
+| 3 | Multi-file PDF documents (§7.1a) | Several PDFs combine into one working document, pages in selection order | **Fixed (2026-07-03).** `pdf/loader.ts` holds `_pdfs[]` plus a per-output-page `_pages[]` `PageSource` map; each output index maps to its own PDF proxy + 1-based page number. Multi-PDF load combines all pages in selection order. Unit-tested (`tests/pdf/loader.test.ts`). | ARCHITECTURE §8 |
+| 4 | Mixed PDF + image documents (§7.1a) | PDFs and images combine freely into one document | **Fixed (2026-07-03).** Same `_pages[]` `PageSource` map: image pages carry a `{kind:'image', blob}` source decoded on demand, so a mixed PDF+image load renders every index. Unit-tested. | ARCHITECTURE §8 |
 | 5 | Batch responsiveness (§14, §17: ~150 ms/page target) | Long operations run off the interaction path via the Tk `after`-tick loop; the window stays responsive between pages | Detect / filter / dewarp run on the **main (UI) thread** — the tab can visibly pause for the duration of each page's processing (still bounded per-page, §W5) rather than staying responsive between pages. | ARCHITECTURE §7a |
 | 6 | `confirm_overwrite` setting (§15) | Warns before silently replacing an existing file on export | **Stored but not enforced.** No overwrite-detection path exists yet; the setting is inert. | §W6 below — no File System Access API overwrite check wired up |
 | 7 | Binarization DPI scaling (§10.2) | Sauvola window / background-kernel / min-area scale with the page's embedded DPI | Fixed kernel sizes — the web's scanned-mode source DPI (`SRC_DPI`) is a constant 200, unlike desktop's variable source DPI, so this mainly affects the B/W filter's kernel size relative to desktop's 150-DPI reference case, not correctness. | ARCHITECTURE §9 — low-severity fidelity residual |
@@ -59,11 +59,14 @@ Everything else in the desktop spec — classification (§4), coordinate system/
 full crop-window state machine (§9) including keep-ratio (§9.7) and cancel-drag (§9.3/§9.6),
 auto-detect (§8), the B/W and Sharpen filters (§10.2), pages selection (§11), apply/export/compress
 (§12), history/reset/rotate/delete (§13), and the error taxonomy (§20) — is implemented and passes
-the unit-test gate (151/151 at HEAD as of this update). **Caveat, corrected from a prior version of
-this document:** there is no committed end-to-end browser suite (`tests/e2e/` does not exist), so
-"exercised via headless-browser end-to-end verification" was an unverifiable claim and has been
-removed. Confidence in this row is [high] for unit-level correctness, [med] for full in-browser
-behavior pending the Playwright suite (tracked in TODO.txt item 8).
+the unit-test gate (279/279 as of 2026-07-03, up from 151 — now includes tests/ui/ jsdom coverage
+for every panel/view and additional core edge tests). A Playwright end-to-end suite now exists
+(`tests/e2e/`: smoke + crop_split, 6/6 green on chromium) and exercises the synthetic-doc boot,
+three-column layout, split/crop output-page math, and Settings-panel open/Esc-close in a real
+browser. Confidence [high] for unit-level correctness and for the chromium e2e paths; [med] for
+(a) Firefox (the e2e project exists but was not runnable in the update sandbox — missing OS libs)
+and (b) in-app WebGPU dewarp on a real GPU (the sandbox has no GPU; only the wasm EP was exercised
+in-browser). See TODO.txt items 8 and 15.
 
 ---
 

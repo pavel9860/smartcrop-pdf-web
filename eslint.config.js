@@ -31,6 +31,25 @@ export default tseslint.config(
     },
   },
   {
+    // Test code legitimately reaches into the DOM with `el.querySelector(...)!` and casts
+    // hand-rolled mocks/duck-typed stubs (browser globals, AppController) through `any`/
+    // `unknown`. Enforcing production strictness there adds noise without catching real bugs;
+    // relax only the rules that fire purely from those test idioms.
+    files: ['tests/**'],
+    rules: {
+      '@typescript-eslint/no-non-null-assertion': 'off',
+      '@typescript-eslint/explicit-function-return-type': 'off',
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/no-confusing-void-expression': 'off',
+      '@typescript-eslint/no-unnecessary-type-assertion': 'off',
+      '@typescript-eslint/unbound-method': 'off',
+    },
+  },
+  {
     ignores: ['dist/**', 'node_modules/**', '*.config.js', '*.config.ts'],
   },
 )
