@@ -146,7 +146,7 @@ describe('draw with keep-ratio + misc', () => {
   it('filter strength on an empty selection still completes', async () => {
     const m = await loaded(4, Mode.SCANNED)
     m.set_select_pattern('999'); m.set_pages_mode(PagesMode.SELECT)
-    const r = await m.set_filter_strength(2).result()
-    expect(r).toBeDefined()
+    expect(() => { m.set_filter_strength(2) }).not.toThrow()
+    expect(m.filter_strength).toBe(2)
   })
 })

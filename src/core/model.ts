@@ -749,6 +749,7 @@ export class AppModel {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
     if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
+    this.history.push(this.document)   // snapshot BEFORE the toggle so undo reverts it
     this.document.dewarp_on = !this.document.dewarp_on
     this._apply_scan_intents(pages)
   }
@@ -757,6 +758,7 @@ export class AppModel {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
     if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
+    this.history.push(this.document)
     // Toggle: pressing the active filter turns it off (spec §7.2)
     this.document.filter_mode = (mode === this.document.filter_mode) ? FilterMode.NONE : mode
     this._apply_scan_intents(pages)
@@ -765,15 +767,16 @@ export class AppModel {
   set_filter_strength(n: number): void {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
+    this.history.push(this.document)
     this.document.filter_strength =
-      Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n)) as 1 | 2 | 3
+      Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n))
     this._apply_scan_intents(pages)
   }
 
-  // Snapshot for undo, then record the CURRENT global scan flags as each selected page's intent
-  // and drop its cached rasters. No image work here — the next _get_work(p) renders that page.
+  // Record the CURRENT global scan flags as each selected page's intent and drop its cached
+  // rasters. No image work here — the next _get_work(p) renders that page. (Callers push history
+  // BEFORE mutating the flags, so undo reverts the toggle.)
   private _apply_scan_intents(pages: number[]): void {
-    this.history.push(this.document)
     const intent: PageProcessIntent = {
       dewarp: this.document.dewarp_on,
       filter: this.document.filter_mode === FilterMode.NONE

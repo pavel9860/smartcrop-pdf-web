@@ -164,7 +164,7 @@ describe('anchors / offsets edges', () => {
 describe('scan processing edges', () => {
   it('set_filter_mode is undoable and undo reverts it', async () => {
     const m = await loaded(3, Mode.SCANNED)
-    await m.set_filter_mode(FilterMode.BW).result()
+    m.set_filter_mode(FilterMode.BW)
     expect(m.filter_mode).toBe(FilterMode.BW)
     if (m.can_undo) {
       m.undo()
@@ -174,8 +174,8 @@ describe('scan processing edges', () => {
 
   it('switching filter mode BW -> SHARPEN keeps a single active mode', async () => {
     const m = await loaded(3, Mode.SCANNED)
-    await m.set_filter_mode(FilterMode.BW).result()
-    await m.set_filter_mode(FilterMode.SHARPEN).result()
+    m.set_filter_mode(FilterMode.BW)
+    m.set_filter_mode(FilterMode.SHARPEN)
     expect(m.filter_mode).toBe(FilterMode.SHARPEN)
   })
 })

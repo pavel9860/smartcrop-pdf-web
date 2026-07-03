@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
 import { Mode, FilterMode, PagesMode } from '@core/enums'
-import { Ok, Failed } from '@core/batch'
+import { Ok } from '@core/batch'
 import {
   NoDocumentError, EmptySelectionError, InvalidSplitError, DeleteAllPagesError,
 } from '@core/errors'
@@ -421,38 +421,37 @@ describe('gestures: draw / cancel', () => {
 // Scan processing
 // ---------------------------------------------------------------------------
 
-describe('scan processing', () => {
-  it('run_dewarp toggles dewarp_on and resolves Ok', async () => {
+describe('scan processing (lazy — toggles are instant, rendering deferred to view/export)', () => {
+  it('run_dewarp toggles dewarp_on synchronously', async () => {
     const model = await loaded_model({ mode: Mode.SCANNED })
     expect(model.dewarp_on).toBe(false)
-    const result = await model.run_dewarp().result()
-    expect(result).toBeInstanceOf(Ok)
+    model.run_dewarp()
     expect(model.dewarp_on).toBe(true)
   })
 
   it('set_filter_mode sets the mode, and pressing the same mode again turns it off', async () => {
     const model = await loaded_model({ mode: Mode.SCANNED })
-    await model.set_filter_mode(FilterMode.BW).result()
+    model.set_filter_mode(FilterMode.BW)
     expect(model.filter_mode).toBe(FilterMode.BW)
-    await model.set_filter_mode(FilterMode.BW).result()
+    model.set_filter_mode(FilterMode.BW)
     expect(model.filter_mode).toBe(FilterMode.NONE)
   })
 
   it('set_filter_strength clamps to [FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX]', async () => {
     const model = await loaded_model({ mode: Mode.SCANNED })
-    await model.set_filter_strength(99).result()
+    model.set_filter_strength(99)
     expect(model.filter_strength).toBe(3)
-    await model.set_filter_strength(-5).result()
+    model.set_filter_strength(-5)
     expect(model.filter_strength).toBe(1)
   })
 
-  it('a failing adapter call resolves Failed, not a thrown/unhandled rejection', async () => {
+  it('run_dewarp does no eager rendering — a failing renderer does not throw here', async () => {
     const { adapter } = make_mock_adapter({ mode: Mode.SCANNED })
     adapter.get_work_image = (): Promise<ImageBitmap> => Promise.reject(new Error('boom'))
     const model = new AppModel(adapter)
     await model.load_files([FILE()])
-    const result = await model.run_dewarp().result()
-    expect(result).toBeInstanceOf(Failed)
+    expect(() => { model.run_dewarp() }).not.toThrow()   // intent recorded; render is deferred
+    expect(model.dewarp_on).toBe(true)
   })
 })
 
