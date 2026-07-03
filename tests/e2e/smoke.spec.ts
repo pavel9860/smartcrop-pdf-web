@@ -8,7 +8,7 @@ test('three-column layout renders with the synthetic document', async ({ page })
   await expect(page.locator('.sidebar')).toBeVisible()
   await expect(page.locator('.canvas-area')).toBeVisible()
   await expect(page.locator('canvas.page-canvas')).toBeVisible()
-  await expect(page.locator('#nav-total')).toHaveText('/ 24')
+  await expect(page.locator('#nav-total')).toHaveText('/ 1')
 })
 
 test('primary controls are present', async ({ page }) => {

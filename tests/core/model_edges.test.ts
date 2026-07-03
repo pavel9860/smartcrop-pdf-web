@@ -104,8 +104,9 @@ describe('split edges', () => {
   it('switching to split drops a stale committed single crop', async () => {
     const m = await loaded(3)
     await m.detect_content().result()
+    const full = m.view_snapshot().page_w
     m.apply_crop()
-    expect(m.view_snapshot().overlay.some(o => o.kind === 'committed')).toBe(true)
+    expect(m.view_snapshot().page_w).toBeLessThan(full)   // committed → cropped page dims
     m.set_split(2)
     expect(m.view_total).toBe(3)                    // committed single crop dropped
     expect(m.view_snapshot().overlay.every(o => o.kind === 'split')).toBe(true)

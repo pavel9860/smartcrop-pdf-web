@@ -129,9 +129,10 @@ describe('commit_offsets / re-detect', () => {
   it('re-detect refreshes an existing committed crop', async () => {
     const m = await loaded(3)
     await m.detect_content().result()
+    const full = m.view_snapshot().page_w
     m.apply_crop()
     await m.detect_content().result()          // second detect: refresh path
-    expect(m.view_snapshot().overlay.some(o => o.kind === 'committed')).toBe(true)
+    expect(m.view_snapshot().page_w).toBeLessThan(full)   // still committed (cropped) after re-detect
   })
 })
 

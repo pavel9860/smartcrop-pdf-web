@@ -375,12 +375,24 @@ export class AppModel {
         this._invalidate_output_cache(p)
       }
     }
+    this.document.drawn = null   // the drawn window became the crop across all pages (§12.2)
   }
 
   private _compute_crop_boxes_for_page(p: number): Box[] | null {
     const doc = this._doc
     if (!doc) return null
     const sz = this._page_dims(p)
+
+    // Hand-drawn window takes precedence — clamp the global window to this page (§12.2).
+    const drawn = this.document.drawn
+    if (drawn) {
+      return [{
+        x0: Math.max(0, Math.min(drawn.x0, sz.width)),
+        y0: Math.max(0, Math.min(drawn.y0, sz.height)),
+        x1: Math.max(0, Math.min(drawn.x1, sz.width)),
+        y1: Math.max(0, Math.min(drawn.y1, sz.height)),
+      }]
+    }
 
     const detected  = this.document.detect_cache.get(p)
     const union     = this.document.union
@@ -444,11 +456,16 @@ export class AppModel {
     this._keep_ratio = on
     if (ratio !== undefined && ratio > 0) this._ratio = ratio
     else if (on && was_off) {
-      // Pre-populate from the detection union's aspect ratio, not the page's (model.py:435-441
-      // uses document.union, same source as _run_detect above) — keep-ratio locks to the
-      // shape of the detected content.
+      // Pre-populate from the detection union's aspect ratio when detection has run; otherwise
+      // default to the current PAGE's aspect ratio, not a bare 1.0 (bug E — "keep ratio set by
+      // default 1 not page w/h"). keep-ratio then locks to the content shape, or the page.
       const u = this.document.union
-      if (u && box_height(u) > 0) this._ratio = box_width(u) / box_height(u)
+      if (u && box_height(u) > 0) {
+        this._ratio = box_width(u) / box_height(u)
+      } else if (this._doc) {
+        const sz = this._current_page_size()
+        if (sz.height > 0) this._ratio = sz.width / sz.height
+      }
     }
   }
 
@@ -457,6 +474,7 @@ export class AppModel {
     // Committed crops belong to the previous layout — drop them when the split changes
     // (desktop model.py:417-418). Prevents stale single-crop pages surviving into split mode.
     this.document.applied.clear()
+    this.document.drawn = null
     this._split_count = n
     if (this._doc) {
       const sz = this._page_dims(this._current_page)
@@ -477,6 +495,8 @@ export class AppModel {
     const pt: readonly [number, number] = [px, py]
 
     if (this._split_count > 1) { this._begin_split_drag(pt, tol, sz); return }
+    // A pending drawn window overrides auto/committed gestures — a fresh drag redraws it.
+    if (this.document.drawn) { this._begin_draw_drag(pt, sz); return }
     if (this._begin_auto_drag(pt, tol, sz)) return
     if (this._begin_crop_edit_drag(pt, tol, sz)) return
     this._begin_draw_drag(pt, sz)
@@ -616,14 +636,17 @@ export class AppModel {
       const rect = this._draw_rect
       this._draw_rect = null
       if (!rect || box_width(rect) < 2 * MIN_RECT || box_height(rect) < 2 * MIN_RECT) return
-      let committed = rect
+      let drawn = rect
       if (this._keep_ratio) {
         const sz = this._current_page_size()
-        committed = keep_ratio_normalise(rect, this._ratio, sz.width, sz.height)
+        drawn = keep_ratio_normalise(rect, this._ratio, sz.width, sz.height)
       }
+      // The drawn window is a GLOBAL pending crop shown as an outline on every page — it is NOT
+      // committed here. Clicking Crop maps it onto each selected page then clears it, so a hand-
+      // drawn window crops ALL pages (desktop §9.3/§12.2), and the page never zooms to the crop
+      // on mouse-up (was the "magnification" bug).
       this.history.push(this.document)
-      this.document.applied.set(this._current_page, [committed])
-      this._invalidate_output_cache(this._current_page)
+      this.document.drawn = drawn
       return
     }
 
@@ -983,26 +1006,35 @@ export class AppModel {
     const { split_idx } = view_to_source(this._view_pos, this.page_count(), this.document.applied)
 
     const committed = this.document.applied.get(p)
-    const overlay   = this._build_overlay(p)
 
-    // NOTE (bug 18, deferred to the render re-architecture): a committed page paints the cropped
-    // output but returns the FULL-page dims here, so canvas_view stretches the crop to the page
-    // aspect. Desktop returns the crop box's own dims. Fixing it means committed view returns
-    // box dims + empty overlay, which requires reworking the 9 tests that read committed crops
-    // via view_snapshot().overlay (applied is private). Tracked in memory scw-render-model-divergence.
-    const cache_key = committed ? `${p}:${split_idx}` : null
-    const image = cache_key ? (this._output_cache.get(cache_key) ?? null)
-                : (this._current_bitmap ?? null)
+    // A committed page (and no pending drawn window) paints the cropped output at the CROP box's
+    // OWN dimensions with no outline over it — desktop canvas_view.py returns
+    // ViewSnapshot(image, box.width, box.height, …). Returning full-page dims + the crop outline
+    // stretched the crop to the page aspect and left a stray frame on it (bug 18).
+    if (committed && committed.length > 0 && !this.document.drawn) {
+      const box = committed[Math.min(split_idx, committed.length - 1)] ?? committed[0]
+      return {
+        image:  this._output_cache.get(`${p}:${split_idx}`) ?? null,
+        page_w: box ? box_width(box)  : sz.width,
+        page_h: box ? box_height(box) : sz.height,
+        overlay: [],
+        draw_rect:  this._draw_rect,
+        position:   this._view_pos,
+        total:      this.view_total,
+        status:     this._status_string(p, sz),
+        is_loading: this._is_loading,
+      }
+    }
 
     return {
-      image,
-      page_w:   sz.width,
-      page_h:   sz.height,
-      overlay,
-      draw_rect: this._draw_rect,
-      position:  this._view_pos,
-      total:     this.view_total,
-      status:    this._status_string(p, sz),
+      image:   this._current_bitmap ?? null,
+      page_w:  sz.width,
+      page_h:  sz.height,
+      overlay: this._build_overlay(p),
+      draw_rect:  this._draw_rect,
+      position:   this._view_pos,
+      total:      this.view_total,
+      status:     this._status_string(p, sz),
       is_loading: this._is_loading,
     }
   }
@@ -1141,6 +1173,20 @@ export class AppModel {
         const box = this.document.crop_rects[i]
         if (box) out.push({ kind: 'split', box, idx: i + 1 })
       }
+      return out
+    }
+
+    // Global drawn window (pending crop) — outline on every page, clamped to it; overrides the
+    // auto/committed display until Crop maps it in.
+    const drawn = this.document.drawn
+    if (drawn) {
+      const sz = this._page_dims(p)
+      out.push({ kind: 'committed', box: {
+        x0: Math.max(0, Math.min(drawn.x0, sz.width)),
+        y0: Math.max(0, Math.min(drawn.y0, sz.height)),
+        x1: Math.max(0, Math.min(drawn.x1, sz.width)),
+        y1: Math.max(0, Math.min(drawn.y1, sz.height)),
+      } })
       return out
     }
 

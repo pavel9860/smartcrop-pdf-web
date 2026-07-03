@@ -229,9 +229,11 @@ describe('detect_content / apply_crop', () => {
   it('apply_crop after detect_content commits the live box', async () => {
     const model = await loaded_model()
     await model.detect_content().result()
+    const full = model.view_snapshot().page_w
     model.apply_crop()
     const snap = model.view_snapshot()
-    expect(snap.overlay.some(o => o.kind === 'committed')).toBe(true)
+    expect(snap.page_w).toBeLessThan(full)   // committed page paints the cropped region at box dims
+    expect(snap.overlay).toHaveLength(0)     // no crop outline over the already-cropped view
   })
 
   it('apply_crop with a mismatched split count raises InvalidSplitError', async () => {
@@ -261,11 +263,29 @@ describe('detect_content / apply_crop', () => {
     expect(model.offsets.left).toBeLessThanOrEqual(100)
   })
 
-  it('set_keep_ratio(true) with no union yet leaves the default ratio untouched', async () => {
+  it('set_keep_ratio(true) with no union defaults to the PAGE aspect ratio (bug E)', async () => {
     const model = await loaded_model({ page_w: 200, page_h: 400 })
     model.set_keep_ratio(true)
     expect(model.keep_ratio).toBe(true)
-    expect(model.ratio).toBeCloseTo(1.0)   // nothing detected yet — no union to derive a ratio from
+    expect(model.ratio).toBeCloseTo(0.5)   // no detection yet → default to page w/h = 200/400
+  })
+
+  it('a hand-drawn window shows on every page and Crop applies it to ALL, then clears (bug D)', async () => {
+    const model = await loaded_model({ page_count: 3, page_w: 200, page_h: 300 })
+    model.begin_drag(40, 50, 8)
+    model.update_drag(160, 250)
+    model.end_drag()
+    expect(model.view_snapshot().overlay).toHaveLength(1)   // drawn window outline, page 1
+    model.next_page()
+    expect(model.view_snapshot().overlay).toHaveLength(1)   // same global window on page 2
+    model.prev_page()
+    model.apply_crop()
+    for (const n of [1, 2, 3]) {                            // every page now carries the crop
+      model.jump_to_output_page(n)
+      const s = model.view_snapshot()
+      expect(s.page_w).toBeCloseTo(120)   // committed to the drawn window's width (160-40) on every page
+      expect(s.overlay).toHaveLength(0)   // drawn window cleared; no stray outline on the crop
+    }
   })
 
   it('set_keep_ratio(true) pre-populates from the detection UNION, not the page (model.py:435-441)', async () => {

@@ -20,6 +20,8 @@ export interface PageProcessIntent {
 
 export interface DocumentState {
   applied:       Map<number, Box[]>               // committed crop(s) per source page
+  drawn:         Box | null                       // global hand-drawn window, page coords (§9.3);
+                                                   // applied to all selected pages on Crop, then cleared
   crop_rects:    Box[]                             // live split rectangles (split=2/4)
   rotation:      Map<number, number>               // page → degrees CW (0/90/180/270)
   processed:     Map<number, PageProcessIntent>    // scan-processing intent per page
@@ -35,6 +37,7 @@ export interface DocumentState {
 export function default_document_state(): DocumentState {
   return {
     applied:        new Map(),
+    drawn:          null,
     crop_rects:     [],
     rotation:       new Map(),
     processed:      new Map(),
@@ -53,6 +56,7 @@ export function default_document_state(): DocumentState {
 export function snapshot(state: DocumentState): DocumentState {
   return {
     applied:        new Map([...state.applied].map(([k, v]) => [k, [...v]])),
+    drawn:          state.drawn,          // immutable Box, safe to share
     crop_rects:     [...state.crop_rects],
     rotation:       new Map(state.rotation),
     processed:      new Map(state.processed),

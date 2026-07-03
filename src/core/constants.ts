@@ -66,7 +66,7 @@ export const SAUVOLA_DPI_SCALE_MAX = 4.0
 export const MAX_SPLIT = 4
 
 // Synthetic document
-export const SYNTH_PAGES = 24
+export const SYNTH_PAGES = 1     // single blank placeholder page before any file is loaded (bug 4)
 export const SYNTH_W = 595   // A4 @ 72dpi points
 export const SYNTH_H = 842
 
