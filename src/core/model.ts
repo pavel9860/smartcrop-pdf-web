@@ -69,7 +69,10 @@ export interface RendererAdapter {
   // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
   detect_text_box?(page_idx: number): Promise<Box | null>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
-  export_images(pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string): Promise<Uint8Array>
+  export_images(
+    pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
+    on_progress?: (done: number, total: number) => void,
+  ): Promise<Uint8Array>
   make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>
   close(): void
 }
@@ -207,6 +210,14 @@ export class AppModel {
 
   get has_document(): boolean { return this._doc !== null }
   page_count(): number { return this._page_map.length }
+
+  // Loaded document name for the sidebar's Document & State card. One file → its name; several →
+  // "first.pdf +N more". Empty when nothing is loaded.
+  get document_name(): string {
+    const names = this._doc?.file_names ?? []
+    const first = names[0] ?? ''
+    return names.length > 1 ? `${first} +${names.length - 1} more` : first
+  }
 
   // ---------------------------------------------------------------------------
   // Navigation
@@ -936,7 +947,8 @@ export class AppModel {
     const base = doc?.file_names[0]?.replace(/\.[^.]+$/, '') ?? 'document'
     const name = base + this.settings.output_postfix
     const ext  = this.settings.export_format === 'PDF' ? '.pdf'
-               : this.settings.export_format === 'JPG' ? '.jpg' : '.png'
+               : this.settings.export_format === 'JPG' ? '.jpg'
+               : this.settings.export_format === 'TIFF' ? '.tif' : '.png'
     return [name + ext, this.settings.output_folder]
   }
 
@@ -945,8 +957,13 @@ export class AppModel {
     const doc = this._doc
     if (!doc) throw new NoDocumentError('No document loaded')
 
+    // Image formats have a second, equally-long phase (encode + zip) after rendering; double the
+    // total so the bar keeps advancing through encoding instead of freezing at 100% (bug: progress
+    // bar completes, then a long invisible zip pass). PDF has no separate per-page encode phase.
     const total_views = this.view_total
-    const job = new PageBatchJob(`Exporting ${this.settings.export_format}…`, total_views)
+    const is_image = this.settings.export_format !== 'PDF'
+    const job = new PageBatchJob(
+      `Exporting ${this.settings.export_format}…`, is_image ? total_views * 2 : total_views)
     void this._run_export(job, filename)
     return job
   }
@@ -964,9 +981,13 @@ export class AppModel {
         const bytes = await this._adapter.export_pdf(pages_out)
         this._download_pdf(bytes, filename)
       } else {
+        // Strip any extension off the suggested name — the archive is `<base>.zip` and entries
+        // are `<base>_NNN.<ext>`; a name like "doc_cropped.png" would yield "doc_cropped.png.zip".
+        const base = filename.replace(/\.[^.]+$/, '')
         const zip = await this._adapter.export_images(
-          pages_out, this.settings.export_format, filename)
-        this._download_zip(zip, filename)
+          pages_out, this.settings.export_format, base,
+          (done, total) => { if (total > 0) ctrl.advance() })
+        this._download_zip(zip, base)
       }
     } catch (e) {
       ctrl.complete(new Failed(new ImagingError(String(e))))

@@ -104,6 +104,8 @@ Output Quality → Export), renamed "Compress Document" to "Output Quality" and 
 `_build_export` split) rather than the spec prose's single "Compress Document" card title, which is
 stale relative to the desktop app itself. Pinned bottom bar, outside scroll: Settings + Help
 buttons, then Undo/Redo/Reset, then page nav — same content and order as desktop spec §7.8.
+The **Document & State** card shows the loaded document name under the Load button (single file →
+its name; several → "first.pdf +N more"; hidden when nothing is loaded) via `AppModel.document_name`.
 Exact icon set, control widths, switch/field styling, and per-control coloring (e.g. Delete must
 NOT be styled differently from other action buttons — see TODO.txt item 4) must match
 `docs/app_design_screenshots/`, which supersedes this section's prose wherever more specific.
@@ -168,8 +170,10 @@ behavior this row describes.
   3-digit). This is now the sole image-export path on **all** browsers — the desktop's N-loose-files
   behavior is deliberately not reproduced (browsers cannot write a chosen folder without a
   per-file save prompt; a single archive is the web-correct equivalent). Deflate level 0 for
-  JPG/PNG (already compressed), 6 for TIFF (uncompressed raster). `fflate` is a declared, installed
-  dependency [high].
+  JPG/PNG (already compressed), 1 for TIFF (fast deflate — level 6 made the final `zipSync` a long
+  progress-less freeze). `fflate` is a declared, installed dependency [high]. The export progress
+  bar spans **both** phases: render advances the first half, per-page encode the second (job total
+  = `view_total × 2` for image formats), so it no longer completes then hangs during encoding.
 - **Overwrite confirmation** (desktop spec §15's `confirm_overwrite` setting) is not yet enforced
   on the web — see §W2 row 6. The setting exists in Settings but has no effect today.
 

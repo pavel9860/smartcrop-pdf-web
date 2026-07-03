@@ -232,6 +232,16 @@ input, select { font: inherit; }
   color: var(--text-primary);
 }
 
+/* Loaded document name, shown under the Load button in the Document & State card */
+.doc-name {
+  font-size: 0.8125rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 2px 2px 0;
+}
+
 /* ── Buttons ── */
 .btn {
   display: inline-flex;

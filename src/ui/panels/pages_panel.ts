@@ -8,6 +8,7 @@ import { requireEl } from '../dom'
 export class PagesPanel {
   private readonly _badge: HTMLElement
   private readonly _load_btn: HTMLButtonElement
+  private readonly _doc_name: HTMLElement
   private readonly _file_input: HTMLInputElement
   private readonly _mode_btns: Record<PagesMode, HTMLButtonElement>
   private readonly _pattern_row: HTMLElement
@@ -24,6 +25,7 @@ export class PagesPanel {
         <span class="mode-badge" id="pp-badge">NORMAL</span>
       </div>
       <button class="btn btn-secondary w-full" id="pp-load">📂︎  Load PDF/Image Files</button>
+      <div class="doc-name hidden" id="pp-docname" title=""></div>
       <input type="file" id="pp-file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" hidden />`
     container.appendChild(doc_card)
 
@@ -46,6 +48,7 @@ export class PagesPanel {
 
     this._badge       = requireEl(doc_card, '#pp-badge')
     this._load_btn    = requireEl(doc_card, '#pp-load')
+    this._doc_name    = requireEl(doc_card, '#pp-docname')
     this._file_input  = requireEl(doc_card, '#pp-file')
     this._pattern_row = requireEl(pages_card, '#pp-pat-row')
     this._pattern_inp = requireEl(pages_card, '#pp-pattern')
@@ -83,6 +86,11 @@ export class PagesPanel {
     this._badge.textContent  = model.mode
     this._badge.className    = `mode-badge mode-badge--${model.mode.toLowerCase()}`
     this._load_btn.disabled  = busy
+
+    const name = model.document_name
+    this._doc_name.textContent = name
+    this._doc_name.title = name
+    this._doc_name.classList.toggle('hidden', name === '')
 
     const mode = model.pages_mode
     for (const [m, btn] of Object.entries(this._mode_btns)) {

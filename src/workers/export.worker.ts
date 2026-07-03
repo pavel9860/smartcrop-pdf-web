@@ -14,8 +14,9 @@ type Req =
   | { id: number; type: 'export_images'; pages: OutputPage[]; format: ImageFormat; base: string; quality: number }
 
 type Res =
-  | { id: number; type: 'ok';    payload: unknown }
-  | { id: number; type: 'error'; message: string }
+  | { id: number; type: 'ok';       payload: unknown }
+  | { id: number; type: 'error';    message: string }
+  | { id: number; type: 'progress'; done: number; total: number }
 
 self.onmessage = async (ev: MessageEvent<Req>): Promise<void> => {
   const msg = ev.data
@@ -28,7 +29,8 @@ self.onmessage = async (ev: MessageEvent<Req>): Promise<void> => {
         return
       }
       case 'export_images': {
-        const zip = await zip_images(msg.pages, msg.format, msg.base, msg.quality)
+        const zip = await zip_images(msg.pages, msg.format, msg.base, msg.quality,
+          (done, total) => { self.postMessage({ id: msg.id, type: 'progress', done, total } satisfies Res) })
         self.postMessage({ id: msg.id, type: 'ok', payload: zip } satisfies Res, [zip.buffer])
         return
       }
@@ -51,17 +53,22 @@ async function build_pdf(pages: OutputPage[], quality: number): Promise<Uint8Arr
 }
 
 // Encode every output page and pack into ONE zip (spec-web §W: image formats deliver a single
-// archive, not N loose downloads). Level 0 for JPG/PNG (already compressed); default for TIFF.
+// archive, not N loose downloads). Level 0 for JPG/PNG (already compressed); level 1 (fast
+// deflate) for uncompressed TIFF — level 6 made the final zipSync the long pole with no progress.
+// Per-page progress is reported so the bar keeps moving through the encode phase.
 async function zip_images(
   pages: OutputPage[], format: ImageFormat, base: string, quality: number,
+  on_progress: (done: number, total: number) => void,
 ): Promise<Uint8Array> {
   const ext = EXT[format]
-  const level = format === 'TIFF' ? 6 : 0
+  const level = format === 'TIFF' ? 1 : 0
+  const total = pages.length
   const entries: Zippable = {}
   let i = 0
   for (const p of pages) {
     const idx = String(++i).padStart(3, '0')
     entries[`${base}_${idx}.${ext}`] = [await encode_page(p, format, quality), { level }]
+    on_progress(i, total)
   }
   return zipSync(entries)
 }

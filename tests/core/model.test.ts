@@ -632,6 +632,48 @@ describe('export', () => {
     expect(calls['export_pdf']).toBeUndefined()
     expect(got_zip).not.toBeNull()
   })
+
+  it('zip base strips a trailing image extension (no "name.png.zip")', async () => {
+    const { adapter } = make_mock_adapter({ page_count: 1 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    model.set_export_format('PNG')
+    let got_base = ''
+    model.set_download_handlers(() => { /* unused */ }, (_b, base) => { got_base = base })
+    await model.export('doc_cropped.png').result()   // filename carries the format ext
+    expect(got_base).toBe('doc_cropped')
+  })
+
+  it('suggested_export_name uses .tif for TIFF', async () => {
+    const { adapter } = make_mock_adapter({ page_count: 1 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE('scan.pdf')])
+    model.set_export_format('TIFF')
+    const [name] = model.suggested_export_name()
+    expect(name.endsWith('.tif')).toBe(true)
+  })
+
+  it('image export doubles the job total so progress spans render + encode', async () => {
+    const { adapter } = make_mock_adapter({ page_count: 3 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    model.set_export_format('JPG')
+    expect(model.export('out').total).toBe(model.view_total * 2)
+    model.set_export_format('PDF')
+    expect(model.export('out.pdf').total).toBe(model.view_total)
+  })
+})
+
+describe('document_name', () => {
+  it('is empty with no document, the file name with one, "+N more" with several', async () => {
+    const { adapter } = make_mock_adapter({ page_count: 1 })
+    const model = new AppModel(adapter)
+    expect(model.document_name).toBe('')
+    await model.load_files([FILE('scan.pdf')])
+    expect(model.document_name).toBe('scan.pdf')
+    await model.load_files([FILE('a.pdf'), FILE('b.pdf'), FILE('c.pdf')])
+    expect(model.document_name).toBe('a.pdf +2 more')
+  })
 })
 
 // ---------------------------------------------------------------------------

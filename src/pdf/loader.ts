@@ -80,11 +80,18 @@ function rotate_bitmap_cw(bitmap: ImageBitmap, angle: number): ImageBitmap {
 
 type WorkerMsg = { id: number; type: 'ok'; payload: unknown }
                | { id: number; type: 'error'; message: string }
+               | { id: number; type: 'progress'; done: number; total: number }
+
+interface Pending {
+  resolve: (v: unknown) => void
+  reject: (e: Error) => void
+  on_progress?: ((done: number, total: number) => void) | undefined
+}
 
 class RpcWorker {
   private readonly _w: Worker
   private _next_id = 0
-  private readonly _pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+  private readonly _pending = new Map<number, Pending>()
 
   constructor(w: Worker) {
     this._w = w
@@ -92,19 +99,20 @@ class RpcWorker {
       const { id, type } = ev.data
       const p = this._pending.get(id)
       if (!p) return
+      if (type === 'progress') { p.on_progress?.(ev.data.done, ev.data.total); return }
       this._pending.delete(id)
       if (type === 'ok') p.resolve((ev.data as { payload: unknown }).payload)
       else p.reject(new Error((ev.data as { message: string }).message))
     }
   }
 
-  call<T>(msg: Record<string, unknown>, transfer: Transferable[] = []): Promise<T> {
+  call<T>(
+    msg: Record<string, unknown>, transfer: Transferable[] = [],
+    on_progress?: (done: number, total: number) => void,
+  ): Promise<T> {
     const id = this._next_id++
     return new Promise<T>((resolve, reject) => {
-      this._pending.set(id, {
-        resolve: v => { resolve(v as T) },
-        reject,
-      })
+      this._pending.set(id, { resolve: v => { resolve(v as T) }, reject, on_progress })
       this._w.postMessage({ id, ...msg }, transfer)
     })
   }
@@ -355,11 +363,12 @@ export class PdfRendererAdapter implements RendererAdapter {
 
   async export_images(
     pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
+    on_progress?: (done: number, total: number) => void,
   ): Promise<Uint8Array> {
     const exp = await this._export_worker()
     return exp.call<Uint8Array>(
       { type: 'export_images', pages, format, base, quality: JPEG_QUALITY },
-      pages.map(p => p.bitmap))
+      pages.map(p => p.bitmap), on_progress)
   }
 
   make_synth_page(_idx: number, w: number, h: number): Promise<ImageBitmap> {
