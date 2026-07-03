@@ -439,9 +439,10 @@ async function process_page(
   const out_canvas = new OffscreenCanvas(mat.cols, mat.rows)
   const out_ctx = out_canvas.getContext('2d')
   if (!out_ctx) throw new Error('2d context unavailable')
-  const out_data = new ImageData(
-    new Uint8ClampedArray(mat.data.buffer as ArrayBuffer),
-    mat.cols, mat.rows)
+  // mat.data is a subarray view onto the whole WASM heap, so mat.data.buffer is that ENTIRE heap
+  // (length ≠ 4*cols*rows) — `new ImageData(...)` on it threw IndexSizeError and hung dewarp &
+  // filters (bug 3). Copy only the mat's own bytes; both filter and dewarp outputs are 8-bit RGBA.
+  const out_data = new ImageData(new Uint8ClampedArray(mat.data), mat.cols, mat.rows)
   out_ctx.putImageData(out_data, 0, 0)
   mat.delete()
 
@@ -534,11 +535,18 @@ async function apply_dewarp(src: Mat, supersample: number): Promise<Mat> {
   const cnn_out = await _uvdoc_session.run({ input: input_tensor })
   const points_raw = cnn_out['output']
   if (!points_raw) throw new MissingDependencyError('Dewarp model returned no "output" tensor')
+  // ORT ≥1.19 decodes a float16 output into the new Float16Array (elements are already real
+  // floats); older/other builds return a Uint16Array of raw f16 bits. Handle BOTH — the prior
+  // code accepted only Uint16Array and threw on Float16Array, breaking dewarp entirely (bug 21).
   const points_bits = points_raw.data
-  if (!(points_bits instanceof Uint16Array)) {
+  let points_f32: Float32Array
+  if (points_bits instanceof Uint16Array) {
+    points_f32 = f16_data_to_f32_array(points_bits)
+  } else if (ArrayBuffer.isView(points_bits) && points_bits.constructor.name === 'Float16Array') {
+    points_f32 = Float32Array.from(points_bits as unknown as ArrayLike<number>)
+  } else {
     throw new MissingDependencyError(`Dewarp model "output" has unexpected dtype: ${points_raw.type}`)
   }
-  const points_f32 = f16_data_to_f32_array(points_bits)
   const points_tensor = new ort.Tensor('float32', points_f32, points_raw.dims)
 
   // Stage 2: resample the full-resolution source through the (upsampled) grid.

@@ -985,6 +985,11 @@ export class AppModel {
     const committed = this.document.applied.get(p)
     const overlay   = this._build_overlay(p)
 
+    // NOTE (bug 18, deferred to the render re-architecture): a committed page paints the cropped
+    // output but returns the FULL-page dims here, so canvas_view stretches the crop to the page
+    // aspect. Desktop returns the crop box's own dims. Fixing it means committed view returns
+    // box dims + empty overlay, which requires reworking the 9 tests that read committed crops
+    // via view_snapshot().overlay (applied is private). Tracked in memory scw-render-model-divergence.
     const cache_key = committed ? `${p}:${split_idx}` : null
     const image = cache_key ? (this._output_cache.get(cache_key) ?? null)
                 : (this._current_bitmap ?? null)

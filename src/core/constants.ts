@@ -9,7 +9,7 @@ export const CACHE_WINDOW = 16    // max pages in each LRU raster cache
 // Crop geometry (canvas-unit / page-unit tunables)
 export const HANDLE_R     = 10    // handle hit-radius px
 export const HANDLE_SLACK = 6     // extra tolerance around handle
-export const CANVAS_MARGIN = 40   // px padding around fitted page on canvas
+export const CANVAS_MARGIN = 0    // page fills the canvas height edge-to-edge (bug 9, desktop parity)
 export const OFFSET_LIMIT  = 100.0 // max ±% for any single edge offset
 
 // Classification / detection thresholds (spec §4, §8)
@@ -101,8 +101,8 @@ export const DEFAULT_COMPRESS_PRESET  = 'Original resolution'
 export const DEFAULT_OUTPUT_COLOURS   = 'Original colors'
 export const DEFAULT_EXPORT_FORMAT: ExportFormat = 'PDF'
 export const DEFAULT_OUTPUT_POSTFIX   = '_cropped'
-export const DEFAULT_UNDO_DEPTH       = 4
-export const UNDO_DEPTH_OPTIONS: readonly number[] = [4, 10, 20, 50]
+export const DEFAULT_UNDO_DEPTH       = 2
+export const UNDO_DEPTH_OPTIONS: readonly number[] = [2, 4, 10, 20, 50]
 export const UNDO_DEPTH_MIN = 1
 export const UNDO_DEPTH_MAX = 50
 export const DEFAULT_DEWARP_SUPERSAMPLE = 2.0

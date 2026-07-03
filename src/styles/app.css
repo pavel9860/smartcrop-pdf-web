@@ -169,6 +169,27 @@ input, select { font: inherit; }
   z-index: 2;
 }
 
+/* Hover ◀/▶ page-nav arrows at the canvas edge midpoints (bug 10). */
+.canvas-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 56px;
+  background: var(--btn-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 1rem;
+  opacity: 0;
+  transition: opacity 0.12s;
+  z-index: 2;
+}
+.canvas-area:hover .canvas-nav:not(:disabled) { opacity: 0.85; }
+.canvas-nav:disabled { opacity: 0; pointer-events: none; }
+.canvas-nav--left  { left: 10px; }
+.canvas-nav--right { right: 10px; }
+
 /* ── Nav bar (pinned to bottom of sidebar) ── */
 .nav-bar {
   flex-shrink: 0;
@@ -331,6 +352,10 @@ input, select { font: inherit; }
 }
 .offset-inp { width: 62px; }
 .ratio-input { width: 70px; margin-left: 6px; }
+/* Hide number-spinner buttons so all four L/T/R/B fields fit fully in the narrow row (bug 5). */
+.offset-inp::-webkit-outer-spin-button,
+.offset-inp::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.offset-inp { appearance: textfield; -moz-appearance: textfield; }
 .offset-inp:focus, .ratio-input:focus { border-color: var(--accent); }
 
 /* ── Toggles / checkboxes ── */
@@ -456,12 +481,10 @@ input, select { font: inherit; }
 .settings-view { display: flex; flex-direction: column; gap: 16px; }
 
 .settings-section { display: flex; flex-direction: column; gap: 8px; }
-.settings-section__title {
-  font-size: 0.6875rem;
+.settings-section__title {   /* same as sidebar card titles, e.g. "Actions" (bug 7) */
+  font-size: 0.9375rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-dim);
+  color: var(--text-primary);
   border-bottom: 1px solid var(--border);
   padding-bottom: 4px;
 }
@@ -471,18 +494,21 @@ input, select { font: inherit; }
   justify-content: space-between;
   gap: 8px;
 }
-.settings-label { font-size: 0.8125rem; color: var(--text-label); flex-shrink: 0; }
-.settings-note { font-size: 0.75rem; color: var(--text-dim); margin-top: 4px; }
+.settings-label { font-size: 0.9375rem; color: var(--text-label); flex-shrink: 0; }
+.settings-note { font-size: 0.9375rem; color: var(--text-dim); margin-top: 4px; }
 .settings-section--info p { font-size: 0.8125rem; line-height: 1.5; color: var(--text-primary); }
 .settings-row .select,
 .settings-row .text-input { max-width: 160px; }
+.folder-row { display: flex; gap: 6px; align-items: center; max-width: 200px; }
+.folder-row .text-input { max-width: none; flex: 1; min-width: 0; }
+.folder-row .btn { flex-shrink: 0; min-width: 30px; padding: 5px 8px; }
 .zoom-controls { display: flex; align-items: center; gap: 8px; }
 .zoom-controls .settings-note { margin-top: 0; min-width: 3em; text-align: right; }
 
 /* ── Help view ── */
 .help-view { display: flex; flex-direction: column; gap: 16px; }
 
-.help-intro { font-size: 0.8125rem; color: var(--text-label); line-height: 1.5; }
+.help-intro { font-size: 0.9375rem; color: var(--text-label); line-height: 1.5; }
 
 /* Contents card (spec §16): one full-width button per section, scrolls the body to it. */
 .help-toc {
@@ -495,11 +521,9 @@ input, select { font: inherit; }
   background: var(--bg-card);
 }
 .help-toc__title {
-  font-size: 0.6875rem;
+  font-size: 0.9375rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-dim);
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 .help-toc__item {
@@ -510,7 +534,7 @@ input, select { font: inherit; }
   border: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
   border-radius: 4px;
   cursor: pointer;
 }
@@ -518,11 +542,9 @@ input, select { font: inherit; }
 
 .help-section { display: flex; flex-direction: column; gap: 6px; scroll-margin-top: 8px; }
 .help-section h3 {
-  font-size: 0.6875rem;
+  font-size: 0.9375rem;
   font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-dim);
+  color: var(--text-primary);
   border-bottom: 1px solid var(--border);
   padding-bottom: 4px;
 }

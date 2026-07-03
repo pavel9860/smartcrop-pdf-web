@@ -22,6 +22,7 @@ export class SettingsView {
   private readonly _compress_sel: HTMLSelectElement
   private readonly _format_sel:   HTMLSelectElement
   private readonly _folder_inp:   HTMLInputElement
+  private readonly _folder_pick:  HTMLButtonElement
   private readonly _postfix_inp:  HTMLInputElement
 
   // Behaviour
@@ -84,7 +85,10 @@ export class SettingsView {
         </div>
         <div class="settings-row">
           <span class="settings-label">Output folder</span>
-          <input class="text-input" id="sv-folder" type="text" placeholder="same as source" />
+          <div class="folder-row">
+            <input class="text-input" id="sv-folder" type="text" placeholder="same as source" />
+            <button class="btn btn-secondary" id="sv-folder-pick" title="Choose folder…">…</button>
+          </div>
         </div>
         <div class="settings-row">
           <span class="settings-label">Output postfix</span>
@@ -114,12 +118,6 @@ export class SettingsView {
           <span class="settings-label">Dewarp supersample</span>
           <input class="text-input" id="sv-supersample" type="number" step="0.5" min="1" max="4" />
         </div>
-      </section>
-
-      <section class="settings-section settings-section--info">
-        <h3 class="settings-section__title">About</h3>
-        <p>SmartCrop PDF — Web Edition</p>
-        <p class="settings-note">All processing runs in your browser. No files are uploaded.</p>
       </section>`
 
     container.appendChild(this._el)
@@ -134,6 +132,7 @@ export class SettingsView {
     this._compress_sel = requireEl(this._el, '#sv-compress')
     this._format_sel   = requireEl(this._el, '#sv-format')
     this._folder_inp   = requireEl(this._el, '#sv-folder')
+    this._folder_pick  = requireEl(this._el, '#sv-folder-pick')
     this._postfix_inp  = requireEl(this._el, '#sv-postfix')
 
     this._confirm_cb  = requireEl(this._el, '#sv-confirm')
@@ -160,6 +159,7 @@ export class SettingsView {
       { ctrl.dispatch(() => { model.set_export_format(this._format_sel.value) }) })
     this._folder_inp.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_output_folder(this._folder_inp.value) }) })
+    this._folder_pick.addEventListener('click', () => { void this._pick_folder(model, ctrl) })
     this._postfix_inp.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_output_postfix(this._postfix_inp.value) }) })
 
@@ -195,6 +195,20 @@ export class SettingsView {
     if (document.activeElement !== this._supersample_inp) {
       this._supersample_inp.value = model.dewarp_supersample.toFixed(1)
     }
+  }
+
+  // Best-effort directory picker (File System Access API, Chromium only). Sets the display
+  // folder; web export still downloads via the browser, so this does not change the export path.
+  private async _pick_folder(model: AppModel, ctrl: AppController): Promise<void> {
+    const picker = (window as unknown as {
+      showDirectoryPicker?: () => Promise<{ name: string }>
+    }).showDirectoryPicker
+    if (!picker) return
+    try {
+      const dir = await picker()
+      this._folder_inp.value = dir.name
+      ctrl.dispatch(() => { model.set_output_folder(dir.name) })
+    } catch { /* user cancelled the picker */ }
   }
 
   get el(): HTMLElement { return this._el }

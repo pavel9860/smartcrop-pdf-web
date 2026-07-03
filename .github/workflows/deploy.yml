@@ -1,6 +1,12 @@
-# GitHub Pages deploy (ARCHITECTURE.md §18). Gate order mirrors §19; build output in dist/ is
-# published via the Actions Pages artifact (no Jekyll, no gh-pages branch). Vite `base` is
-# '/smartcrop-pdf-web/' (vite.config.ts) so all asset URLs resolve under the project-page subpath.
+# GitHub Pages deploy (ARCHITECTURE.md §18). dist/ is published via the Actions Pages artifact
+# (no Jekyll, no gh-pages branch). Vite `base` is '/smartcrop-pdf-web/' (vite.config.ts) so all
+# asset URLs resolve under the project-page subpath.
+#
+# One-time repo setup (Settings): Pages → Source = "GitHub Actions"; Actions → General → Workflow
+# permissions = "Read and write" (lets configure-pages enable Pages automatically).
+#
+# The site deploy depends ONLY on typecheck + unit tests + build, so a flaky browser test never
+# blocks publishing. The Playwright e2e runs as a separate, parallel quality job.
 name: deploy
 
 on:
@@ -15,7 +21,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false   # never cancel an in-flight deploy
 
 jobs:
   build:
@@ -30,10 +36,10 @@ jobs:
       - run: npx tsc --noEmit && npx tsc --noEmit -p tsconfig.worker.json
       - run: npx eslint src
       - run: npx vitest run --coverage
-      - run: npx playwright install --with-deps chromium firefox
-      - run: npx playwright test
       - run: npx vite build
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
@@ -47,3 +53,16 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Quality gate — runs in parallel; does NOT block the deploy above.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium firefox
+      - run: npx playwright test

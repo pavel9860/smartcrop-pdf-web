@@ -27,6 +27,8 @@ export class CanvasView {
   private _page_w = SYNTH_W
   private _page_h = SYNTH_H
   private readonly _coords_el: HTMLDivElement
+  private readonly _arrow_prev: HTMLButtonElement
+  private readonly _arrow_next: HTMLButtonElement
   private _ro: ResizeObserver
   private _theme: ThemeColors = {
     bg: '#121212', crop: '#4a9eff', split: '#2a7edb',
@@ -43,6 +45,12 @@ export class CanvasView {
 
     this._coords_el = document.createElement('div')
     this._coords_el.className = 'canvas-coords'
+
+    // Hover ◀/▶ nav arrows on the canvas edge midpoints (desktop canvas_view.py; bug 10).
+    this._arrow_prev = this._make_arrow('◀', 'canvas-nav--left',
+      () => { this._model.prev_page(); this._notify() })
+    this._arrow_next = this._make_arrow('▶', 'canvas-nav--right',
+      () => { this._model.next_page(); this._notify() })
 
     // Pointer events → page-unit coordinates → model gestures
     this.el.addEventListener('pointerdown', this._on_down)
@@ -95,9 +103,23 @@ export class CanvasView {
 
     // Nothing is drawn on the page image (desktop inv 32): no page-number/status text at the
     // top-left (bug 11); cursor coordinates show in the bottom-right label instead (bug 10).
-    if (this._coords_el.parentElement === null && this.el.parentElement) {
-      this.el.parentElement.appendChild(this._coords_el)
+    const parent = this.el.parentElement
+    if (parent && this._coords_el.parentElement === null) {
+      parent.appendChild(this._coords_el)
+      parent.appendChild(this._arrow_prev)
+      parent.appendChild(this._arrow_next)
     }
+    this._arrow_prev.disabled = snap.position <= 1
+    this._arrow_next.disabled = snap.position >= snap.total
+  }
+
+  private _make_arrow(label: string, side: string, on_click: () => void): HTMLButtonElement {
+    const b = document.createElement('button')
+    b.className = `canvas-nav ${side}`
+    b.textContent = label
+    b.setAttribute('aria-label', label === '◀' ? 'Previous page' : 'Next page')
+    b.addEventListener('click', on_click)
+    return b
   }
 
   private _draw_overlay_box(
@@ -125,14 +147,11 @@ export class CanvasView {
       [(x0 + x1) / 2, y0], [(x0 + x1) / 2, y1],
       [x0, (y0 + y1) / 2], [x1, (y0 + y1) / 2],
     ]
-    ctx.fillStyle = this._theme.handle
-    ctx.strokeStyle = color
-    ctx.lineWidth = HANDLE_LINE_WIDTH
+    // Solid-colour square handles at corners + side centres, ~20% smaller (bugs 1, 14).
+    ctx.fillStyle = color
     for (const [hx, hy] of handles) {
-      const r = HANDLE_R
-      ctx.beginPath()
-      ctx.rect(hx - r, hy - r, r * 2, r * 2)   // squares at corners + side centres (bug 14)
-      ctx.fill(); ctx.stroke()
+      const r = HANDLE_R * 0.8
+      ctx.fillRect(hx - r, hy - r, r * 2, r * 2)
     }
 
     // Split badge: index number inside a thin CONTOUR circle (not a solid disc), ~30% smaller
