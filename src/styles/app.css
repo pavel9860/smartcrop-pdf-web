@@ -549,8 +549,8 @@ input, select { font: inherit; }
   border-bottom: 1px solid var(--border);
   padding-bottom: 4px;
 }
-.help-section ol, .help-section ul { padding-left: 18px; font-size: 0.8125rem; line-height: 1.6; color: var(--text-label); }
-.help-section p { font-size: 0.8125rem; color: var(--text-label); }
+.help-section ol, .help-section ul { padding-left: 18px; font-size: 0.9375rem; line-height: 1.6; color: var(--text-label); }
+.help-section p { font-size: 0.9375rem; line-height: 1.5; color: var(--text-label); }
 .help-section code {
   font-family: var(--font-mono);
   font-size: 0.8rem;

@@ -663,8 +663,14 @@ export class AppModel {
   }
 
   private _update_drawn_drag(drag: DrawnDrag, px: number, py: number): void {
-    this.document.drawn = apply_handle_drag(drag.handle ?? 'move', drag.rect0,
+    let box = apply_handle_drag(drag.handle ?? 'move', drag.rect0,
       drag.start, [px, py], drag.page_w, drag.page_h)
+    // Keep-ratio holds LIVE during a resize so the window never deforms then snaps; a plain move
+    // (handle null) already preserves the ratio, so it's left alone.
+    if (this._keep_ratio && drag.handle) {
+      box = keep_ratio_normalise(box, this._ratio, drag.page_w, drag.page_h)
+    }
+    this.document.drawn = box
   }
 
   end_drag(): void {
@@ -733,83 +739,53 @@ export class AppModel {
   // Scan processing
   // ---------------------------------------------------------------------------
 
-  run_dewarp(): BatchJob {
+  // Scan toggles apply LAZILY (return void, no BatchJob): they record the new intent for the
+  // selected pages and drop those pages' cached rasters, but do NOT run OpenCV/ONNX up front. Each
+  // page's dewarp/filter is computed on demand when it is next viewed or exported (_get_work). This
+  // keeps the toggle instant even on a 300-page book — the old eager pass over every page froze the
+  // UI (main-thread WASM), made Cancel meaningless (its own freeze), and only ever finished the
+  // first pages before the user gave up. Pages-to-Process selection is still honoured.
+  run_dewarp(): void {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
     if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
-
-    const job = new PageBatchJob('Dewarping…', pages.length)
-    void this._run_scan_process(job, pages, { kind: 'dewarp' })
-    return job
+    this.document.dewarp_on = !this.document.dewarp_on
+    this._apply_scan_intents(pages)
   }
 
-  set_filter_mode(mode: FilterMode): BatchJob {
+  set_filter_mode(mode: FilterMode): void {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
     if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
-
     // Toggle: pressing the active filter turns it off (spec §7.2)
-    const effective = (mode === this.document.filter_mode) ? FilterMode.NONE : mode
-    const job = new PageBatchJob(
-      effective === FilterMode.NONE ? 'Removing filter…' : 'Applying filter…',
-      pages.length)
-    void this._run_scan_process(job, pages, { kind: 'filter', mode: effective })
-    return job
+    this.document.filter_mode = (mode === this.document.filter_mode) ? FilterMode.NONE : mode
+    this._apply_scan_intents(pages)
   }
 
-  set_filter_strength(n: number): BatchJob {
+  set_filter_strength(n: number): void {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
-    const strength = Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n)) as 1 | 2 | 3
-    const job = new PageBatchJob('Applying filter…', Math.max(1, pages.length))
-    void this._run_scan_process(job, pages, { kind: 'strength', strength })
-    return job
+    this.document.filter_strength =
+      Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n)) as 1 | 2 | 3
+    this._apply_scan_intents(pages)
   }
 
-  private async _run_scan_process(
-    job: PageBatchJob,
-    pages: number[],
-    op: { kind: 'dewarp' }
-      | { kind: 'filter'; mode: FilterMode }
-      | { kind: 'strength'; strength: number },
-  ): Promise<void> {
-    const ctrl = job.controller
+  // Snapshot for undo, then record the CURRENT global scan flags as each selected page's intent
+  // and drop its cached rasters. No image work here — the next _get_work(p) renders that page.
+  private _apply_scan_intents(pages: number[]): void {
     this.history.push(this.document)
-    this._apply_scan_op(op)
-
+    const intent: PageProcessIntent = {
+      dewarp: this.document.dewarp_on,
+      filter: this.document.filter_mode === FilterMode.NONE
+        ? null
+        : [this.document.filter_mode, this.document.filter_strength],
+    }
     for (const p of pages) {
-      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return }
-      try {
-        await this._reprocess_page(p)
-      } catch (e) {
-        ctrl.complete(new Failed(new ImagingError(String(e))))
-        return
-      }
-      ctrl.advance()
+      this.document.processed.set(p, intent)
+      this._work_cache.delete(p)
+      this._invalidate_output_cache(p)
     }
-    ctrl.complete(new Ok())
-  }
-
-  private _apply_scan_op(
-    op: { kind: 'dewarp' }
-      | { kind: 'filter'; mode: FilterMode }
-      | { kind: 'strength'; strength: number },
-  ): void {
-    if (op.kind === 'dewarp') {
-      this.document.dewarp_on = !this.document.dewarp_on
-    } else if (op.kind === 'filter') {
-      this.document.filter_mode = op.mode
-    } else {
-      this.document.filter_strength = op.strength
-    }
-  }
-
-  private async _reprocess_page(p: number): Promise<void> {
-    const intent = this._page_process_intent(p)
-    this.document.processed.set(p, intent)
-    this._work_cache.delete(p)   // force re-render
-    this._invalidate_output_cache(p)
-    await this._get_work(p)     // pre-warm new work raster
+    this._invalidate_current_bitmap()
   }
 
   // ---------------------------------------------------------------------------

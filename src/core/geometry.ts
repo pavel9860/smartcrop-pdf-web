@@ -97,7 +97,11 @@ export function apply_handle_drag(
     case 'move': x0 += dx; y0 += dy; x1 += dx; y1 += dy; break
   }
 
-  return clamp_box_drag({ x0, y0, x1, y1 }, page_w, page_h)
+  // A MOVE preserves W×H and just stops at the page edge (clamp_box_shift); resize handles clamp
+  // each edge independently. Using edge-clamp for a move shrank the box at the border (deform bug).
+  return handle === 'move'
+    ? clamp_box_shift({ x0, y0, x1, y1 }, page_w, page_h)
+    : clamp_box_drag({ x0, y0, x1, y1 }, page_w, page_h)
 }
 
 // Compute the live auto-crop rectangle from detection results and offsets (spec §9.2).

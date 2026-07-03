@@ -305,6 +305,31 @@ describe('detect_content / apply_crop', () => {
     expect(model.ratio).toBeCloseTo(200 / 300)
   })
 
+  it('moving a drawn window into the page edge preserves its size (no deform at border)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.begin_drag(40, 40, 8); model.update_drag(120, 140); model.end_drag()  // {40,40,120,140}, 80×100
+    model.begin_drag(80, 90, 8)              // press INSIDE → move
+    model.update_drag(80 + 500, 90 + 500)    // shove far past the bottom-right corner
+    model.end_drag()
+    const box = model.view_snapshot().overlay[0]?.box
+    expect(box?.x1 ?? 0 - (box?.x0 ?? 0)).not.toBeNaN()
+    expect((box?.x1 ?? 0) - (box?.x0 ?? 0)).toBeCloseTo(80)    // width preserved (not shrunk)
+    expect((box?.y1 ?? 0) - (box?.y0 ?? 0)).toBeCloseTo(100)   // height preserved
+    expect(box?.x1).toBeCloseTo(200)                          // stopped at the right edge
+    expect(box?.y1).toBeCloseTo(300)                          // stopped at the bottom edge
+  })
+
+  it('resizing a drawn window with keep-ratio holds the ratio live during the drag', async () => {
+    const model = await loaded_model({ page_w: 400, page_h: 400 })
+    model.begin_drag(50, 50, 8); model.update_drag(150, 150); model.end_drag()  // 100×100 square
+    model.set_keep_ratio(true, 2.0)          // lock width:height = 2:1
+    model.begin_drag(150, 150, 8)            // BR handle
+    model.update_drag(300, 250)              // resize out (no end_drag → mid-drag state)
+    const box = model.view_snapshot().overlay[0]?.box
+    const w = (box?.x1 ?? 0) - (box?.x0 ?? 0), h = (box?.y1 ?? 0) - (box?.y0 ?? 0)
+    expect(w / h).toBeCloseTo(2.0, 1)        // ratio preserved DURING the drag, not only on release
+  })
+
   it('cancel_drag (Esc / right-click) drops the pending drawn window (bug 5)', async () => {
     const model = await loaded_model()
     model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()

@@ -40,16 +40,18 @@ export class ScanPanel {
     this._sharpen_btn = requireEl(this._el, '#sp-sharpen')
     this._str_btns    = Array.from(this._el.querySelectorAll('[data-str]'))
 
-    this._dewarp_btn.addEventListener('click', () => { ctrl.dispatch_job(() => _model.run_dewarp()) })
+    // dispatch (not dispatch_job): these toggles are now instant — they set the per-page intent
+    // and the pages render lazily on view/export (no eager multi-page WASM pass to show progress).
+    this._dewarp_btn.addEventListener('click', () => { ctrl.dispatch(() => { _model.run_dewarp() }) })
     this._bw_btn.addEventListener('click', () =>
-      { ctrl.dispatch_job(() => _model.set_filter_mode(FilterMode.BW)) })
+      { ctrl.dispatch(() => { _model.set_filter_mode(FilterMode.BW) }) })
     this._sharpen_btn.addEventListener('click', () =>
-      { ctrl.dispatch_job(() => _model.set_filter_mode(FilterMode.SHARPEN)) })
+      { ctrl.dispatch(() => { _model.set_filter_mode(FilterMode.SHARPEN) }) })
 
     for (const btn of this._str_btns) {
       btn.addEventListener('click', () => {
         const n = parseInt(btn.dataset['str'] ?? '1', 10)
-        ctrl.dispatch_job(() => _model.set_filter_strength(n))
+        ctrl.dispatch(() => { _model.set_filter_strength(n) })
       })
     }
   }
