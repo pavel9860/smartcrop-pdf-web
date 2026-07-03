@@ -7,7 +7,6 @@ import { CANVAS_MARGIN, HANDLE_R, HANDLE_SLACK, SYNTH_W, SYNTH_H } from '@core/c
 import {
   OVERLAY_DASH, OVERLAY_LINE_WIDTH_SPLIT, OVERLAY_LINE_WIDTH_CROP, HANDLE_LINE_WIDTH,
   SPLIT_BADGE_FONT_SCALE, SPLIT_BADGE_RADIUS_SCALE, RUBBER_BAND_DASH, RUBBER_BAND_LINE_WIDTH,
-  STATUS_FONT_SIZE, STATUS_SHADOW_BLUR, STATUS_TEXT_OFFSET_X, STATUS_TEXT_OFFSET_Y,
   LOADING_FONT_SIZE,
 } from './constants'
 
@@ -27,6 +26,7 @@ export class CanvasView {
   private _img_y = 0
   private _page_w = SYNTH_W
   private _page_h = SYNTH_H
+  private readonly _coords_el: HTMLDivElement
   private _ro: ResizeObserver
   private _theme: ThemeColors = {
     bg: '#121212', crop: '#4a9eff', split: '#2a7edb',
@@ -41,10 +41,14 @@ export class CanvasView {
     if (!ctx) throw new Error('2d context unavailable')
     this._ctx = ctx
 
+    this._coords_el = document.createElement('div')
+    this._coords_el.className = 'canvas-coords'
+
     // Pointer events → page-unit coordinates → model gestures
     this.el.addEventListener('pointerdown', this._on_down)
     this.el.addEventListener('pointermove', this._on_move)
     this.el.addEventListener('pointerup',   this._on_up)
+    this.el.addEventListener('pointerleave', () => { this._coords_el.textContent = '' })
     this.el.addEventListener('contextmenu', e => { e.preventDefault(); this._cancel() })
     this.el.addEventListener('wheel', this._on_wheel, { passive: true })
     window.addEventListener('keydown', this._on_key)
@@ -89,8 +93,11 @@ export class CanvasView {
     for (const box of snap.overlay) this._draw_overlay_box(ctx, box, scale)
     if (snap.draw_rect) this._draw_rubber_band(ctx, snap.draw_rect, scale)
 
-    // Status text on the page image (spec §3.3 / TODO item 4)
-    this._draw_status(ctx, snap.status)
+    // Nothing is drawn on the page image (desktop inv 32): no page-number/status text at the
+    // top-left (bug 11); cursor coordinates show in the bottom-right label instead (bug 10).
+    if (this._coords_el.parentElement === null && this.el.parentElement) {
+      this.el.parentElement.appendChild(this._coords_el)
+    }
   }
 
   private _draw_overlay_box(
@@ -124,25 +131,24 @@ export class CanvasView {
     for (const [hx, hy] of handles) {
       const r = HANDLE_R
       ctx.beginPath()
-      ctx.moveTo(hx, hy - r); ctx.lineTo(hx + r, hy)
-      ctx.lineTo(hx, hy + r); ctx.lineTo(hx - r, hy)
-      ctx.closePath()
+      ctx.rect(hx - r, hy - r, r * 2, r * 2)   // squares at corners + side centres (bug 14)
       ctx.fill(); ctx.stroke()
     }
 
-    // Split badge: number in circle, 30% larger than base font (spec §6 / TODO §6)
+    // Split badge: index number inside a thin CONTOUR circle (not a solid disc), ~30% smaller
+    // than before (bug 13). Number is drawn in the frame colour, matching the outline.
     if (item.kind === 'split' && item.idx !== undefined) {
       const font_size = Math.round(HANDLE_R * SPLIT_BADGE_FONT_SCALE * 2)
       ctx.font        = `bold ${font_size}px ${this._theme.font}`
-      ctx.fillStyle   = color
       ctx.textAlign   = 'center'
       ctx.textBaseline = 'middle'
       const bx = x0 + font_size, by = y0 + font_size
       ctx.beginPath()
       ctx.arc(bx, by, font_size * SPLIT_BADGE_RADIUS_SCALE, 0, Math.PI * 2)
+      ctx.strokeStyle = color
+      ctx.lineWidth   = HANDLE_LINE_WIDTH
+      ctx.stroke()
       ctx.fillStyle = color
-      ctx.fill()
-      ctx.fillStyle = '#fff'
       ctx.fillText(String(item.idx), bx, by)
     }
 
@@ -163,20 +169,14 @@ export class CanvasView {
     ctx.restore()
   }
 
-  private _draw_status(ctx: CanvasRenderingContext2D, text: string): void {
-    if (!text) return
-    const tx = this._img_x + STATUS_TEXT_OFFSET_X
-    const ty = this._img_y + STATUS_TEXT_OFFSET_Y
-    ctx.save()
-    ctx.font         = `${STATUS_FONT_SIZE}px ${this._theme.font}`
-    ctx.fillStyle    = 'rgba(0,0,0,0.55)'
-    ctx.shadowColor  = 'rgba(0,0,0,0.8)'
-    ctx.shadowBlur   = STATUS_SHADOW_BLUR
-    ctx.fillText(text, tx, ty)
-    ctx.shadowBlur   = 0
-    ctx.fillStyle    = '#ffffff'
-    ctx.fillText(text, tx, ty)
-    ctx.restore()
+  // Cursor read-out in the bottom-right label (desktop canvas_view.py: coords_label at relx/rely
+  // 1.0, "se"). Empty when the pointer is off the page. Same font/colour as the sidebar text.
+  private _update_coords(px: number, py: number): void {
+    const inside = px >= 0 && py >= 0 && px <= this._page_w && py <= this._page_h
+    const text = inside
+      ? `x ${(px / this._page_w * 100).toFixed(1)}%  y ${(py / this._page_h * 100).toFixed(1)}%`
+      : ''
+    if (this._coords_el.textContent !== text) this._coords_el.textContent = text
   }
 
   private _draw_loading(ctx: CanvasRenderingContext2D, cw: number, ch: number): void {
@@ -226,8 +226,9 @@ export class CanvasView {
   }
 
   private _on_move = (ev: PointerEvent): void => {
-    if (!this._dragging) return
     const [px, py] = this._canvas_to_page(ev)
+    this._update_coords(px, py)      // bottom-right read-out updates on every move (bug 10)
+    if (!this._dragging) return
     this._model.update_drag(px, py)
     this._notify()
   }

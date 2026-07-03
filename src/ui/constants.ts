@@ -13,11 +13,11 @@ export const UI_SCALE_MAX       = 2.0
 
 // Canvas overlay drawing (canvas_view.ts) — spec §6, §19
 export const OVERLAY_DASH: readonly [number, number] = [6, 4]
-export const OVERLAY_LINE_WIDTH_SPLIT = 2.5
-export const OVERLAY_LINE_WIDTH_CROP  = 1.5
+export const OVERLAY_LINE_WIDTH_SPLIT = 1.75  // crop/split frame ~30% thinner (bug 28)
+export const OVERLAY_LINE_WIDTH_CROP  = 1.05
 export const HANDLE_LINE_WIDTH        = 1.5
-export const SPLIT_BADGE_FONT_SCALE   = 1.3   // "30% larger than base font" (spec §6 TODO §6)
-export const SPLIT_BADGE_RADIUS_SCALE = 0.8
+export const SPLIT_BADGE_FONT_SCALE   = 0.9   // split index ~30% smaller (bug 13)
+export const SPLIT_BADGE_RADIUS_SCALE = 1.1   // circle is a contour around the number
 export const RUBBER_BAND_DASH: readonly [number, number] = [4, 3]
 export const RUBBER_BAND_LINE_WIDTH   = 1
 export const STATUS_FONT_SIZE         = 13

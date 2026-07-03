@@ -454,10 +454,14 @@ export class AppModel {
 
   set_split(n: 1 | 2 | 4): void {
     if (n === this._split_count) return
+    // Committed crops belong to the previous layout — drop them when the split changes
+    // (desktop model.py:417-418). Prevents stale single-crop pages surviving into split mode.
+    this.document.applied.clear()
     this._split_count = n
     if (this._doc) {
       const sz = this._page_dims(this._current_page)
-      this.document.crop_rects = split_rects_grid(n, sz.width, sz.height)
+      // n === 1 has no split rectangles (desktop clears crop_rects); 2/4 auto-lay the grid.
+      this.document.crop_rects = n === 1 ? [] : split_rects_grid(n, sz.width, sz.height)
     }
   }
 

@@ -67,7 +67,7 @@ export class CropPanel {
     const adv_card = document.createElement('div')
     adv_card.className = 'panel-card'
     adv_card.innerHTML = `
-      <button class="advanced-toggle" id="cp-adv-toggle"><span class="adv-arrow">▶</span> Advanced</button>
+      <button class="advanced-toggle" id="cp-adv-toggle"><span class="adv-arrow">▸</span> Advanced</button>
       <div class="advanced-body hidden" id="cp-adv-body">
         <div class="offset-title">Set offsets</div>
         <div class="offset-grid">
@@ -84,7 +84,7 @@ export class CropPanel {
     actions_card.innerHTML = `
       <div class="card-header"><span class="card-title">Actions</span></div>
       <button class="btn btn-secondary w-full" id="cp-crop">✂  Crop</button>
-      <div class="btn-group mt-1">
+      <div class="btn-row">
         <button class="btn btn-secondary flex-1" id="cp-rotate">↻  Rotate</button>
         <button class="btn btn-secondary flex-1" id="cp-delete">🗑︎  Delete</button>
       </div>`
@@ -136,7 +136,7 @@ export class CropPanel {
     this._adv_toggle.addEventListener('click', () => {
       const open = !this._adv_body.classList.toggle('hidden')
       const arrow = this._adv_toggle.querySelector('.adv-arrow')
-      if (arrow) arrow.textContent = open ? '▼' : '▶'
+      if (arrow) arrow.textContent = open ? '▾' : '▸'
     })
 
     // Offsets (commit on blur / Enter)
