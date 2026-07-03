@@ -20,19 +20,21 @@ export class NavBar {
     bar.className = 'nav-bar'
     bar.innerHTML = `
       <div class="nav-bar__row nav-bar__row--top">
-        <button class="btn btn-secondary nav-btn" data-id="settings">⚙ Settings</button>
-        <button class="btn btn-secondary nav-btn" data-id="help">? Help</button>
+        <button class="btn btn-secondary nav-btn" data-id="settings">⚙  Settings</button>
+        <button class="btn btn-secondary nav-btn" data-id="help">?  Help</button>
       </div>
       <div class="nav-bar__row">
-        <button class="btn btn-secondary flex-1" id="nav-undo">↩ Undo</button>
-        <button class="btn btn-secondary flex-1" id="nav-redo">↪ Redo</button>
-        <button class="btn btn-secondary flex-1" id="nav-reset">⟲ Reset</button>
+        <button class="btn btn-secondary flex-1" id="nav-undo">↩  Undo</button>
+        <button class="btn btn-secondary flex-1" id="nav-redo">↪  Redo</button>
+        <button class="btn btn-secondary flex-1" id="nav-reset">↺  Reset</button>
       </div>
       <div class="nav-bar__row nav-bar__row--pages">
-        <button class="btn btn-icon" id="nav-prev" aria-label="Previous page">&lt;</button>
-        <input  class="page-input" id="nav-page" type="number" min="1" value="1" />
-        <span class="page-total" id="nav-total">/ 0</span>
-        <button class="btn btn-icon" id="nav-next" aria-label="Next page">&gt;</button>
+        <button class="btn btn-secondary flex-1" id="nav-prev" aria-label="Previous page">◀ Prev</button>
+        <div class="page-center">
+          <input  class="page-input" id="nav-page" type="number" min="1" value="1" />
+          <span class="page-total" id="nav-total">/ 0</span>
+        </div>
+        <button class="btn btn-secondary flex-1" id="nav-next" aria-label="Next page">Next ▶</button>
       </div>`
 
     sidebar.appendChild(bar)

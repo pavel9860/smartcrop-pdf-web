@@ -36,7 +36,7 @@ export class OutputPanel {
     export_el.innerHTML = `
       <div class="card-header"><span class="card-title">Export</span></div>
       <div class="export-row">
-        <button class="btn btn-secondary flex-1" id="op-export">💾  Export PDF</button>
+        <button class="btn btn-secondary flex-1" id="op-export">💾︎  Export PDF</button>
         <select class="select export-fmt" id="op-format">${format_opts}</select>
       </div>`
     container.appendChild(export_el)
@@ -63,7 +63,7 @@ export class OutputPanel {
     this._compress_sel.value = model.compress_preset
     this._colours_sel.value  = model.output_colours
     this._format_sel.value   = model.export_format
-    this._export_btn.textContent = `💾  Export ${model.export_format}`
+    this._export_btn.textContent = `💾︎  Export ${model.export_format}`
     this._compress_sel.disabled = busy
     this._colours_sel.disabled  = busy
     this._format_sel.disabled   = busy

@@ -1,38 +1,41 @@
 /* ── Structural / layout variables (never overridden by theme.ts) ── */
 :root {
   --radius:     6px;
+  --radius-card: 10px;
   --gap:        8px;
-  --font:       "Inter", system-ui, sans-serif;
+  /* Roboto is the desktop app's CTk font; match it (falls back to the platform sans). */
+  --font:       "Roboto", "Segoe UI", system-ui, sans-serif;
   --font-mono:  "Fira Code", "Cascadia Code", monospace;
   --sidebar-w:  320px;
   --detail-w:   380px;
-  --fs:         0.875rem;
+  --fs:         0.9375rem;   /* 15px = desktop DEFAULT_FONT_SIZE */
 
-  /* Color defaults (dark); theme.ts overrides these via element.style.setProperty() */
-  --bg-app:       #161616;
-  --bg-chrome:    #1e1e1e;
-  --bg-card:      #272727;
-  --bg-input:     #2e2e2e;
-  --bg-hover:     #333333;
-  --bg-canvas:    #121212;
-  --text-primary: #e2e2e2;
-  --text-dim:     #888888;
-  --text-label:   #bbbbbb;
-  --accent:       #3a8ef5;
-  --accent-dim:   #1a5fbb;
-  --crop-blue:    #4a9eff;
-  --split-blue:   #2a7edb;
+  /* Color defaults (dark) mirror theme.ts DARK; theme.ts overrides via setProperty() at runtime. */
+  --bg-app:       #1e1d1b;
+  --bg-chrome:    #1e1d1b;
+  --bg-card:      #262522;
+  --bg-input:     #2e2d29;
+  --bg-hover:     #423f39;
+  --bg-canvas:    #171614;
+  --text-primary: #f1efe9;
+  --text-dim:     #a8a69e;
+  --text-label:   #c9c7bf;
+  --accent:       #3b82e0;
+  --accent-dim:   #2a5fa8;
+  --accent-h:     #5295e8;
+  --crop-blue:    #224d87;
+  --split-blue:   #224d87;
   --handle-fill:  #ffffff;
-  --border:       #383838;
-  --border-card:  #303030;
+  --border:       #3a3833;
+  --border-card:  #3a3833;
   --danger:       #e05555;
   --success:      #4caf50;
-
-  /* Derived / extras not in theme.ts */
-  --text-inv:    #ffffff;
-  --badge-nor:   var(--accent);
-  --badge-sca:   #e09430;
-  --accent-h:    color-mix(in srgb, var(--accent) 80%, white);
+  --text-inv:     #ffffff;
+  --badge-nor:    #1f5c3a;
+  --badge-sca:    #7a3f10;
+  --btn-bg:       #36352f;
+  --btn-bg-hover: #423f39;
+  --seg-unsel:    #46443e;
 }
 
 /* ── Reset ── */
@@ -179,8 +182,8 @@ input, select { font: inherit; }
 .panel-card {
   background: var(--bg-card);
   border: 1px solid var(--border-card);
-  border-radius: var(--radius);
-  padding: 10px 10px 12px;
+  border-radius: var(--radius-card);
+  padding: 10px 12px 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -192,11 +195,9 @@ input, select { font: inherit; }
   justify-content: space-between;
 }
 .card-title {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.07em;
-  color: var(--text-dim);
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 
 /* ── Buttons ── */
@@ -205,17 +206,18 @@ input, select { font: inherit; }
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 5px 10px;
+  padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-hover);
+  background: var(--btn-bg);
   color: var(--text-primary);
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
   transition: background 0.1s, border-color 0.1s, opacity 0.1s;
   white-space: nowrap;
   line-height: 1.3;
+  min-height: 32px;   /* uniform control height across all buttons + inputs (desktop parity) */
 }
-.btn:hover:not(:disabled) { background: var(--bg-input); border-color: var(--accent); }
+.btn:hover:not(:disabled) { background: var(--btn-bg-hover); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .btn-primary {
@@ -226,7 +228,7 @@ input, select { font: inherit; }
 }
 .btn-primary:hover:not(:disabled) { background: var(--accent-h); border-color: var(--accent-h); }
 
-.btn-secondary { background: var(--bg-hover); }
+.btn-secondary { background: var(--btn-bg); }
 
 .btn-danger {
   background: transparent;
@@ -253,12 +255,13 @@ input, select { font: inherit; }
 .btn-group .btn:last-child  { border-radius: 0 var(--radius) var(--radius) 0; }
 .btn-group .btn:first-child:last-child { border-radius: var(--radius); }
 
+.btn-seg { background: var(--seg-unsel); color: var(--text-inv); }
 .btn-seg.active {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--text-inv);
 }
-.btn-seg:hover:not(:disabled):not(.active) { background: var(--bg-input); }
+.btn-seg:hover:not(:disabled):not(.active) { background: var(--btn-bg-hover); }
 
 .btn-icon {
   padding: 5px 8px;
@@ -266,16 +269,17 @@ input, select { font: inherit; }
   font-size: 1rem;
 }
 
-.nav-btn { flex: 1; font-size: 0.75rem; padding: 4px 6px; }
+.nav-btn { flex: 1; }
 
-/* ── Form controls ── */
+/* ── Form controls ── (same height + font as buttons for a consistent control row) */
 .select, .text-input {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text-primary);
-  padding: 5px 8px;
-  font-size: 0.8125rem;
+  padding: 6px 8px;
+  min-height: 32px;
+  font-size: 0.9375rem;
   outline: none;
   width: 100%;
 }
@@ -291,23 +295,26 @@ input, select { font: inherit; }
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text-primary);
-  padding: 4px 6px;
-  font-size: 0.8125rem;
+  padding: 6px 6px;
+  min-height: 32px;
+  font-size: 0.9375rem;
   width: 54px;
   text-align: center;
   outline: none;
 }
 .page-input:focus { border-color: var(--accent); }
-.page-total { color: var(--text-dim); font-size: 0.8125rem; }
+.page-total { color: var(--text-dim); font-size: 0.9375rem; }
+.page-center { display: flex; align-items: center; justify-content: center; gap: 6px; }
 
 .offset-inp, .ratio-input {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   color: var(--text-primary);
-  padding: 4px 6px;
+  padding: 6px 6px;
+  min-height: 32px;
   outline: none;
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
 }
 .offset-inp { width: 62px; }
 .ratio-input { width: 70px; margin-left: 6px; }
@@ -374,16 +381,20 @@ input, select { font: inherit; }
 .anchor-row { display: flex; gap: 12px; }
 
 /* ── Advanced toggle ── */
+/* "Advanced" is a card header, not a link — bold primary text like other card titles, not blue
+   (desktop panels.py: text_color=secondary_text, font=bold). */
 .advanced-toggle {
   background: none;
   border: none;
-  color: var(--accent);
-  font-size: 0.8125rem;
+  color: var(--text-primary);
+  font-size: 0.9375rem;
+  font-weight: 700;
   padding: 2px 0;
   text-align: left;
   cursor: pointer;
 }
-.advanced-toggle:hover { color: var(--accent-h); }
+.advanced-toggle:hover { color: var(--text-primary); }
+.adv-arrow { font-size: 0.7rem; margin-right: 2px; }
 
 .advanced-body { padding: 6px 0 0; }
 
@@ -399,18 +410,18 @@ input, select { font: inherit; }
   align-items: center;
   gap: 4px;
   min-width: 0;
-  font-size: 0.8125rem;
+  font-size: 0.9375rem;
   color: var(--text-dim);
 }
 .offset-grid .offset-inp { width: 100%; min-width: 0; }
 
 /* ── Filter group (scan panel) ── */
 .filter-group { display: flex; flex-direction: column; gap: 6px; }
-.filter-group__title { font-size: 0.75rem; color: var(--text-dim); font-weight: 600; }
+.filter-group__title { font-size: 0.9375rem; color: var(--text-primary); font-weight: 700; }
 /* "Strength" label on its own line with the 1|2|3 buttons full-width beneath it, all equal
    width (desktop Scan Processing panel; TODO item 6). */
 .strength-row { display: flex; flex-direction: column; align-items: stretch; gap: 6px; }
-.strength-row .label { font-size: 0.8125rem; color: var(--text-dim); }
+.strength-row .label { font-size: 0.9375rem; color: var(--text-primary); }
 .strength-row .btn-group { width: 100%; }
 
 /* ── Pattern row ── */
@@ -421,6 +432,12 @@ input, select { font: inherit; }
 
 /* ── Same-size row ── */
 .same-size-row { padding: 2px 0; }
+
+/* Split card label+switch rows: label left (desktop ROW_LABEL_W=90), switch, optional ratio. */
+.split-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.split-row__label { width: 90px; font-size: 0.9375rem; color: var(--text-primary); }
+.split-row .toggle-label { flex-shrink: 0; }
+.offset-title { color: var(--text-dim); font-size: 0.9375rem; margin-bottom: 4px; }
 
 /* ── Settings view ── */
 .settings-view { display: flex; flex-direction: column; gap: 16px; }

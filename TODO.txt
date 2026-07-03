@@ -10,12 +10,10 @@
    offset-inp width 100%), per 1p_splir_dark_theme.png.
 4. DONE (2026-07-03) — Delete button no longer red: btn-danger → btn-secondary (matches Rotate),
    per 1p_splir_dark_theme.png / Scann_mode_dark.png.
-5. OPEN — icon set vs win app. Current web icons are approximations (⊞ Load, ✶ Auto-detect,
-   ✂ Crop, ↻ Rotate, 🗑 Delete, 💾 Export, ⚙ Settings, ? Help). To match exactly I need the
-   desktop repo's icon/button definitions (ui/panels.py); the desktop folder was not shared
-   this session (directory request cancelled). NEXT: mount the desktop repo OR paste panels.py's
-   button label/icon defs, then match glyphs (and force monochrome text-presentation to mirror
-   Tk's non-emoji rendering). Deferred pending desktop source.
+5. DONE (2026-07-03) — icons matched to desktop code (smartcrop-pdf-desktop/ui, now the design
+   source of truth). Load & Dewarp have no icon (desktop has none); Auto-detect ✦ (was ✶);
+   Crop ✂ / Rotate ↻ / Delete 🗑 / Export 💾 / Settings ⚙ / Help ? with the desktop's two-space
+   icon+label spacing; Reset ↺; Advanced ▶/▼; nav ◀ Prev / Next ▶.
 6. DONE (2026-07-03) — Strength label on its own line with 1|2|3 full-width beneath
    (app.css .strength-row → column, btn-group width 100%), per Scann_mode_dark.png.
 7. DONE (2026-07-03) — switch/field + button parity. Anchor Left/Top, Keep ratio, Same size and
@@ -61,3 +59,14 @@
     non-Ctrl keys. Added Escape -> _close_detail before the Ctrl gate.
 14. DONE (2026-07-02) — Collapsed detail panel only clipped its contents (width:0/overflow:hidden),
     leaving children focusable/visible. Added .detail-panel:not(.open) header/body { display:none }.
+16. DONE (2026-07-03) — Full design parity pass against smartcrop-pdf-desktop/ui (now the design
+    source of truth, mounted this session). Palette (theme.ts) mapped verbatim from desktop
+    ui/constants.py THEMES + panels.py badges: warm-gray chrome, accent #3B82E0 dark / near-black
+    #1A1A1C light, badges green(normal)/brown(scanned). Card titles bold 15px normal-case (were
+    tiny uppercase); Advanced bold text not blue; font Roboto 15px; card radius 10; segmented
+    unselected = seg_unsel. Structure: PagesPanel → Document + Pages cards; CropPanel → Split +
+    Detect + Advanced + Actions cards (all IDs preserved so tests/e2e unaffected). Same-size /
+    Keep-ratio are label-left + switch (+ratio) rows. Nav bar shows ◀ Prev / Next ▶ text. Light
+    theme values corrected to desktop's light tuples. Verified dark+light by screenshot; full
+    gate green (279 unit, build, 6/6 chromium e2e). Remaining nicety: Scan card's Filter is a
+    group not a nested card (desktop nests it) — cosmetic, deferred.

@@ -17,7 +17,7 @@ export class ScanPanel {
     this._el.className = 'panel-card hidden'
     this._el.innerHTML = `
       <div class="card-header"><span class="card-title">Scan Processing</span></div>
-      <button class="btn btn-toggle w-full" id="sp-dewarp">⤡ Dewarp &amp; Deskew</button>
+      <button class="btn btn-toggle w-full" id="sp-dewarp">Dewarp &amp; Deskew</button>
       <div class="filter-group">
         <div class="filter-group__title">Filter</div>
         <div class="btn-group">

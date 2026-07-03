@@ -19,13 +19,13 @@ describe('theme', () => {
     apply_theme('dark')
     expect(current_theme()).toBe('dark')
     expect(document.documentElement.dataset['theme']).toBe('dark')
-    expect(document.documentElement.style.getPropertyValue('--bg-app')).toBe('#161616')
+    expect(document.documentElement.style.getPropertyValue('--bg-app')).toBe('#1e1d1b')
   })
 
   it('apply_theme(light) swaps the palette', () => {
     apply_theme('light')
     expect(document.documentElement.dataset['theme']).toBe('light')
-    expect(document.documentElement.style.getPropertyValue('--bg-app')).toBe('#e8e8e8')
+    expect(document.documentElement.style.getPropertyValue('--bg-app')).toBe('#edebe5')
   })
 
   it('apply_theme(system) resolves via matchMedia', () => {

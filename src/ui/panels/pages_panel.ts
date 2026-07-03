@@ -15,17 +15,22 @@ export class PagesPanel {
   private readonly _current_btn: HTMLButtonElement
 
   constructor(container: HTMLElement, model: AppModel, ctrl: AppController) {
-    const el = document.createElement('div')
-    el.className = 'panel-card'
-    el.innerHTML = `
+    // Two separate cards (desktop panels.py: Document & State, then Pages to Process).
+    const doc_card = document.createElement('div')
+    doc_card.className = 'panel-card'
+    doc_card.innerHTML = `
       <div class="card-header">
         <span class="card-title">Document &amp; State</span>
         <span class="mode-badge" id="pp-badge">NORMAL</span>
       </div>
-      <button class="btn btn-secondary w-full" id="pp-load">⊞ Load PDF / Image Files</button>
-      <input type="file" id="pp-file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" hidden />
+      <button class="btn btn-secondary w-full" id="pp-load">📂︎  Load PDF/Image Files</button>
+      <input type="file" id="pp-file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" hidden />`
+    container.appendChild(doc_card)
 
-      <div class="card-header mt-2"><span class="card-title">Pages to Process</span></div>
+    const pages_card = document.createElement('div')
+    pages_card.className = 'panel-card'
+    pages_card.innerHTML = `
+      <div class="card-header"><span class="card-title">Pages to Process</span></div>
       <div class="btn-group" id="pp-modes">
         <button class="btn btn-seg" data-mode="${PagesMode.ALL}">All</button>
         <button class="btn btn-seg" data-mode="${PagesMode.ODD}">Odd</button>
@@ -37,20 +42,20 @@ export class PagesPanel {
                placeholder="1,3,5-9" title="Page pattern: 1,3, 5-9, ::2, 10:" />
         <button class="btn btn-seg" id="pp-current" title="Follow current page">Current</button>
       </div>`
-    container.appendChild(el)
+    container.appendChild(pages_card)
 
-    this._badge       = requireEl(el, '#pp-badge')
-    this._load_btn    = requireEl(el, '#pp-load')
-    this._file_input  = requireEl(el, '#pp-file')
-    this._pattern_row = requireEl(el, '#pp-pat-row')
-    this._pattern_inp = requireEl(el, '#pp-pattern')
-    this._current_btn = requireEl(el, '#pp-current')
+    this._badge       = requireEl(doc_card, '#pp-badge')
+    this._load_btn    = requireEl(doc_card, '#pp-load')
+    this._file_input  = requireEl(doc_card, '#pp-file')
+    this._pattern_row = requireEl(pages_card, '#pp-pat-row')
+    this._pattern_inp = requireEl(pages_card, '#pp-pattern')
+    this._current_btn = requireEl(pages_card, '#pp-current')
 
     this._mode_btns = {
-      [PagesMode.ALL]:    requireEl(el, `[data-mode="${PagesMode.ALL}"]`),
-      [PagesMode.ODD]:    requireEl(el, `[data-mode="${PagesMode.ODD}"]`),
-      [PagesMode.EVEN]:   requireEl(el, `[data-mode="${PagesMode.EVEN}"]`),
-      [PagesMode.SELECT]: requireEl(el, `[data-mode="${PagesMode.SELECT}"]`),
+      [PagesMode.ALL]:    requireEl(pages_card, `[data-mode="${PagesMode.ALL}"]`),
+      [PagesMode.ODD]:    requireEl(pages_card, `[data-mode="${PagesMode.ODD}"]`),
+      [PagesMode.EVEN]:   requireEl(pages_card, `[data-mode="${PagesMode.EVEN}"]`),
+      [PagesMode.SELECT]: requireEl(pages_card, `[data-mode="${PagesMode.SELECT}"]`),
     }
 
     this._load_btn.addEventListener('click', () => { this._file_input.click() })

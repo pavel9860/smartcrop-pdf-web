@@ -28,31 +28,32 @@ export class CropPanel {
   private readonly _delete_btn: HTMLButtonElement
 
   constructor(container: HTMLElement, model: AppModel, ctrl: AppController) {
-    const el = document.createElement('div')
-    el.className = 'panel-card'
-    el.innerHTML = `
-      <!-- Split -->
+    // Four separate cards (desktop panels.py: Split, Detect Text Borders, Advanced, Actions).
+    const split_card = document.createElement('div')
+    split_card.className = 'panel-card'
+    split_card.innerHTML = `
       <div class="card-header"><span class="card-title">Split Each Page Into</span></div>
       <div class="btn-group" id="cp-split">
         <button class="btn btn-seg active" data-n="1">1</button>
         <button class="btn btn-seg" data-n="2">2</button>
         <button class="btn btn-seg" data-n="4">4</button>
       </div>
-      <div class="same-size-row hidden" id="cp-same-row">
-        <label class="toggle-label">
-          <input type="checkbox" id="cp-same-size" />
-          Same size
-        </label>
+      <div class="split-row hidden" id="cp-same-row">
+        <span class="split-row__label">Same size</span>
+        <label class="toggle-label"><input type="checkbox" id="cp-same-size" /></label>
       </div>
-      <label class="toggle-label">
-        <input type="checkbox" id="cp-keep-ratio" />
-        Keep ratio
+      <div class="split-row">
+        <span class="split-row__label">Keep ratio</span>
+        <label class="toggle-label"><input type="checkbox" id="cp-keep-ratio" /></label>
         <input class="ratio-input" id="cp-ratio" type="number" step="0.001" min="0.1" value="1.000" />
-      </label>
+      </div>`
+    container.appendChild(split_card)
 
-      <!-- Detect -->
-      <div class="card-header mt-2"><span class="card-title">Detect Text Borders</span></div>
-      <button class="btn btn-secondary w-full" id="cp-detect">✶  Auto-detect</button>
+    const detect_card = document.createElement('div')
+    detect_card.className = 'panel-card'
+    detect_card.innerHTML = `
+      <div class="card-header"><span class="card-title">Detect Text Borders</span></div>
+      <button class="btn btn-secondary w-full" id="cp-detect">✦  Auto-detect</button>
       <div class="anchor-row">
         <label class="toggle-label">
           <input type="checkbox" id="cp-anchor-l" checked /> Anchor Left
@@ -60,45 +61,52 @@ export class CropPanel {
         <label class="toggle-label">
           <input type="checkbox" id="cp-anchor-t" checked /> Anchor Top
         </label>
-      </div>
+      </div>`
+    container.appendChild(detect_card)
 
-      <!-- Advanced / offsets -->
-      <button class="advanced-toggle" id="cp-adv-toggle">▸ Advanced</button>
+    const adv_card = document.createElement('div')
+    adv_card.className = 'panel-card'
+    adv_card.innerHTML = `
+      <button class="advanced-toggle" id="cp-adv-toggle"><span class="adv-arrow">▶</span> Advanced</button>
       <div class="advanced-body hidden" id="cp-adv-body">
+        <div class="offset-title">Set offsets</div>
         <div class="offset-grid">
           <label>L <input class="offset-inp" id="cp-off-l" type="number" step="0.1" value="0" /></label>
           <label>T <input class="offset-inp" id="cp-off-t" type="number" step="0.1" value="0" /></label>
           <label>R <input class="offset-inp" id="cp-off-r" type="number" step="0.1" value="0" /></label>
           <label>B <input class="offset-inp" id="cp-off-b" type="number" step="0.1" value="0" /></label>
         </div>
-      </div>
-
-      <!-- Actions -->
-      <div class="card-header mt-2"><span class="card-title">Actions</span></div>
-      <button class="btn btn-secondary w-full" id="cp-crop">✂ Crop</button>
-      <div class="btn-group mt-1">
-        <button class="btn btn-secondary flex-1" id="cp-rotate">↻ Rotate</button>
-        <button class="btn btn-secondary flex-1" id="cp-delete">🗑 Delete</button>
       </div>`
-    container.appendChild(el)
+    container.appendChild(adv_card)
 
-    this._split_btns    = Array.from(el.querySelectorAll('[data-n]'))
-    this._same_size_row = requireEl(el, '#cp-same-row')
-    this._same_size_sw  = requireEl(el, '#cp-same-size')
-    this._detect_btn    = requireEl(el, '#cp-detect')
-    this._anchor_l      = requireEl(el, '#cp-anchor-l')
-    this._anchor_t      = requireEl(el, '#cp-anchor-t')
-    this._keep_ratio_sw = requireEl(el, '#cp-keep-ratio')
-    this._ratio_inp     = requireEl(el, '#cp-ratio')
-    this._adv_toggle    = requireEl(el, '#cp-adv-toggle')
-    this._adv_body      = requireEl(el, '#cp-adv-body')
-    this._offset_l      = requireEl(el, '#cp-off-l')
-    this._offset_t      = requireEl(el, '#cp-off-t')
-    this._offset_r      = requireEl(el, '#cp-off-r')
-    this._offset_b      = requireEl(el, '#cp-off-b')
-    this._crop_btn      = requireEl(el, '#cp-crop')
-    this._rotate_btn    = requireEl(el, '#cp-rotate')
-    this._delete_btn    = requireEl(el, '#cp-delete')
+    const actions_card = document.createElement('div')
+    actions_card.className = 'panel-card'
+    actions_card.innerHTML = `
+      <div class="card-header"><span class="card-title">Actions</span></div>
+      <button class="btn btn-secondary w-full" id="cp-crop">✂  Crop</button>
+      <div class="btn-group mt-1">
+        <button class="btn btn-secondary flex-1" id="cp-rotate">↻  Rotate</button>
+        <button class="btn btn-secondary flex-1" id="cp-delete">🗑︎  Delete</button>
+      </div>`
+    container.appendChild(actions_card)
+
+    this._split_btns    = Array.from(split_card.querySelectorAll('[data-n]'))
+    this._same_size_row = requireEl(split_card, '#cp-same-row')
+    this._same_size_sw  = requireEl(split_card, '#cp-same-size')
+    this._detect_btn    = requireEl(detect_card, '#cp-detect')
+    this._anchor_l      = requireEl(detect_card, '#cp-anchor-l')
+    this._anchor_t      = requireEl(detect_card, '#cp-anchor-t')
+    this._keep_ratio_sw = requireEl(split_card, '#cp-keep-ratio')
+    this._ratio_inp     = requireEl(split_card, '#cp-ratio')
+    this._adv_toggle    = requireEl(adv_card, '#cp-adv-toggle')
+    this._adv_body      = requireEl(adv_card, '#cp-adv-body')
+    this._offset_l      = requireEl(adv_card, '#cp-off-l')
+    this._offset_t      = requireEl(adv_card, '#cp-off-t')
+    this._offset_r      = requireEl(adv_card, '#cp-off-r')
+    this._offset_b      = requireEl(adv_card, '#cp-off-b')
+    this._crop_btn      = requireEl(actions_card, '#cp-crop')
+    this._rotate_btn    = requireEl(actions_card, '#cp-rotate')
+    this._delete_btn    = requireEl(actions_card, '#cp-delete')
 
     // Split buttons
     for (const btn of this._split_btns) {
@@ -127,7 +135,8 @@ export class CropPanel {
     // Advanced toggle
     this._adv_toggle.addEventListener('click', () => {
       const open = !this._adv_body.classList.toggle('hidden')
-      this._adv_toggle.textContent = (open ? '▾' : '▸') + ' Advanced'
+      const arrow = this._adv_toggle.querySelector('.adv-arrow')
+      if (arrow) arrow.textContent = open ? '▼' : '▶'
     })
 
     // Offsets (commit on blur / Enter)
@@ -183,7 +192,7 @@ export class CropPanel {
     this._offset_r.disabled = this._offset_b.disabled = busy || !detect_only
 
     // Crop button label changes when split > 1 (spec TODO §16)
-    this._crop_btn.textContent = n > 1 ? '✂ Split & Crop' : '✂ Crop'
+    this._crop_btn.textContent = n > 1 ? '✂  Split & Crop' : '✂  Crop'
     this._crop_btn.disabled    = busy || !model.can_apply
     this._rotate_btn.disabled  = busy || !model.has_document
     this._delete_btn.disabled  = busy || !model.has_document
