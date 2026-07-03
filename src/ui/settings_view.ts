@@ -4,7 +4,7 @@
 import type { AppModel } from '@core/model'
 import type { AppController, UIConfig } from './app'
 import { UNDO_DEPTH_OPTIONS, DPI_PRESETS, EXPORT_FORMATS } from '@core/constants'
-import { FONT_SIZE_MIN, FONT_SIZE_MAX } from './constants'
+import { FONT_SIZE_MIN, FONT_SIZE_MAX, ZOOM_PRESETS } from './constants'
 import { requireEl } from './dom'
 
 export class SettingsView {
@@ -13,10 +13,7 @@ export class SettingsView {
   // Appearance
   private readonly _theme_btns: HTMLButtonElement[]
   private readonly _font_sel:   HTMLSelectElement
-  private readonly _zoom_in:    HTMLButtonElement
-  private readonly _zoom_out:   HTMLButtonElement
-  private readonly _zoom_rst:   HTMLButtonElement
-  private readonly _zoom_label: HTMLElement
+  private readonly _zoom_sel:   HTMLSelectElement
 
   // Output
   private readonly _compress_sel: HTMLSelectElement
@@ -44,6 +41,8 @@ export class SettingsView {
     ).map(n => `<option value="${n}">${n}</option>`).join('')
     const compress_opts = Object.keys(DPI_PRESETS).map(k => `<option>${k}</option>`).join('')
     const format_opts = EXPORT_FORMATS.map(f => `<option>${f}</option>`).join('')
+    const zoom_opts = ZOOM_PRESETS.map(p =>
+      `<option value="${p}">${Math.round(p * 100)}%</option>`).join('')
 
     this._el.innerHTML = `
       <section class="settings-section">
@@ -62,14 +61,7 @@ export class SettingsView {
         </div>
         <div class="settings-row">
           <span class="settings-label">Zoom (UI scale)</span>
-          <div class="zoom-controls">
-            <div class="btn-group">
-              <button class="btn btn-seg" id="sv-zoom-out">A-</button>
-              <button class="btn btn-seg" id="sv-zoom-rst">A</button>
-              <button class="btn btn-seg" id="sv-zoom-in">A+</button>
-            </div>
-            <span class="settings-note" id="sv-zoom-label">100%</span>
-          </div>
+          <select class="select" id="sv-zoom">${zoom_opts}</select>
         </div>
       </section>
 
@@ -124,10 +116,7 @@ export class SettingsView {
 
     this._theme_btns = Array.from(this._el.querySelectorAll('[data-theme]'))
     this._font_sel   = requireEl(this._el, '#sv-font')
-    this._zoom_in    = requireEl(this._el, '#sv-zoom-in')
-    this._zoom_out   = requireEl(this._el, '#sv-zoom-out')
-    this._zoom_rst   = requireEl(this._el, '#sv-zoom-rst')
-    this._zoom_label = requireEl(this._el, '#sv-zoom-label')
+    this._zoom_sel   = requireEl(this._el, '#sv-zoom')
 
     this._compress_sel = requireEl(this._el, '#sv-compress')
     this._format_sel   = requireEl(this._el, '#sv-format')
@@ -146,9 +135,8 @@ export class SettingsView {
     }
     this._font_sel.addEventListener('change', () =>
       { ctrl.set_font_size(parseInt(this._font_sel.value, 10)) })
-    this._zoom_in.addEventListener('click',  () => { ctrl.zoom(1) })
-    this._zoom_out.addEventListener('click', () => { ctrl.zoom(-1) })
-    this._zoom_rst.addEventListener('click', () => { ctrl.zoom(0) })
+    this._zoom_sel.addEventListener('change', () =>
+      { ctrl.set_ui_scale(parseFloat(this._zoom_sel.value)) })
 
     // Compress preset / default format are the SAME setting as the sidebar Output Quality
     // card (spec §15: "the menu there and this one are the same setting") — both write
@@ -181,7 +169,9 @@ export class SettingsView {
       btn.classList.toggle('active', btn.dataset['theme'] === ui.theme)
     }
     this._font_sel.value = String(ui.font_size)
-    this._zoom_label.textContent = `${Math.round(ui.ui_scale * 100)}%`
+    const nearest = ZOOM_PRESETS.reduce((a, b) =>
+      Math.abs(b - ui.ui_scale) < Math.abs(a - ui.ui_scale) ? b : a)
+    this._zoom_sel.value = String(nearest)
 
     this._compress_sel.value = model.compress_preset
     this._format_sel.value   = model.export_format

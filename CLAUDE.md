@@ -65,7 +65,10 @@ Worker context; see ARCHITECTURE.md §7a before "fixing" this back to a worker.
 ONNX execution providers: ['webgpu','wasm'], gated on navigator.gpu, ort.env.wasm.numThreads = 1.
 No SharedArrayBuffer dependency — required because GitHub Pages cannot set COOP/COEP headers.
 Do not reintroduce threaded WASM without solving the Pages header constraint first.
-TIFF export is out of scope, removed outright, not deferred (§21).
+TIFF export IS supported (added 2026-07-03) via a hand-rolled baseline encoder
+(src/workers/tiff.ts, uncompressed 8-bit RGB single strip). Image exports (JPG/PNG/TIFF) deliver
+ONE .zip (fflate, in export.worker.ts), not N loose files — never reintroduce per-page loose
+downloads or a "TIFF excluded" claim.
 Known desktop bug, already fixed there, must not be reintroduced here: split=1, left-click-drag
 still magnifying the page, root cause was self._scale. Verify canvas_view.ts's drag/scale handling
 carries the equivalent fix before treating split=1 drag as working.

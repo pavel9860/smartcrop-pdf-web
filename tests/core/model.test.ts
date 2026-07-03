@@ -69,7 +69,7 @@ function make_mock_adapter(opts: MockOpts = {}): {
     },
     export_images: () => {
       bump('export_images')
-      return Promise.resolve([new Blob(['x'])])
+      return Promise.resolve(new Uint8Array([4, 5, 6]))
     },
     make_synth_page: (_idx, w, h) => {
       bump('make_synth_page')
@@ -605,17 +605,32 @@ describe('export', () => {
     expect(got_bytes).not.toBeNull()
   })
 
-  it('export(JPG) drives export_images instead of export_pdf', async () => {
+  it('export(JPG) drives export_images and the zip download handler', async () => {
     const { adapter, calls } = make_mock_adapter({ page_count: 1 })
     const model = new AppModel(adapter)
     await model.load_files([FILE()])
     model.set_export_format('JPG')
-    let got_blobs: Blob[] | null = null
-    model.set_download_handlers(() => { /* unused */ }, (blobs) => { got_blobs = blobs })
-    await model.export('out.jpg').result()
+    let got_zip: Uint8Array | null = null
+    let got_base = ''
+    model.set_download_handlers(() => { /* unused */ }, (bytes, base) => { got_zip = bytes; got_base = base })
+    await model.export('out').result()
     expect(calls['export_images']).toBe(1)
     expect(calls['export_pdf']).toBeUndefined()
-    expect(got_blobs).not.toBeNull()
+    expect(got_zip).not.toBeNull()
+    expect(got_base).toBe('out')
+  })
+
+  it('export(TIFF) also drives the image/zip path, not export_pdf', async () => {
+    const { adapter, calls } = make_mock_adapter({ page_count: 2 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    model.set_export_format('TIFF')
+    let got_zip: Uint8Array | null = null
+    model.set_download_handlers(() => { /* unused */ }, (bytes) => { got_zip = bytes })
+    await model.export('out').result()
+    expect(calls['export_images']).toBe(1)
+    expect(calls['export_pdf']).toBeUndefined()
+    expect(got_zip).not.toBeNull()
   })
 })
 

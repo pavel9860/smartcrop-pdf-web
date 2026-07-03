@@ -48,7 +48,7 @@ actual running toolchain this update, not documentation staleness.
 | # | Area (desktop spec) | Desktop behavior | Web behavior today | Architecture reference |
 |---|---|---|---|---|
 | 1 | Dewarp & Deskew (§10.1) | Removes page curl/fold and skew via the docuwarp/ONNX mesh unwarp | **Implemented, not a no-op.** Full two-stage ONNX pipeline (UVDoc warp-field model + bilinear resample), wired button→AppModel→ensure_onnx→apply_dewarp. Verified this update against the actual model files: io names/dims/dtypes match the code, output raster is non-identity (maxAbs diff 0.95, mean 0.29 vs input) [high]. Execution providers are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no SharedArrayBuffer/COOP-COEP dependency, required for GitHub Pages. In-browser (real GPU) execution and end-to-end visual correctness on an actual scanned page are **not yet confirmed** — verified only headlessly against raw model tensors. The Playwright suite now exists (2026-07-03) but the update sandbox had no GPU, so only the wasm EP ran in-browser; WebGPU-on-real-GPU still needs confirmation on a GPU host (or the GH Pages deploy). | ARCHITECTURE §9 |
-| 2 | Export formats (§12.7) | PDF / JPG / PNG / TIFF | **TIFF is not offered.** Export split-button dropdown lists PDF / JPG / PNG only. | ARCHITECTURE §1 (no maintained browser TIFF encoder) |
+| 2 | Export formats (§12.7) | PDF / JPG / PNG / TIFF | **Fixed (2026-07-03).** All four formats offered. TIFF is hand-encoded in `workers/tiff.ts` — baseline, uncompressed, 8-bit RGB, single strip, little-endian (canvas has no `image/tiff` path); alpha is dropped since output pages are opaque flattened rasters. Unit-tested (`tests/core/tiff.test.ts`: header/IFD validity, pixel order, strip size). Image exports (JPG/PNG/TIFF) now deliver a **single `.zip`** (see §W6), not N loose files. | ARCHITECTURE §1 |
 | 3 | Multi-file PDF documents (§7.1a) | Several PDFs combine into one working document, pages in selection order | **Fixed (2026-07-03).** `pdf/loader.ts` holds `_pdfs[]` plus a per-output-page `_pages[]` `PageSource` map; each output index maps to its own PDF proxy + 1-based page number. Multi-PDF load combines all pages in selection order. Unit-tested (`tests/pdf/loader.test.ts`). | ARCHITECTURE §8 |
 | 4 | Mixed PDF + image documents (§7.1a) | PDFs and images combine freely into one document | **Fixed (2026-07-03).** Same `_pages[]` `PageSource` map: image pages carry a `{kind:'image', blob}` source decoded on demand, so a mixed PDF+image load renders every index. Unit-tested. | ARCHITECTURE §8 |
 | 5 | Batch responsiveness (§14, §17: ~150 ms/page target) | Long operations run off the interaction path via the Tk `after`-tick loop; the window stays responsive between pages | Detect / filter / dewarp run on the **main (UI) thread** — the tab can visibly pause for the duration of each page's processing (still bounded per-page, §W5) rather than staying responsive between pages. | ARCHITECTURE §7a |
@@ -131,7 +131,7 @@ pointer move; the page counter updates on navigation.
 | `Ctrl+Z` | Undo | same |
 | `Ctrl+Y` | Redo | same (desktop: `Ctrl+Y`) |
 | `ArrowLeft` / `ArrowRight`, `PageUp` / `PageDown`, mouse wheel over canvas | Prev / Next page | same |
-| `Ctrl +` / `Ctrl -` / `Ctrl 0` | Zoom UI / reset | same (CSS `font-size` scaling instead of Tk widget scaling) |
+| `Ctrl +` / `Ctrl -` / `Ctrl 0` | Zoom UI / reset | same (CSS `font-size` scaling instead of Tk widget scaling). Settings → Appearance → "Zoom (UI scale)" is a **preset dropdown** (70–200%, desktop `scale_presets`) that sets the scale directly via `set_ui_scale`; the keyboard steps and the dropdown share the one `ui_scale` state. |
 | `Enter` in page box | Jump to page | same |
 | `Esc` / right-click during drag | Cancel drag; `Esc` also closes the detail panel (§W3, no desktop equivalent — no floating window to close) | same for drag-cancel |
 
@@ -163,11 +163,13 @@ behavior this row describes.
 
 **Export:**
 - PDF (single file): triggers a browser download directly.
-- JPG/PNG (one file per output page, §12.7): uses the **File System Access API** to let the user
-  pick a save target where the browser supports it (Chrome/Edge); falls back to zipping every file
-  with `fflate` into one `.zip` download where it isn't available (Firefox/Safari — the only case a
-  zip is produced instead of individual files). `fflate` is a real, declared, installed dependency
-  [high] — this fallback path is grounded, not aspirational.
+- JPG/PNG/TIFF (§12.7): every output page is encoded in `export.worker.ts` and packed into **one
+  `.zip`** via `fflate` (`zipSync`), named `<base>.zip`; entries are `<base>_NNN.<ext>` (1-based,
+  3-digit). This is now the sole image-export path on **all** browsers — the desktop's N-loose-files
+  behavior is deliberately not reproduced (browsers cannot write a chosen folder without a
+  per-file save prompt; a single archive is the web-correct equivalent). Deflate level 0 for
+  JPG/PNG (already compressed), 6 for TIFF (uncompressed raster). `fflate` is a declared, installed
+  dependency [high].
 - **Overwrite confirmation** (desktop spec §15's `confirm_overwrite` setting) is not yet enforced
   on the web — see §W2 row 6. The setting exists in Settings but has no effect today.
 

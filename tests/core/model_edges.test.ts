@@ -24,7 +24,7 @@ function make_adapter(page_count = 4, mode = Mode.NORMAL, page_w = 200, page_h =
       make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
     detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
     export_pdf: () => Promise.resolve(new Uint8Array([1])),
-    export_images: () => Promise.resolve([new Blob(['x'])]),
+    export_images: () => Promise.resolve(new Uint8Array([4])),
     make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
     close: (): void => { /* no-op */ },
   }

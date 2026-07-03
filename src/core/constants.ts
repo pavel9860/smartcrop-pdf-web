@@ -86,8 +86,9 @@ export const DPI_PRESETS: Record<string, number | null> = {
   'Low — 75 dpi':       75,
 }
 
-// Export format names (TIFF excluded from web version)
-export const EXPORT_FORMATS = ['PDF', 'JPG', 'PNG'] as const
+// Export format names. Image formats (JPG/PNG/TIFF) deliver a single zip archive; TIFF is
+// hand-encoded (baseline RGB) since canvas has no native TIFF path.
+export const EXPORT_FORMATS = ['PDF', 'JPG', 'PNG', 'TIFF'] as const
 export type ExportFormat = typeof EXPORT_FORMATS[number]
 
 // Accepted input extensions for the file picker

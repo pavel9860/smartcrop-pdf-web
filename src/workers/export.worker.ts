@@ -2,11 +2,16 @@
 // Initialized on first export(); stays alive for the session.
 
 import { PDFDocument } from 'pdf-lib'
+import { zipSync, type Zippable } from 'fflate'
 import type { OutputPage } from '@core/model'
+import { encode_tiff } from './tiff'
+
+type ImageFormat = 'JPG' | 'PNG' | 'TIFF'
+const EXT: Record<ImageFormat, string> = { JPG: 'jpg', PNG: 'png', TIFF: 'tif' }
 
 type Req =
   | { id: number; type: 'export_pdf';    pages: OutputPage[]; quality: number }
-  | { id: number; type: 'export_images'; pages: OutputPage[]; format: 'JPG' | 'PNG'; quality: number }
+  | { id: number; type: 'export_images'; pages: OutputPage[]; format: ImageFormat; base: string; quality: number }
 
 type Res =
   | { id: number; type: 'ok';    payload: unknown }
@@ -23,9 +28,9 @@ self.onmessage = async (ev: MessageEvent<Req>): Promise<void> => {
         return
       }
       case 'export_images': {
-        const blobs = await encode_images(msg.pages, msg.format, msg.quality)
-        reply(msg.id, blobs)
-        break
+        const zip = await zip_images(msg.pages, msg.format, msg.base, msg.quality)
+        self.postMessage({ id: msg.id, type: 'ok', payload: zip } satisfies Res, [zip.buffer])
+        return
       }
     }
   } catch (e) {
@@ -45,21 +50,38 @@ async function build_pdf(pages: OutputPage[], quality: number): Promise<Uint8Arr
   return doc.save({ useObjectStreams: true })
 }
 
-async function encode_images(
-  pages: OutputPage[], format: 'JPG' | 'PNG', quality: number,
-): Promise<Blob[]> {
-  const results: Blob[] = []
+// Encode every output page and pack into ONE zip (spec-web §W: image formats deliver a single
+// archive, not N loose downloads). Level 0 for JPG/PNG (already compressed); default for TIFF.
+async function zip_images(
+  pages: OutputPage[], format: ImageFormat, base: string, quality: number,
+): Promise<Uint8Array> {
+  const ext = EXT[format]
+  const level = format === 'TIFF' ? 6 : 0
+  const entries: Zippable = {}
+  let i = 0
   for (const p of pages) {
-    const canvas = new OffscreenCanvas(p.width, p.height)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) throw new Error('2d context unavailable')
-    ctx.drawImage(p.bitmap, 0, 0)
-    p.bitmap.close()
+    const idx = String(++i).padStart(3, '0')
+    entries[`${base}_${idx}.${ext}`] = [await encode_page(p, format, quality), { level }]
+  }
+  return zipSync(entries)
+}
+
+async function encode_page(p: OutputPage, format: ImageFormat, quality: number): Promise<Uint8Array> {
+  const canvas = new OffscreenCanvas(p.width, p.height)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('2d context unavailable')
+  ctx.drawImage(p.bitmap, 0, 0)
+  try {
+    if (format === 'TIFF') {
+      const { data } = ctx.getImageData(0, 0, p.width, p.height)
+      return encode_tiff(data, p.width, p.height)
+    }
     const mime = format === 'JPG' ? 'image/jpeg' : 'image/png'
     const blob = await canvas.convertToBlob({ type: mime, quality })
-    results.push(blob)
+    return new Uint8Array(await blob.arrayBuffer())
+  } finally {
+    p.bitmap.close()
   }
-  return results
 }
 
 async function bitmap_to_jpeg(bitmap: ImageBitmap, quality: number): Promise<Uint8Array> {
@@ -71,9 +93,6 @@ async function bitmap_to_jpeg(bitmap: ImageBitmap, quality: number): Promise<Uin
   return new Uint8Array(await blob.arrayBuffer())
 }
 
-function reply(id: number, payload: unknown): void {
-  self.postMessage({ id, type: 'ok', payload } satisfies Res)
-}
 function err(id: number, message: string): void {
   self.postMessage({ id, type: 'error', message } satisfies Res)
 }

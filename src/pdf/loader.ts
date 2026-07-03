@@ -353,10 +353,12 @@ export class PdfRendererAdapter implements RendererAdapter {
       pages.map(p => p.bitmap))
   }
 
-  async export_images(pages: OutputPage[], format: 'JPG' | 'PNG'): Promise<Blob[]> {
+  async export_images(
+    pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
+  ): Promise<Uint8Array> {
     const exp = await this._export_worker()
-    return exp.call<Blob[]>(
-      { type: 'export_images', pages, format, quality: JPEG_QUALITY },
+    return exp.call<Uint8Array>(
+      { type: 'export_images', pages, format, base, quality: JPEG_QUALITY },
       pages.map(p => p.bitmap))
   }
 

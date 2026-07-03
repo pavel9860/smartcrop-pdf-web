@@ -27,21 +27,20 @@ describe('SettingsView', () => {
     expect(view.el).toBeTruthy()
   })
 
-  it('refresh reflects UIConfig: active theme, font, zoom label, checkboxes', () => {
+  it('refresh reflects UIConfig: active theme, font, zoom dropdown, checkboxes', () => {
     view.refresh(model, UI)
     expect(root.querySelector('[data-theme="light"]')!.classList.contains('active')).toBe(true)
     expect(root.querySelector<HTMLSelectElement>('#sv-font')!.value).toBe('15')
-    expect(root.querySelector('#sv-zoom-label')!.textContent).toBe('120%')
+    expect(root.querySelector<HTMLSelectElement>('#sv-zoom')!.value).toBe('1.15')  // nearest to 1.2
     expect(root.querySelector<HTMLInputElement>('#sv-confirm')!.checked).toBe(false)
   })
 
-  it('theme buttons and zoom controls call the controller', () => {
+  it('theme buttons and the zoom dropdown call the controller', () => {
     root.querySelector<HTMLButtonElement>('[data-theme="system"]')!.click()
-    root.querySelector<HTMLButtonElement>('#sv-zoom-in')!.click()
-    root.querySelector<HTMLButtonElement>('#sv-zoom-out')!.click()
-    root.querySelector<HTMLButtonElement>('#sv-zoom-rst')!.click()
+    const zoom = root.querySelector<HTMLSelectElement>('#sv-zoom')!
+    zoom.value = '1.5'; zoom.dispatchEvent(new Event('change'))
     expect(fc.calls.some(c => c.kind === 'set_theme' && c.arg === 'system')).toBe(true)
-    expect(fc.calls.filter(c => c.kind === 'zoom').length).toBe(3)
+    expect(fc.calls.some(c => c.kind === 'set_ui_scale' && c.arg === 1.5)).toBe(true)
   })
 
   it('font size + behaviour toggles route to the controller', () => {

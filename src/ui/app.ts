@@ -58,7 +58,7 @@ export class AppController {
     // Wire download handlers
     this._model.set_download_handlers(
       (bytes, name) => { this._download_blob(new Blob([bytes as BlobPart], { type: 'application/pdf' }), name) },
-      (blobs, base) => { this._download_images(blobs, base) },
+      (bytes, base) => { this._download_blob(new Blob([bytes as BlobPart], { type: 'application/zip' }), `${base}.zip`) },
     )
 
     // Build layout
@@ -276,6 +276,12 @@ export class AppController {
     this._apply_scale()
   }
 
+  // Set the UI scale directly (Settings dropdown). Ctrl +/- still uses zoom() for stepping.
+  set_ui_scale(scale: number): void {
+    this._ui_config.ui_scale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, scale))
+    this._apply_scale()
+  }
+
   private _apply_scale(): void {
     document.documentElement.style.fontSize =
       `${this._ui_config.font_size * this._ui_config.ui_scale}px`
@@ -312,16 +318,6 @@ export class AppController {
     a.href = url; a.download = name
     a.click()
     setTimeout(() => { URL.revokeObjectURL(url) }, 10_000)
-  }
-
-  private _download_images(blobs: Blob[], base: string): void {
-    // Multiple files: iterate and trigger individual downloads
-    // In browsers that support File System Access API, use that instead
-    const ext = this._model.export_format === 'JPG' ? '.jpg' : '.png'
-    blobs.forEach((blob, i) => {
-      const idx  = String(i + 1).padStart(3, '0')
-      this._download_blob(blob, `${base}_${idx}${ext}`)
-    })
   }
 
   // ---------------------------------------------------------------------------

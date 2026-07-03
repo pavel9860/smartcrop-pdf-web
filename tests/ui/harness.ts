@@ -25,7 +25,7 @@ export function make_adapter(page_count = 3, mode: Mode = Mode.NORMAL): Renderer
       make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
     detect_content_box: (_i, w, h) => Promise.resolve({ x0: 20, y0: 20, x1: w - 20, y1: h - 20 }),
     export_pdf: (_p: OutputPage[]) => Promise.resolve(new Uint8Array([1, 2, 3])),
-    export_images: () => Promise.resolve([new Blob(['x'])]),
+    export_images: () => Promise.resolve(new Uint8Array([4, 5, 6])),
     make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
     close: (): void => { /* no-op */ },
   }
@@ -64,6 +64,7 @@ export function make_ctrl(): FakeController {
     set_confirm_overwrite(b: unknown): void { rec('set_confirm_overwrite', b) },
     set_remember_folder(b: unknown): void { rec('set_remember_folder', b) },
     zoom(d: unknown): void { rec('zoom', d) },
+    set_ui_scale(s: unknown): void { rec('set_ui_scale', s) },
     get busy(): boolean { return false },
   }
   return { ctrl: obj as unknown as AppController, calls }

@@ -69,7 +69,7 @@ export interface RendererAdapter {
   // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
   detect_text_box?(page_idx: number): Promise<Box | null>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
-  export_images(pages: OutputPage[], format: 'JPG' | 'PNG'): Promise<Blob[]>
+  export_images(pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string): Promise<Uint8Array>
   make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>
   close(): void
 }
@@ -964,8 +964,9 @@ export class AppModel {
         const bytes = await this._adapter.export_pdf(pages_out)
         this._download_pdf(bytes, filename)
       } else {
-        const blobs = await this._adapter.export_images(pages_out, this.settings.export_format)
-        this._download_images(blobs, filename)
+        const zip = await this._adapter.export_images(
+          pages_out, this.settings.export_format, filename)
+        this._download_zip(zip, filename)
       }
     } catch (e) {
       ctrl.complete(new Failed(new ImagingError(String(e))))
@@ -1010,14 +1011,14 @@ export class AppModel {
 
   // These are set by AppController after construction to wire up download handling
   private _download_pdf: (bytes: Uint8Array, name: string) => void = () => { return }
-  private _download_images: (blobs: Blob[], base: string) => void = () => { return }
+  private _download_zip: (bytes: Uint8Array, base: string) => void = () => { return }
 
   set_download_handlers(
     pdf: (bytes: Uint8Array, name: string) => void,
-    images: (blobs: Blob[], base: string) => void,
+    zip: (bytes: Uint8Array, base: string) => void,
   ): void {
-    this._download_pdf   = pdf
-    this._download_images = images
+    this._download_pdf = pdf
+    this._download_zip = zip
   }
 
   // ---------------------------------------------------------------------------

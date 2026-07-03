@@ -10,6 +10,8 @@ export const FONT_SIZE_MAX      = 24
 export const FONT_SIZE_DEFAULT  = 15
 export const UI_SCALE_MIN       = 0.7
 export const UI_SCALE_MAX       = 2.0
+// UI-scale dropdown presets (desktop ui_build.py scale_presets)
+export const ZOOM_PRESETS: readonly number[] = [0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 2.0]
 
 // Canvas overlay drawing (canvas_view.ts) — spec §6, §19
 export const OVERLAY_DASH: readonly [number, number] = [6, 4]

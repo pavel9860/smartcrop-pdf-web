@@ -17,7 +17,7 @@ function adapter(): RendererAdapter {
     render_output_image: () => Promise.reject(new Error('render boom')),
     detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
     export_pdf: () => Promise.resolve(new Uint8Array([1])),
-    export_images: () => Promise.resolve([]),
+    export_images: () => Promise.resolve(new Uint8Array()),
     make_synth_page: (_i, w, h) => Promise.resolve(bmp(w, h)),
     close: (): void => {},
   }

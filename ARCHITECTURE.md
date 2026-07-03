@@ -32,7 +32,7 @@ something changes):
 | DPI-scaled kernels, 2× supersample refinement | Not ported (minor fidelity residuals, §9) |
 | Multi-file PDF documents | **Broken** — `PdfRendererAdapter._pdf` holds a single `PDFDocumentProxy`; loading multiple PDFs leaves only the last file's pages reachable via `get_source_image`. Not fixed this pass. |
 | Mixed PDF + image documents | **Broken** — `get_source_image()` unconditionally assumes `this._pdf` is set for any page index; an image-only page in a mixed load throws. Not fixed this pass. |
-| Export (PDF/JPG/PNG; TIFF excluded) | Implemented (§8.4, §13) |
+| Export (PDF single file; JPG/PNG/TIFF → single `.zip`) | Implemented (§8.4, §13). TIFF via `workers/tiff.ts` (baseline RGB); image formats zipped in `export.worker.ts` via `fflate`. |
 | Settings panel (spec §15: Appearance/Output/Behaviour/Scan) | Implemented (§2, `settings_view.ts`) |
 | Help panel (spec §16: Contents card + sections) | Implemented (§2, `help_view.ts`) |
 | Output Quality / Export as two cards (matches desktop `panels.py`, not the merged card an earlier draft shipped) | Implemented |
@@ -68,7 +68,8 @@ Python to TypeScript — those modules are re-implemented verbatim, not framewor
 - Dewarp: ONNX Runtime Web + docuwarp model (lazy-loaded; cached in IndexedDB after first load)
 - Tests: Vitest (unit) + Playwright (e2e)
 - Deployment: GitHub Pages (static) + Cloudflare CDN
-- TIFF export: excluded (no maintained browser TIFF encoder; JPG/PNG/PDF cover all real use cases)
+- TIFF export: supported via a hand-rolled baseline encoder (`src/workers/tiff.ts`, uncompressed
+  8-bit RGB single strip). Image exports (JPG/PNG/TIFF) are packed into one `.zip` (`fflate`).
 
 ---
 
@@ -367,7 +368,7 @@ interface RendererAdapter {
                       target_dpi: number | null, greyscale: boolean): Promise<ImageBitmap>
   detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode): Promise<Box>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
-  export_images(pages: OutputPage[], format: 'JPG' | 'PNG'): Promise<Blob[]>
+  export_images(pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string): Promise<Uint8Array>  // single .zip
   make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>
   close(): void
 }
@@ -835,9 +836,9 @@ on canvas/window. `File` objects passed directly to `loader.ts` (no temp files).
 
 **Export:**
 - Single-file formats (PDF): `URL.createObjectURL(blob)` → `<a download>` click → auto-revoke
-- Multi-file formats (JPG/PNG): show Save dialog via **File System Access API** (Chrome/Edge) if
-  available; fallback = zip all files with `fflate` (pure JS, ~10KB) → single `.zip` download.
-  Firefox/Safari fallback is the only case where a zip is produced.
+- Image formats (JPG/PNG/TIFF): every page encoded in `export.worker.ts`, packed into one `.zip`
+  with `fflate` (`zipSync`, pure JS ~10KB) → single `<base>.zip` download on all browsers. Entries
+  `<base>_NNN.<ext>`. TIFF pages via `workers/tiff.ts`. No per-page loose downloads.
 - Overwrite confirmation is **not implemented** (spec Web §W2 row 6) — no code path checks File
   System Access API for an existing file before writing.
 
@@ -987,6 +988,6 @@ the desktop itself doesn't have.
 
 ## 21. What does NOT change
 
-See `docs/SmartCrop_PDF_Specification_Web.md` §W7 for the full behavioral invariant list. TIFF
-export is the one item removed outright (not deferred) — the File System Access API + zip fallback
-(§13) covers multi-file output for the formats that remain (JPG/PNG).
+See `docs/SmartCrop_PDF_Specification_Web.md` §W7 for the full behavioral invariant list. All four
+export formats (PDF/JPG/PNG/TIFF) are supported; the desktop's N-loose-files behavior for image
+formats is replaced by a single `.zip` (§13), which is the web-correct equivalent.
