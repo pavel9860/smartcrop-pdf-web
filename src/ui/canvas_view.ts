@@ -67,8 +67,15 @@ export class CanvasView {
 
   paint(snap: ViewSnapshot): void {
     const { el, _ctx: ctx } = this
+    // Size the backing store in PHYSICAL pixels (× devicePixelRatio) so the page raster and the
+    // crop overlay are sharp on HiDPI/scaled displays — the canvas was rendering at CSS resolution
+    // (half-res on a 2× screen), which made text look blurry vs the native desktop app. All drawing
+    // below stays in CSS-pixel units; the transform maps them to the physical backing store.
+    const dpr = window.devicePixelRatio || 1
     const cw = el.clientWidth, ch = el.clientHeight
-    if (el.width !== cw || el.height !== ch) { el.width = cw; el.height = ch }
+    const bw = Math.max(1, Math.round(cw * dpr)), bh = Math.max(1, Math.round(ch * dpr))
+    if (el.width !== bw || el.height !== bh) { el.width = bw; el.height = bh }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     this._read_theme()
 
     ctx.clearRect(0, 0, cw, ch)
@@ -261,14 +268,15 @@ export class CanvasView {
   }
 
   private _cancel(): void {
-    if (this._dragging) {
-      this._dragging = false
-      this._model.cancel_drag()
-      this._notify()
-    }
+    // Always cancel — Esc/right-click must also drop a completed drawn window (bug 5), not only
+    // an in-progress drag. cancel_drag() is a no-op when there is nothing pending.
+    this._dragging = false
+    this._model.cancel_drag()
+    this._notify()
   }
 
   private _on_wheel = (ev: WheelEvent): void => {
+    if (ev.ctrlKey || ev.metaKey) return   // Ctrl/⌘+wheel is browser zoom — don't also page-navigate
     if (ev.deltaY > 0) this._model.next_page()
     else this._model.prev_page()
     this._notify()

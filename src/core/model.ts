@@ -8,10 +8,10 @@ import {
 } from './document_state'
 import { History } from './history'
 import { type Settings, default_settings } from './settings'
-import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type CropEditDrag } from './drag'
+import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type CropEditDrag, type DrawnDrag } from './drag'
 import {
   type Box,
-  hit_handle, apply_handle_drag, auto_crop_rect,
+  hit_handle, point_in_box, apply_handle_drag, auto_crop_rect,
   offsets_from_rect, keep_ratio_normalise, clamp_box_drag,
   split_rects_grid, rotate_box_cw, reindex_map, detection_union,
   MIN_RECT, box_width, box_height,
@@ -65,6 +65,9 @@ export interface RendererAdapter {
   render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,
                       target_dpi: number | null, greyscale: boolean): Promise<ImageBitmap>
   detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode): Promise<Box>
+  // Fast NORMAL-mode detection from the PDF text layer (desktop detect.py normal_page_box) — no
+  // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
+  detect_text_box?(page_idx: number): Promise<Box | null>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
   export_images(pages: OutputPage[], format: 'JPG' | 'PNG'): Promise<Blob[]>
   make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>
@@ -129,15 +132,19 @@ export class AppModel {
   readonly history = new History(DEFAULT_UNDO_DEPTH)
   readonly settings: Settings = default_settings()
 
-  // Raster caches (source = raw page; work = after scan processing)
+  // Raster caches (source = raw page; work = after scan processing). Eviction closes the bitmap
+  // to free memory eagerly — EXCEPT the one currently on screen (_current_bitmap): closing a
+  // displayed/in-flight bitmap detaches it and the next drawImage throws InvalidStateError
+  // ("image source is detached"). This hit hardest during Auto-detect on long books, which walks
+  // every page through _get_work and would otherwise evict+close the live page (bug: site dead).
   private _source_cache = new LRUCache<number, ImageBitmap>(CACHE_WINDOW,
-    (_, b) => { b.close() })
+    (_, b) => { if (b !== this._current_bitmap) b.close() })
   private _work_cache = new LRUCache<number, ImageBitmap>(CACHE_WINDOW,
-    (_, b) => { b.close() })
+    (_, b) => { if (b !== this._current_bitmap) b.close() })
 
   // Pre-rendered output bitmaps for committed pages (keyed "page:split_idx")
   private _output_cache = new LRUCache<string, ImageBitmap>(CACHE_WINDOW * 2,
-    (_, b) => { b.close() })
+    (_, b) => { if (b !== this._current_bitmap) b.close() })
 
   // Currently displayed bitmap (synchronously available for view_snapshot)
   private _current_bitmap: ImageBitmap | null = null
@@ -179,7 +186,7 @@ export class AppModel {
     this._anchor_left = true
     this._anchor_top = true
     this._keep_ratio = false
-    this._ratio = 1.0
+    this._ratio = 1.0        // replaced below with the first page's aspect ratio once _doc is set
     this._same_size = false
     this._pages_mode = PagesMode.ALL
     this._select_pattern = ''
@@ -192,6 +199,10 @@ export class AppModel {
     this._output_cache.clear()
     this._current_bitmap = null
     this._page_map = this._doc ? Array.from({ length: this._doc.page_count }, (_, i) => i) : []
+    // Keep-ratio initialises to the first page's real w/h, not a bare 1.0, so the ratio field
+    // shows a meaningful default from the moment a document opens.
+    const sz0 = this._doc?.page_sizes[0]
+    if (sz0 && sz0.height > 0) this._ratio = sz0.width / sz0.height
   }
 
   get has_document(): boolean { return this._doc !== null }
@@ -311,8 +322,18 @@ export class AppModel {
       if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }
       try {
         const size = this._page_dims(p)
-        const img  = await this._get_work(p)
-        const box  = await this._adapter.detect_content_box(img, size.width, size.height, this._mode)
+        const orig = this._page_map[p] ?? p
+        // NORMAL pages: derive the content box from the PDF text layer — fast, no rasterisation
+        // and no OpenCV (desktop detect.py normal_page_box). Falls back to the Sauvola image path
+        // only when there is no usable text layer (or in SCANNED mode).
+        let box: Box | null = null
+        if (this._mode === Mode.NORMAL && this._adapter.detect_text_box) {
+          box = await this._adapter.detect_text_box(orig)
+        }
+        if (!box) {
+          const img = await this._get_work(p)
+          box = await this._adapter.detect_content_box(img, size.width, size.height, this._mode)
+        }
         per_page_boxes.set(p, box)
       } catch (e) {
         ctrl.complete(new Failed(new ImagingError(String(e))))
@@ -495,8 +516,21 @@ export class AppModel {
     const pt: readonly [number, number] = [px, py]
 
     if (this._split_count > 1) { this._begin_split_drag(pt, tol, sz); return }
-    // A pending drawn window overrides auto/committed gestures — a fresh drag redraws it.
-    if (this.document.drawn) { this._begin_draw_drag(pt, sz); return }
+    // A pending manual window (document.drawn): grab a handle to resize, press INSIDE to move it,
+    // press OUTSIDE to drop it and rubber-band a new one (desktop WindowDrag / DrawDrag, §9.3/§9.4).
+    const drawn = this.document.drawn
+    if (drawn) {
+      const h = hit_handle(drawn, px, py, tol)
+      if (h || point_in_box(drawn, px, py)) {
+        this._drag = {
+          kind: 'drawn', handle: h, rect0: drawn, start: pt,
+          page_w: sz.width, page_h: sz.height,
+        } satisfies DrawnDrag
+        return
+      }
+      this._begin_draw_drag(pt, sz)   // outside the window → drop it, start a fresh draw
+      return
+    }
     if (this._begin_auto_drag(pt, tol, sz)) return
     if (this._begin_crop_edit_drag(pt, tol, sz)) return
     this._begin_draw_drag(pt, sz)
@@ -566,6 +600,7 @@ export class AppModel {
   }
 
   private _begin_draw_drag(pt: readonly [number, number], sz: PageSize): void {
+    this.document.drawn = null   // a fresh press drops the previous drawn window at once (bug 6)
     this._drag = { kind: 'draw', start: pt, page_w: sz.width, page_h: sz.height } satisfies DrawDrag
     this._draw_rect = null
   }
@@ -578,6 +613,7 @@ export class AppModel {
     if (drag.kind === 'draw')      { this._update_draw_drag(drag, px, py, sz); return }
     if (drag.kind === 'auto')      { this._update_auto_drag(drag, px, py, sz); return }
     if (drag.kind === 'split')     { this._update_split_drag(drag, px, py); return }
+    if (drag.kind === 'drawn')     { this._update_drawn_drag(drag, px, py); return }
     this._update_crop_edit_drag(drag, px, py, sz)
   }
 
@@ -626,6 +662,11 @@ export class AppModel {
     this._invalidate_output_cache(this._current_page)
   }
 
+  private _update_drawn_drag(drag: DrawnDrag, px: number, py: number): void {
+    this.document.drawn = apply_handle_drag(drag.handle ?? 'move', drag.rect0,
+      drag.start, [px, py], drag.page_w, drag.page_h)
+  }
+
   end_drag(): void {
     const drag = this._drag
     this._drag = null
@@ -656,6 +697,11 @@ export class AppModel {
         keep_ratio_normalise(r, this._ratio, drag.page_w, drag.page_h))
       this.document.crop_rects = rects
     }
+
+    if (drag.kind === 'drawn' && this._keep_ratio && this.document.drawn) {
+      const sz = this._current_page_size()
+      this.document.drawn = keep_ratio_normalise(this.document.drawn, this._ratio, sz.width, sz.height)
+    }
     // auto and crop_edit: already committed live during update_drag
   }
 
@@ -663,6 +709,7 @@ export class AppModel {
     const drag = this._drag
     this._drag = null
     this._draw_rect = null
+    this.document.drawn = null   // Esc / right-click drops the pending drawn window (bug 5)
 
     if (!drag) return
 
@@ -1134,7 +1181,9 @@ export class AppModel {
       })()
 
     if (this._mode !== Mode.SCANNED) {
-      this._work_cache.set(p, src)
+      // NORMAL: the work raster IS the source raster. Do NOT also store it in _work_cache — the
+      // same bitmap in two close-on-evict caches gets double-closed, detaching a bitmap the other
+      // cache still serves (root of the "image source is detached" crash). It stays in _source_cache.
       return src
     }
 

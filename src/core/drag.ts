@@ -46,4 +46,14 @@ export interface CropEditDrag {
   readonly page_h: number
 }
 
-export type DragState = AutoDrag | SplitDrag | DrawDrag | CropEditDrag
+// Moving (handle null) or resizing the global hand-drawn window (document.drawn)
+export interface DrawnDrag {
+  readonly kind:   'drawn'
+  readonly handle: HandleId | null
+  readonly rect0:  Box
+  readonly start:  readonly [number, number]
+  readonly page_w: number
+  readonly page_h: number
+}
+
+export type DragState = AutoDrag | SplitDrag | DrawDrag | CropEditDrag | DrawnDrag

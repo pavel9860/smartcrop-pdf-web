@@ -308,6 +308,44 @@ export class PdfRendererAdapter implements RendererAdapter {
     return detect_content_async(img, page_w, page_h, mode)
   }
 
+  // Fast content box for a NORMAL (text-bearing) PDF page: the union of its text runs' boxes,
+  // read straight from the text layer — no rasterisation, no OpenCV (desktop detect.py
+  // normal_page_box). Positioning uses pdf.js's own text-layer formula. Returns null for
+  // image pages or a page with no usable text, so the caller falls back to the image path.
+  async detect_text_box(page_idx: number): Promise<Box | null> {
+    const source = this._pages[page_idx]
+    if (!source || source.kind !== 'pdf') return null
+    const page = await source.pdf.getPage(source.page_num)
+    const vp   = page.getViewport({ scale: 1 })   // page-unit coords (top-left origin)
+    const text = await page.getTextContent()
+
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    let found = false
+    for (const item of text.items) {
+      if (!('str' in item) || item.str.trim() === '') continue
+      // pdf.js types transform/Util.transform loosely; narrow to the numeric shape we use.
+      const it = item as unknown as { transform: number[]; width: number }
+      const tx = pdfjs.Util.transform(vp.transform, it.transform) as number[]
+      const font_h = Math.hypot(tx[2] ?? 0, tx[3] ?? 0)
+      const left   = tx[4] ?? 0
+      const top    = (tx[5] ?? 0) - font_h
+      const width  = it.width * vp.scale
+      x0 = Math.min(x0, left);          y0 = Math.min(y0, top)
+      x1 = Math.max(x1, left + width);  y1 = Math.max(y1, top + font_h)
+      found = true
+    }
+    page.cleanup()
+    if (!found) return null
+
+    const box: Box = {
+      x0: Math.max(0, x0), y0: Math.max(0, y0),
+      x1: Math.min(vp.width, x1), y1: Math.min(vp.height, y1),
+    }
+    // Guard against a degenerate/near-full-page result — fall back to the image path instead.
+    if (box.x1 - box.x0 < 4 || box.y1 - box.y0 < 4) return null
+    return box
+  }
+
   async export_pdf(pages: OutputPage[]): Promise<Uint8Array> {
     const exp = await this._export_worker()
     return exp.call<Uint8Array>(

@@ -288,6 +288,40 @@ describe('detect_content / apply_crop', () => {
     }
   })
 
+  it('pressing inside a manual drawn window MOVES it, not replaces it (bug: move manual crop)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()
+    const before = model.view_snapshot().overlay[0]?.box   // {40,50,160,250}
+    model.begin_drag(100, 150, 8)   // press INSIDE the window
+    model.update_drag(120, 170)     // drag +20,+20
+    model.end_drag()
+    const after = model.view_snapshot().overlay[0]?.box
+    expect(after?.x0).toBeCloseTo((before?.x0 ?? 0) + 20)   // moved, not a fresh tiny rubber-band
+    expect(after?.y0).toBeCloseTo((before?.y0 ?? 0) + 20)
+  })
+
+  it('keep-ratio ratio initialises to the first page w/h on load, not 1.0 (bug E-init)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    expect(model.ratio).toBeCloseTo(200 / 300)
+  })
+
+  it('cancel_drag (Esc / right-click) drops the pending drawn window (bug 5)', async () => {
+    const model = await loaded_model()
+    model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()
+    expect(model.view_snapshot().overlay).toHaveLength(1)   // drawn window shown
+    model.cancel_drag()
+    expect(model.view_snapshot().overlay).toHaveLength(0)   // dropped by Esc/right-click
+  })
+
+  it('starting a new draw drops the old drawn window immediately on press (bug 6)', async () => {
+    const model = await loaded_model()
+    model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()
+    expect(model.view_snapshot().overlay).toHaveLength(1)
+    model.begin_drag(20, 20, 8)                             // press to start a NEW draw
+    expect(model.view_snapshot().overlay).toHaveLength(0)   // old window gone before any move
+    model.cancel_drag()
+  })
+
   it('set_keep_ratio(true) pre-populates from the detection UNION, not the page (model.py:435-441)', async () => {
     const model = await loaded_model({ page_w: 200, page_h: 400 })
     model.set_keep_ratio(false)
@@ -337,17 +371,18 @@ describe('gestures: draw / cancel', () => {
 
   it('cancel_drag on a crop-edit restores the prior committed box', async () => {
     const model = await loaded_model({ page_w: 200, page_h: 300 })
-    // Commit an initial box via draw.
+    // Commit a box: draw a window, then Crop (draw now sets the global drawn window).
     model.begin_drag(10, 10, 5)
     model.update_drag(150, 250)
     model.end_drag()
-    const before = model.view_snapshot().overlay[0]?.box
-    // Grab a handle on the committed box and drag, then cancel.
-    model.begin_drag(10, 10, 5)   // TL handle of the just-committed box
+    model.apply_crop()                       // committed to {10,10,150,250}; drawn cleared
+    // Grab the committed box's TL handle, drag, then cancel — the committed crop is restored.
+    model.begin_drag(10, 10, 5)
     model.update_drag(80, 80)
     model.cancel_drag()
-    const after = model.view_snapshot().overlay[0]?.box
-    expect(after).toEqual(before)
+    const s = model.view_snapshot()
+    expect(s.page_w).toBeCloseTo(140)        // 150 - 10, committed crop dims preserved
+    expect(s.page_h).toBeCloseTo(240)        // 250 - 10
   })
 
   it('drag without a loaded document is a no-op', () => {

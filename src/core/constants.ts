@@ -3,7 +3,7 @@
 
 // DPI / raster
 export const SRC_DPI    = 200.0   // scanned-mode source render DPI
-export const NORMAL_DPI = 150.0   // normal-mode export render DPI
+export const NORMAL_DPI = 200.0   // normal-mode preview/export render DPI (crisper text on HiDPI)
 export const CACHE_WINDOW = 16    // max pages in each LRU raster cache
 
 // Crop geometry (canvas-unit / page-unit tunables)

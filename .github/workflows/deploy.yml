@@ -37,6 +37,8 @@ jobs:
       - run: npx eslint src
       - run: npx vitest run --coverage
       - run: npx vite build
+        env:
+          VITE_BASE: /smartcrop-pdf-web/   # GitHub Pages project-page subpath (Cloudflare uses '/')
       - uses: actions/configure-pages@v5
         with:
           enablement: true

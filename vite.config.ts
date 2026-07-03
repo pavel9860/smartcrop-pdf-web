@@ -3,11 +3,10 @@ import { resolve } from 'path'
 import { viteStaticCopy } from 'vite-plugin-static-copy'
 
 export default defineConfig({
-  // GitHub Pages project-page path (https://<user>.github.io/smartcrop-pdf-web/). All runtime
-  // asset fetches (cmaps, standard_fonts, models) are prefixed with import.meta.env.BASE_URL so
-  // they resolve under this subpath instead of the domain root. Override via VITE_BASE if the
-  // repo is renamed or deployed at the domain root.
-  base: process.env['VITE_BASE'] ?? '/smartcrop-pdf-web/',
+  // Served at the domain ROOT on Cloudflare Pages / a custom domain (default '/'). All runtime
+  // asset fetches (cmaps, standard_fonts, models) go through import.meta.env.BASE_URL, so for a
+  // GitHub Pages *project page* set VITE_BASE=/<repo>/ (the deploy.yml does this).
+  base: process.env['VITE_BASE'] ?? '/',
   resolve: {
     alias: {
       '@core':    resolve(__dirname, 'src/core'),
@@ -23,10 +22,13 @@ export default defineConfig({
     target: 'es2022',
     rollupOptions: {
       output: {
-        manualChunks: {
-          pdfjs:  ['pdfjs-dist'],
-          pdflib: ['pdf-lib'],
-          onnx:   ['onnxruntime-web/webgpu'],
+        // Function form (not an object) — required by Vite 8 / rolldown (Cloudflare Pages), and
+        // also valid on rollup (Vite 5). An object here fails with "manualChunks is not a function".
+        manualChunks(id: string): string | undefined {
+          if (id.includes('onnxruntime-web')) return 'onnx'
+          if (id.includes('pdfjs-dist'))      return 'pdfjs'
+          if (id.includes('pdf-lib'))         return 'pdflib'
+          return undefined
         },
       },
     },
