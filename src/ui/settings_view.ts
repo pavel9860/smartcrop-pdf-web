@@ -4,7 +4,7 @@
 import type { AppModel } from '@core/model'
 import type { AppController, UIConfig } from './app'
 import { UNDO_DEPTH_OPTIONS, DPI_PRESETS, EXPORT_FORMATS } from '@core/constants'
-import { FONT_SIZE_MIN, FONT_SIZE_MAX, ZOOM_PRESETS } from './constants'
+import { FONT_SIZE_PRESETS, ZOOM_PRESETS } from './constants'
 import { requireEl } from './dom'
 
 export class SettingsView {
@@ -36,9 +36,7 @@ export class SettingsView {
 
     const undo_opts = UNDO_DEPTH_OPTIONS.map(n =>
       `<option value="${n}">${n}</option>`).join('')
-    const font_opts = Array.from(
-      { length: FONT_SIZE_MAX - FONT_SIZE_MIN + 1 }, (_, i) => FONT_SIZE_MIN + i,
-    ).map(n => `<option value="${n}">${n}</option>`).join('')
+    const font_opts = FONT_SIZE_PRESETS.map(n => `<option value="${n}">${n}</option>`).join('')
     const compress_opts = Object.keys(DPI_PRESETS).map(k => `<option>${k}</option>`).join('')
     const format_opts = EXPORT_FORMATS.map(f => `<option>${f}</option>`).join('')
     const zoom_opts = ZOOM_PRESETS.map(p =>

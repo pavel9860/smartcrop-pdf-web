@@ -83,7 +83,7 @@ export class CropPanel {
     actions_card.className = 'panel-card'
     actions_card.innerHTML = `
       <div class="card-header"><span class="card-title">Actions</span></div>
-      <button class="btn btn-secondary w-full" id="cp-crop">✂  Crop</button>
+      <button class="btn btn-secondary w-full" id="cp-crop">✂️  Crop</button>
       <div class="btn-row">
         <button class="btn btn-secondary flex-1" id="cp-rotate">↻  Rotate</button>
         <button class="btn btn-secondary flex-1" id="cp-delete">🗑︎  Delete</button>
@@ -192,7 +192,7 @@ export class CropPanel {
     this._offset_r.disabled = this._offset_b.disabled = busy || !detect_only
 
     // Crop button label changes when split > 1 (spec TODO §16)
-    this._crop_btn.textContent = n > 1 ? '✂  Split & Crop' : '✂  Crop'
+    this._crop_btn.textContent = n > 1 ? '✂️  Split & Crop' : '✂️  Crop'
     this._crop_btn.disabled    = busy || !model.can_apply
     this._rotate_btn.disabled  = busy || !model.has_document
     this._delete_btn.disabled  = busy || !model.has_document

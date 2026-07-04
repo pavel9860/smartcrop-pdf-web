@@ -9,6 +9,7 @@ export class PagesPanel {
   private readonly _badge: HTMLElement
   private readonly _load_btn: HTMLButtonElement
   private readonly _doc_name: HTMLElement
+  private readonly _doc_name_card: HTMLElement
   private readonly _file_input: HTMLInputElement
   private readonly _mode_btns: Record<PagesMode, HTMLButtonElement>
   private readonly _pattern_row: HTMLElement
@@ -16,6 +17,14 @@ export class PagesPanel {
   private readonly _current_btn: HTMLButtonElement
 
   constructor(container: HTMLElement, model: AppModel, ctrl: AppController) {
+    // Loaded-document name in its own card at the very top of the sidebar (above Document &
+    // State), same card frame as Advanced and the button-label font. Hidden until a doc loads.
+    const name_card = document.createElement('div')
+    name_card.className = 'panel-card doc-name-card hidden'
+    name_card.id = 'pp-docname-card'
+    name_card.innerHTML = `<div class="doc-name" id="pp-docname" title=""></div>`
+    container.appendChild(name_card)
+
     // Two separate cards (desktop panels.py: Document & State, then Pages to Process).
     const doc_card = document.createElement('div')
     doc_card.className = 'panel-card'
@@ -25,7 +34,6 @@ export class PagesPanel {
         <span class="mode-badge" id="pp-badge">NORMAL</span>
       </div>
       <button class="btn btn-secondary w-full" id="pp-load">📂︎  Load PDF/Image Files</button>
-      <div class="doc-name hidden" id="pp-docname" title=""></div>
       <input type="file" id="pp-file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" hidden />`
     container.appendChild(doc_card)
 
@@ -46,10 +54,11 @@ export class PagesPanel {
       </div>`
     container.appendChild(pages_card)
 
-    this._badge       = requireEl(doc_card, '#pp-badge')
-    this._load_btn    = requireEl(doc_card, '#pp-load')
-    this._doc_name    = requireEl(doc_card, '#pp-docname')
-    this._file_input  = requireEl(doc_card, '#pp-file')
+    this._badge         = requireEl(doc_card, '#pp-badge')
+    this._load_btn      = requireEl(doc_card, '#pp-load')
+    this._doc_name      = requireEl(name_card, '#pp-docname')
+    this._doc_name_card = name_card
+    this._file_input    = requireEl(doc_card, '#pp-file')
     this._pattern_row = requireEl(pages_card, '#pp-pat-row')
     this._pattern_inp = requireEl(pages_card, '#pp-pattern')
     this._current_btn = requireEl(pages_card, '#pp-current')
@@ -90,7 +99,7 @@ export class PagesPanel {
     const name = model.document_name
     this._doc_name.textContent = name
     this._doc_name.title = name
-    this._doc_name.classList.toggle('hidden', name === '')
+    this._doc_name_card.classList.toggle('hidden', name === '')
 
     const mode = model.pages_mode
     for (const [m, btn] of Object.entries(this._mode_btns)) {

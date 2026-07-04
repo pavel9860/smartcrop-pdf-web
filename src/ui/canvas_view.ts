@@ -27,6 +27,7 @@ export class CanvasView {
   private _page_w = SYNTH_W
   private _page_h = SYNTH_H
   private readonly _coords_el: HTMLDivElement
+  private readonly _status_el: HTMLDivElement
   private readonly _arrow_prev: HTMLButtonElement
   private readonly _arrow_next: HTMLButtonElement
   private _ro: ResizeObserver
@@ -45,6 +46,11 @@ export class CanvasView {
 
     this._coords_el = document.createElement('div')
     this._coords_el.className = 'canvas-coords'
+
+    // Status bar (bottom-left): page/size read-out from ViewSnapshot.status (spec §3.3). A DOM
+    // overlay, not painted on the page raster (desktop inv 32 forbids text on the image itself).
+    this._status_el = document.createElement('div')
+    this._status_el.className = 'canvas-status'
 
     // Hover ◀/▶ nav arrows on the canvas edge midpoints (desktop canvas_view.py; bug 10).
     this._arrow_prev = this._make_arrow('◀', 'canvas-nav--left',
@@ -82,6 +88,17 @@ export class CanvasView {
     ctx.fillStyle = this._theme.bg
     ctx.fillRect(0, 0, cw, ch)
 
+    // Attach DOM overlays (status/coords/nav arrows) once the canvas is in the tree, and keep the
+    // status bar current every paint — including the loading state below, so it never blanks.
+    const parent = this.el.parentElement
+    if (parent && this._status_el.parentElement === null) {
+      parent.appendChild(this._status_el)
+      parent.appendChild(this._coords_el)
+      parent.appendChild(this._arrow_prev)
+      parent.appendChild(this._arrow_next)
+    }
+    this._status_el.textContent = snap.status
+
     if (!snap.image) {
       if (snap.is_loading) this._draw_loading(ctx, cw, ch)
       return
@@ -108,14 +125,8 @@ export class CanvasView {
     for (const box of snap.overlay) this._draw_overlay_box(ctx, box, scale)
     if (snap.draw_rect) this._draw_rubber_band(ctx, snap.draw_rect, scale)
 
-    // Nothing is drawn on the page image (desktop inv 32): no page-number/status text at the
-    // top-left (bug 11); cursor coordinates show in the bottom-right label instead (bug 10).
-    const parent = this.el.parentElement
-    if (parent && this._coords_el.parentElement === null) {
-      parent.appendChild(this._coords_el)
-      parent.appendChild(this._arrow_prev)
-      parent.appendChild(this._arrow_next)
-    }
+    // Page-number/size read-out lives in the bottom-left status bar (DOM overlay above), not
+    // painted on the page image (desktop inv 32). Cursor coordinates show bottom-right (bug 10).
     this._arrow_prev.disabled = snap.position <= 1
     this._arrow_next.disabled = snap.position >= snap.total
   }

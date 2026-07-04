@@ -5,9 +5,11 @@ export const DETAIL_PANEL_WIDTH = 380    // px — settings/help panel
 export const CANVAS_MIN_WIDTH   = 400    // px — canvas never shrinks below this
 export const STATUS_IDLE_MS     = 2400   // ms — status text auto-clear delay
 export const SCALE_THROTTLE_MS  = 80     // ms — canvas resize debounce
-export const FONT_SIZE_MIN      = 10
-export const FONT_SIZE_MAX      = 24
+export const FONT_SIZE_MIN      = 8
+export const FONT_SIZE_MAX      = 25
 export const FONT_SIZE_DEFAULT  = 15
+// Discrete font-size choices offered in Settings (desktop ui_build.py font_presets)
+export const FONT_SIZE_PRESETS: readonly number[] = [8, 10, 12, 15, 18, 22, 25]
 export const UI_SCALE_MIN       = 0.7
 export const UI_SCALE_MAX       = 2.0
 // UI-scale dropdown presets (desktop ui_build.py scale_presets)

@@ -169,6 +169,17 @@ input, select { font: inherit; }
   z-index: 2;
 }
 
+/* Status bar (bottom-left): page index / page size read-out (spec §3.3). */
+.canvas-status {
+  position: absolute;
+  left: 10px;
+  bottom: 8px;
+  color: var(--text-dim);
+  font-size: 0.9375rem;
+  pointer-events: none;
+  z-index: 2;
+}
+
 /* Hover ◀/▶ page-nav arrows at the canvas edge midpoints (bug 10). */
 .canvas-nav {
   position: absolute;
@@ -232,14 +243,16 @@ input, select { font: inherit; }
   color: var(--text-primary);
 }
 
-/* Loaded document name, shown under the Load button in the Document & State card */
+/* Loaded document name — its own card above Document & State. Same button-label font weight/size
+   as "Load PDF/Image Files"; ellipsised when the name is long. */
+.doc-name-card { padding: 8px 12px; }
 .doc-name {
-  font-size: 0.8125rem;
-  color: var(--text-dim);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 2px 2px 0;
 }
 
 /* ── Buttons ── */

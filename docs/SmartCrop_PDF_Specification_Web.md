@@ -104,8 +104,15 @@ Output Quality → Export), renamed "Compress Document" to "Output Quality" and 
 `_build_export` split) rather than the spec prose's single "Compress Document" card title, which is
 stale relative to the desktop app itself. Pinned bottom bar, outside scroll: Settings + Help
 buttons, then Undo/Redo/Reset, then page nav — same content and order as desktop spec §7.8.
-The **Document & State** card shows the loaded document name under the Load button (single file →
-its name; several → "first.pdf +N more"; hidden when nothing is loaded) via `AppModel.document_name`.
+The loaded document name sits in **its own card at the very top** of the sidebar (above Document &
+State), same card frame as Advanced and the Load-button label font — single file → its name, several
+→ "first.pdf +N more", card hidden entirely when nothing is loaded (`AppModel.document_name`).
+The canvas carries a **bottom-left status bar** (`ViewSnapshot.status`: page index + page size) as a
+DOM overlay, mirroring desktop §3.3, alongside the existing bottom-right cursor read-out; neither is
+painted on the page raster (desktop inv 32). Settings → Appearance → Font size is a **preset
+dropdown** (8, 10, 12, 15, 18, 22, 25 pt). Navigation **prefetches the adjacent pages'** work rasters
+in the background after each view prepares, so next/prev is a cache hit rather than a blank
+"Loading…" flash while a scanned-mode filter render runs on demand.
 Exact icon set, control widths, switch/field styling, and per-control coloring (e.g. Delete must
 NOT be styled differently from other action buttons — see TODO.txt item 4) must match
 `docs/app_design_screenshots/`, which supersedes this section's prose wherever more specific.
@@ -174,6 +181,9 @@ behavior this row describes.
   progress-less freeze). `fflate` is a declared, installed dependency [high]. The export progress
   bar spans **both** phases: render advances the first half, per-page encode the second (job total
   = `view_total × 2` for image formats), so it no longer completes then hangs during encoding.
+  Export also **yields to the event loop between pages** (`render_output_image` runs on the main
+  thread), so the progress bar actually animates instead of the tab freezing for the whole run
+  (bug: PDF export stalled ~20 s with a static bar before the download appeared).
 - **Overwrite confirmation** (desktop spec §15's `confirm_overwrite` setting) is not yet enforced
   on the web — see §W2 row 6. The setting exists in Settings but has no effect today.
 

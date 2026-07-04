@@ -1018,8 +1018,17 @@ export class AppModel {
         ctrl.complete(new Failed(new ImagingError(String(e))))
         return null
       }
+      // Yield to the event loop between pages so the progress overlay repaints. render_output_image
+      // runs on the main thread (OpenCV/canvas); without this the tab visibly freezes for the whole
+      // export (bug: ~20 s stall with a static bar before the save/download appears).
+      await this._yield_to_paint()
     }
     return pages_out
+  }
+
+  // setTimeout(0) — not window/document, so core/ stays platform-agnostic (architecture.test.ts).
+  private _yield_to_paint(): Promise<void> {
+    return new Promise<void>(resolve => { setTimeout(resolve, 0) })
   }
 
   private _export_boxes_for_page(p: number, sz: PageSize): Box[] {
@@ -1101,6 +1110,22 @@ export class AppModel {
     } finally {
       this._is_loading = false
     }
+
+    // Warm the adjacent pages in the background so next/prev is a cache hit instead of a blank
+    // "Loading…" flash while the (potentially heavy, scanned-mode) work raster renders on demand.
+    this._prefetch(p + 1)
+    this._prefetch(p - 1)
+  }
+
+  private readonly _prefetching = new Set<number>()
+
+  private _prefetch(p: number): void {
+    if (p < 0 || p >= this.page_count() || this._prefetching.has(p)) return
+    const warm = this._mode === Mode.SCANNED ? this._work_cache.has(p) : this._source_cache.has(p)
+    if (warm) return
+    this._prefetching.add(p)
+    void this._get_work(p).catch(() => { /* best-effort warm */ })
+      .finally(() => { this._prefetching.delete(p) })
   }
 
   // Pre-render every split view's output bitmap for a committed page (so jumping
