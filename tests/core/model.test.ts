@@ -8,6 +8,7 @@ import { Ok } from '@core/batch'
 import {
   NoDocumentError, EmptySelectionError, InvalidSplitError, DeleteAllPagesError,
 } from '@core/errors'
+import { CUSTOM_DPI_MIN, CUSTOM_DPI_MAX } from '@core/constants'
 
 // ---------------------------------------------------------------------------
 // Mock adapter
@@ -543,6 +544,27 @@ describe('output settings', () => {
     await model.export('out.pdf').result()
     expect(render_args.some(a => a.dpi === 75)).toBe(true) // export honours the compress preset
     expect(render_args.some(a => a.grey)).toBe(true)
+  })
+
+  it('set_compress_preset accepts Custom; set_custom_dpi clamps to [MIN,MAX] (task 15)', async () => {
+    const model = await loaded_model()
+    model.set_compress_preset('Custom')
+    expect(model.compress_preset).toBe('Custom')
+    model.set_custom_dpi(999999)
+    expect(model.custom_dpi).toBe(CUSTOM_DPI_MAX)
+    model.set_custom_dpi(1)
+    expect(model.custom_dpi).toBe(CUSTOM_DPI_MIN)
+  })
+
+  it('export uses custom_dpi when the preset is Custom (task 15)', async () => {
+    const { adapter, render_args } = make_mock_adapter({ page_w: 200, page_h: 300 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    model.set_compress_preset('Custom')
+    model.set_custom_dpi(220)
+    render_args.length = 0
+    await model.export('out.pdf').result()
+    expect(render_args.some(a => a.dpi === 220)).toBe(true)
   })
 })
 

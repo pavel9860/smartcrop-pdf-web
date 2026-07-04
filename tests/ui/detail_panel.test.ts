@@ -5,7 +5,7 @@ import type { AppModel } from '@core/model'
 import type { UIConfig } from '@ui/app'
 
 const UI: Readonly<UIConfig> = {
-  theme: 'dark', font_size: 14, ui_scale: 1, confirm_overwrite: true, remember_folder: true,
+  theme: 'dark', font_size: 14, ui_scale: 1, remember_folder: true,
 }
 
 describe('DetailPanel', () => {

@@ -52,7 +52,7 @@ actual running toolchain this update, not documentation staleness.
 | 3 | Multi-file PDF documents (§7.1a) | Several PDFs combine into one working document, pages in selection order | **Fixed (2026-07-03).** `pdf/loader.ts` holds `_pdfs[]` plus a per-output-page `_pages[]` `PageSource` map; each output index maps to its own PDF proxy + 1-based page number. Multi-PDF load combines all pages in selection order. Unit-tested (`tests/pdf/loader.test.ts`). | ARCHITECTURE §8 |
 | 4 | Mixed PDF + image documents (§7.1a) | PDFs and images combine freely into one document | **Fixed (2026-07-03).** Same `_pages[]` `PageSource` map: image pages carry a `{kind:'image', blob}` source decoded on demand, so a mixed PDF+image load renders every index. Unit-tested. | ARCHITECTURE §8 |
 | 5 | Batch responsiveness (§14, §17: ~150 ms/page target) | Long operations run off the interaction path via the Tk `after`-tick loop; the window stays responsive between pages | Detect / filter / dewarp run on the **main (UI) thread** — the tab can visibly pause for the duration of each page's processing (still bounded per-page, §W5) rather than staying responsive between pages. | ARCHITECTURE §7a |
-| 6 | `confirm_overwrite` setting (§15) | Warns before silently replacing an existing file on export | **Stored but not enforced.** No overwrite-detection path exists yet; the setting is inert. | §W6 below — no File System Access API overwrite check wired up |
+| 6 | `confirm_overwrite` setting (§15) | Warns before silently replacing an existing file on export | **Control removed (2026-07-04).** The web export path streams a browser download and cannot detect or block an overwrite (no File System Access write), so the setting was inert; the Settings checkbox is removed rather than shown with no effect. | §W6 below |
 | 7 | Binarization DPI scaling (§10.2) | Sauvola window / background-kernel / min-area scale with the page's embedded DPI | Fixed kernel sizes — the web's scanned-mode source DPI (`SRC_DPI`) is a constant 200, unlike desktop's variable source DPI, so this mainly affects the B/W filter's kernel size relative to desktop's 150-DPI reference case, not correctness. | ARCHITECTURE §9 — low-severity fidelity residual |
 | 8 | Output quality → preview (§12.1 WYSIWYG) | Preview is the exact output raster (WYSIWYG) | **Deliberate deviation (2026-07-04).** Compress DPI and output colour (Grayscale) apply to the **exported file only**, never the on-screen preview. Rendering the committed-crop preview at the export DPI made a crop appear at e.g. 75 dpi (395×505) and in grayscale; the editing view must stay full-resolution and true-colour. `render_output_image` remains the single render path — WYSIWYG is preserved for crop geometry, filters and rotation; only the DPI/colour arguments differ (preview: `null`/`false`; export: preset/colour). Set by `_prerender_output_views` (preview) vs `_render_export_pages` (export). | ARCHITECTURE §1 |
 
@@ -114,6 +114,13 @@ painted on the page raster (desktop inv 32). Settings → Appearance → Font si
 dropdown** (8, 10, 12, 15, 18, 22, 25 pt). Navigation **prefetches the adjacent pages'** work rasters
 in the background after each view prepares, so next/prev is a cache hit rather than a blank
 "Loading…" flash while a scanned-mode filter render runs on demand.
+**Output-quality settings** (compress DPI, colour, export format) persist across document loads and
+across browser sessions via `localStorage` (`ui/persist.ts`, key `scw.output.v1`), owned by the UI
+layer so `core/` stays storage-free (ARCHITECTURE §10). They live solely in the sidebar **Output
+Quality** card — no duplicate in Settings (the Settings Output section keeps only folder + postfix).
+The compress dropdown includes a **Custom…** entry backed by a numeric DPI field
+(`AppModel.custom_dpi`, default 300, clamped 50–1200); like every output-quality setting it affects
+the exported file only (§W2 row 8), never the preview.
 Exact icon set, control widths, switch/field styling, and per-control coloring (e.g. Delete must
 NOT be styled differently from other action buttons — see TODO.txt item 4) must match
 `docs/app_design_screenshots/`, which supersedes this section's prose wherever more specific.
@@ -185,8 +192,9 @@ behavior this row describes.
   Export also **yields to the event loop between pages** (`render_output_image` runs on the main
   thread), so the progress bar actually animates instead of the tab freezing for the whole run
   (bug: PDF export stalled ~20 s with a static bar before the download appeared).
-- **Overwrite confirmation** (desktop spec §15's `confirm_overwrite` setting) is not yet enforced
-  on the web — see §W2 row 6. The setting exists in Settings but has no effect today.
+- **Overwrite confirmation** (desktop spec §15's `confirm_overwrite` setting) has no web equivalent:
+  the browser download path cannot detect an overwrite (§W2 row 6). The inert Settings checkbox has
+  been removed.
 
 ---
 

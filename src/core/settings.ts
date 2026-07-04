@@ -8,11 +8,13 @@ import {
   DEFAULT_OUTPUT_POSTFIX,
   DEFAULT_UNDO_DEPTH,
   DEFAULT_DEWARP_SUPERSAMPLE,
+  DEFAULT_CUSTOM_DPI,
   type ExportFormat,
 } from './constants'
 
 export interface Settings {
-  compress_preset:     string          // DPI preset name → DPI_PRESETS lookup
+  compress_preset:     string          // DPI preset name → DPI_PRESETS lookup (or 'Custom')
+  custom_dpi:          number          // resolved DPI when compress_preset === 'Custom'
   output_colours:      string          // 'Original colors' | 'Grayscale'
   export_format:       ExportFormat
   output_folder:       string          // '' = same as source
@@ -24,6 +26,7 @@ export interface Settings {
 export function default_settings(): Settings {
   return {
     compress_preset:    DEFAULT_COMPRESS_PRESET,
+    custom_dpi:         DEFAULT_CUSTOM_DPI,
     output_colours:     DEFAULT_OUTPUT_COLOURS,
     export_format:      DEFAULT_EXPORT_FORMAT,
     output_folder:      '',

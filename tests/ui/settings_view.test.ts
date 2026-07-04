@@ -5,7 +5,7 @@ import type { AppModel } from '@core/model'
 import type { UIConfig } from '@ui/app'
 
 const UI: Readonly<UIConfig> = {
-  theme: 'light', font_size: 15, ui_scale: 1.2, confirm_overwrite: false, remember_folder: true,
+  theme: 'light', font_size: 15, ui_scale: 1.2, remember_folder: true,
 }
 
 describe('SettingsView', () => {
@@ -32,7 +32,13 @@ describe('SettingsView', () => {
     expect(root.querySelector('[data-theme="light"]')!.classList.contains('active')).toBe(true)
     expect(root.querySelector<HTMLSelectElement>('#sv-font')!.value).toBe('15')
     expect(root.querySelector<HTMLSelectElement>('#sv-zoom')!.value).toBe('1.15')  // nearest to 1.2
-    expect(root.querySelector<HTMLInputElement>('#sv-confirm')!.checked).toBe(false)
+    expect(root.querySelector<HTMLInputElement>('#sv-remember')!.checked).toBe(true)
+  })
+
+  it('does not duplicate the sidebar output-quality controls, and drops inert confirm-overwrite', () => {
+    expect(root.querySelector('#sv-compress')).toBeNull()   // task 14: lives only in the sidebar
+    expect(root.querySelector('#sv-format')).toBeNull()
+    expect(root.querySelector('#sv-confirm')).toBeNull()    // task 13: inert control removed
   })
 
   it('theme buttons and the zoom dropdown call the controller', () => {
@@ -47,10 +53,8 @@ describe('SettingsView', () => {
     const font = root.querySelector<HTMLSelectElement>('#sv-font')!
     font.value = font.options[0]!.value
     font.dispatchEvent(new Event('change'))
-    root.querySelector<HTMLInputElement>('#sv-confirm')!.dispatchEvent(new Event('change'))
     root.querySelector<HTMLInputElement>('#sv-remember')!.dispatchEvent(new Event('change'))
     expect(fc.calls.some(c => c.kind === 'set_font_size')).toBe(true)
-    expect(fc.calls.some(c => c.kind === 'set_confirm_overwrite')).toBe(true)
     expect(fc.calls.some(c => c.kind === 'set_remember_folder')).toBe(true)
   })
 

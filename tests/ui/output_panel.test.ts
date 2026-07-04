@@ -48,4 +48,18 @@ describe('OutputPanel', () => {
     panel.refresh(model, true)
     expect(root.querySelector<HTMLButtonElement>('#op-export')!.disabled).toBe(true)
   })
+
+  it('Custom preset reveals the DPI field and dispatches set_custom_dpi (task 15)', () => {
+    const compress = root.querySelector<HTMLSelectElement>('#op-compress')!
+    const dpi = root.querySelector<HTMLInputElement>('#op-custom-dpi')!
+    expect(dpi.hidden).toBe(true)                 // hidden for a normal preset
+    compress.value = 'Custom'
+    compress.dispatchEvent(new Event('change'))
+    panel.refresh(model, false)
+    expect(model.compress_preset).toBe('Custom')
+    expect(dpi.hidden).toBe(false)                // revealed once Custom is chosen
+    dpi.value = '300'
+    dpi.dispatchEvent(new Event('change'))
+    expect(model.custom_dpi).toBe(300)
+  })
 })

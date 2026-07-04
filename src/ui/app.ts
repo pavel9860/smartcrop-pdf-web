@@ -17,14 +17,14 @@ import { apply_theme } from './theme'
 import type { DetailPanel as DetailPanelType } from './constants'
 import { FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX } from './constants'
 import { requireEl } from './dom'
+import { load_output_prefs, save_output_prefs } from './persist'
 
 // UIConfig — presentation-only state that drives NO domain computation (ARCHITECTURE §10);
-// owned here, invisible to core/. theme/font_size/ui_scale/confirm_overwrite/remember_folder.
+// owned here, invisible to core/. theme/font_size/ui_scale/remember_folder.
 export interface UIConfig {
   theme: 'dark' | 'light' | 'system'
   font_size: number
   ui_scale: number
-  confirm_overwrite: boolean
   remember_folder: boolean
 }
 
@@ -54,6 +54,7 @@ export class AppController {
     this._root    = root
     this._adapter = new PdfRendererAdapter()
     this._model   = new AppModel(this._adapter)
+    this._restore_output_prefs()   // apply persisted output-quality settings before first render
 
     // Wire download handlers
     this._model.set_download_handlers(
@@ -124,6 +125,7 @@ export class AppController {
     } catch (e) {
       this._show_error(e)
     }
+    this._persist_output_prefs()
     void this._refresh_async()
   }
 
@@ -244,7 +246,6 @@ export class AppController {
     theme: 'dark',
     font_size: FONT_SIZE_DEFAULT,
     ui_scale: 1.0,
-    confirm_overwrite: true,
     remember_folder: true,
   }
 
@@ -260,7 +261,6 @@ export class AppController {
     this._apply_scale()
   }
 
-  set_confirm_overwrite(on: boolean): void { this._ui_config.confirm_overwrite = on }
   set_remember_folder(on: boolean): void { this._ui_config.remember_folder = on }
 
   // Ctrl +/- (spec §21): scales the whole UI on top of font_size, does not change font_size
@@ -285,6 +285,25 @@ export class AppController {
   private _apply_scale(): void {
     document.documentElement.style.fontSize =
       `${this._ui_config.font_size * this._ui_config.ui_scale}px`
+  }
+
+  // Output-quality persistence (task 12): survive new-doc loads and browser sessions via
+  // localStorage (ui/persist.ts). core/ never sees storage — the controller mediates.
+  private _restore_output_prefs(): void {
+    const p = load_output_prefs()
+    if (p.compress_preset !== undefined) this._model.set_compress_preset(p.compress_preset)
+    if (typeof p.custom_dpi === 'number') this._model.set_custom_dpi(p.custom_dpi)
+    if (p.output_colours !== undefined)  this._model.set_output_colours(p.output_colours)
+    if (p.export_format !== undefined)   this._model.set_export_format(p.export_format)
+  }
+
+  private _persist_output_prefs(): void {
+    save_output_prefs({
+      compress_preset: this._model.compress_preset,
+      custom_dpi:      this._model.custom_dpi,
+      output_colours:  this._model.output_colours,
+      export_format:   this._model.export_format,
+    })
   }
 
   // ---------------------------------------------------------------------------

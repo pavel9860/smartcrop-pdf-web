@@ -28,6 +28,7 @@ import {
   DEFAULT_UNDO_DEPTH, FULL_PAGE_FRAC, OFFSET_LIMIT,
   FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX, UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
   MAX_SPLIT, SYNTH_W, SYNTH_H, type ExportFormat,
+  CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
 } from './constants'
 import { resolve_pages } from './parsing'
 import {
@@ -836,7 +837,10 @@ export class AppModel {
   // ---------------------------------------------------------------------------
 
   set_compress_preset(name: string): void {
-    if (name in DPI_PRESETS) this.settings.compress_preset = name
+    if (name === CUSTOM_DPI_PRESET || name in DPI_PRESETS) this.settings.compress_preset = name
+  }
+  set_custom_dpi(dpi: number): void {
+    this.settings.custom_dpi = Math.max(CUSTOM_DPI_MIN, Math.min(CUSTOM_DPI_MAX, Math.round(dpi)))
   }
   set_output_colours(mode: string): void { this.settings.output_colours = mode }
   set_export_format(fmt: string): void {
@@ -853,6 +857,14 @@ export class AppModel {
   set_output_postfix(postfix: string): void { this.settings.output_postfix = postfix }
   set_dewarp_supersample(factor: number): void {
     this.settings.dewarp_supersample = Math.max(1.0, Math.min(4.0, factor))
+  }
+
+  // Resolve the effective export DPI: 'Custom' uses settings.custom_dpi, every other preset maps
+  // through DPI_PRESETS (null = keep source resolution). Export-only (spec-web §W2 row 8).
+  private _resolved_target_dpi(): number | null {
+    return this.settings.compress_preset === CUSTOM_DPI_PRESET
+      ? this.settings.custom_dpi
+      : (DPI_PRESETS[this.settings.compress_preset] ?? null)
   }
 
   get output_folder(): string { return this.settings.output_folder }
@@ -970,7 +982,7 @@ export class AppModel {
 
   private async _run_export(job: PageBatchJob, filename: string): Promise<void> {
     const ctrl = job.controller
-    const target_dpi = DPI_PRESETS[this.settings.compress_preset] ?? null
+    const target_dpi = this._resolved_target_dpi()
     const greyscale  = this.settings.output_colours === 'Grayscale'
 
     const pages_out = await this._render_export_pages(ctrl, target_dpi, greyscale)
@@ -1167,6 +1179,7 @@ export class AppModel {
   get select_pattern(): string { return this._select_pattern }
   get current_follow(): boolean { return this._current_follow }
   get compress_preset(): string { return this.settings.compress_preset }
+  get custom_dpi(): number { return this.settings.custom_dpi }
   get output_colours(): string { return this.settings.output_colours }
   get export_format(): ExportFormat { return this.settings.export_format }
   get undo_depth(): number { return this.settings.undo_depth }

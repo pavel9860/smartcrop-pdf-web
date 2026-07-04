@@ -86,6 +86,13 @@ export const DPI_PRESETS: Record<string, number | null> = {
   'Low — 75 dpi':       75,
 }
 
+// Custom output resolution (task 15): a 'Custom' compress preset resolved against settings.custom_dpi
+// instead of DPI_PRESETS. Export-only, like every other output-quality setting (spec-web §W2 row 8).
+export const CUSTOM_DPI_PRESET = 'Custom'
+export const DEFAULT_CUSTOM_DPI = 300
+export const CUSTOM_DPI_MIN = 50
+export const CUSTOM_DPI_MAX = 1200
+
 // Export format names. Image formats (JPG/PNG/TIFF) deliver a single zip archive; TIFF is
 // hand-encoded (baseline RGB) since canvas has no native TIFF path.
 export const EXPORT_FORMATS = ['PDF', 'JPG', 'PNG', 'TIFF'] as const

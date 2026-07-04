@@ -3,7 +3,7 @@
 
 import type { AppModel } from '@core/model'
 import type { AppController, UIConfig } from './app'
-import { UNDO_DEPTH_OPTIONS, DPI_PRESETS, EXPORT_FORMATS } from '@core/constants'
+import { UNDO_DEPTH_OPTIONS } from '@core/constants'
 import { FONT_SIZE_PRESETS, ZOOM_PRESETS } from './constants'
 import { requireEl } from './dom'
 
@@ -16,14 +16,11 @@ export class SettingsView {
   private readonly _zoom_sel:   HTMLSelectElement
 
   // Output
-  private readonly _compress_sel: HTMLSelectElement
-  private readonly _format_sel:   HTMLSelectElement
   private readonly _folder_inp:   HTMLInputElement
   private readonly _folder_pick:  HTMLButtonElement
   private readonly _postfix_inp:  HTMLInputElement
 
   // Behaviour
-  private readonly _confirm_cb: HTMLInputElement
   private readonly _remember_cb: HTMLInputElement
   private readonly _undo_sel:  HTMLSelectElement
 
@@ -37,8 +34,6 @@ export class SettingsView {
     const undo_opts = UNDO_DEPTH_OPTIONS.map(n =>
       `<option value="${n}">${n}</option>`).join('')
     const font_opts = FONT_SIZE_PRESETS.map(n => `<option value="${n}">${n}</option>`).join('')
-    const compress_opts = Object.keys(DPI_PRESETS).map(k => `<option>${k}</option>`).join('')
-    const format_opts = EXPORT_FORMATS.map(f => `<option>${f}</option>`).join('')
     const zoom_opts = ZOOM_PRESETS.map(p =>
       `<option value="${p}">${Math.round(p * 100)}%</option>`).join('')
 
@@ -66,14 +61,6 @@ export class SettingsView {
       <section class="settings-section">
         <h3 class="settings-section__title">Output</h3>
         <div class="settings-row">
-          <span class="settings-label">Compress to</span>
-          <select class="select" id="sv-compress">${compress_opts}</select>
-        </div>
-        <div class="settings-row">
-          <span class="settings-label">Default format</span>
-          <select class="select" id="sv-format">${format_opts}</select>
-        </div>
-        <div class="settings-row">
           <span class="settings-label">Output folder</span>
           <div class="folder-row">
             <input class="text-input" id="sv-folder" type="text" placeholder="same as source" />
@@ -88,10 +75,6 @@ export class SettingsView {
 
       <section class="settings-section">
         <h3 class="settings-section__title">Behaviour</h3>
-        <div class="settings-row">
-          <span class="settings-label">Confirm before overwrite</span>
-          <label class="toggle-label"><input type="checkbox" id="sv-confirm" /></label>
-        </div>
         <div class="settings-row">
           <span class="settings-label">Remember last folder</span>
           <label class="toggle-label"><input type="checkbox" id="sv-remember" /></label>
@@ -116,13 +99,10 @@ export class SettingsView {
     this._font_sel   = requireEl(this._el, '#sv-font')
     this._zoom_sel   = requireEl(this._el, '#sv-zoom')
 
-    this._compress_sel = requireEl(this._el, '#sv-compress')
-    this._format_sel   = requireEl(this._el, '#sv-format')
     this._folder_inp   = requireEl(this._el, '#sv-folder')
     this._folder_pick  = requireEl(this._el, '#sv-folder-pick')
     this._postfix_inp  = requireEl(this._el, '#sv-postfix')
 
-    this._confirm_cb  = requireEl(this._el, '#sv-confirm')
     this._remember_cb = requireEl(this._el, '#sv-remember')
     this._undo_sel    = requireEl(this._el, '#sv-undo')
 
@@ -136,21 +116,14 @@ export class SettingsView {
     this._zoom_sel.addEventListener('change', () =>
       { ctrl.set_ui_scale(parseFloat(this._zoom_sel.value)) })
 
-    // Compress preset / default format are the SAME setting as the sidebar Output Quality
-    // card (spec §15: "the menu there and this one are the same setting") — both write
-    // through the one AppModel setter, so either control always reflects the other.
-    this._compress_sel.addEventListener('change', () =>
-      { ctrl.dispatch(() => { model.set_compress_preset(this._compress_sel.value) }) })
-    this._format_sel.addEventListener('change', () =>
-      { ctrl.dispatch(() => { model.set_export_format(this._format_sel.value) }) })
+    // Output quality (compress DPI / colour / format) lives solely in the sidebar Output Quality
+    // card and persists across sessions (ui/persist.ts) — no duplicate here (spec-web §W3).
     this._folder_inp.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_output_folder(this._folder_inp.value) }) })
     this._folder_pick.addEventListener('click', () => { void this._pick_folder(model, ctrl) })
     this._postfix_inp.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_output_postfix(this._postfix_inp.value) }) })
 
-    this._confirm_cb.addEventListener('change', () =>
-      { ctrl.set_confirm_overwrite(this._confirm_cb.checked) })
     this._remember_cb.addEventListener('change', () =>
       { ctrl.set_remember_folder(this._remember_cb.checked) })
     this._undo_sel.addEventListener('change', () =>
@@ -171,12 +144,9 @@ export class SettingsView {
       Math.abs(b - ui.ui_scale) < Math.abs(a - ui.ui_scale) ? b : a)
     this._zoom_sel.value = String(nearest)
 
-    this._compress_sel.value = model.compress_preset
-    this._format_sel.value   = model.export_format
     if (document.activeElement !== this._folder_inp) this._folder_inp.value = model.output_folder
     if (document.activeElement !== this._postfix_inp) this._postfix_inp.value = model.output_postfix
 
-    this._confirm_cb.checked  = ui.confirm_overwrite
     this._remember_cb.checked = ui.remember_folder
     this._undo_sel.value = String(model.undo_depth)
 

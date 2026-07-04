@@ -61,7 +61,6 @@ export function make_ctrl(): FakeController {
     toggle_detail(panel: unknown): void { rec('toggle_detail', panel) },
     set_theme(t: unknown): void { rec('set_theme', t) },
     set_font_size(n: unknown): void { rec('set_font_size', n) },
-    set_confirm_overwrite(b: unknown): void { rec('set_confirm_overwrite', b) },
     set_remember_folder(b: unknown): void { rec('set_remember_folder', b) },
     zoom(d: unknown): void { rec('zoom', d) },
     set_ui_scale(s: unknown): void { rec('set_ui_scale', s) },
