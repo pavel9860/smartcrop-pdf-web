@@ -1,9 +1,10 @@
 CLAUDE.md — SmartCrop PDF Web
 
 Current state (read this before anything else)
-HEAD is green: tsc --noEmit, eslint src, vitest run (151/151), vite build → deployable dist/.
-Red: vitest run --coverage (ui/ and pdf/ at 0% lines) and playwright test (tests/e2e/ does not
-exist). Do not trust any older ARCHITECTURE.md/spec-web claim not yet corrected against this —
+HEAD is green: tsc --noEmit, eslint src tests, vitest run (319/319), vite build → deployable dist/,
+and playwright test (tests/e2e/ EXISTS — smoke.spec.ts, crop_split.spec.ts, committed_window.spec.ts;
+chromium + firefox). Red: vitest run --coverage (ui/ and pdf/ below threshold on some files).
+Do not trust any older ARCHITECTURE.md/spec-web claim not yet corrected against this —
 verify every "Implemented"/"verified" row yourself before relying on it, and correct the doc as
 part of the work, not as a followup. Dewarp specifically is NOT a stub: full two-stage ONNX
 pipeline, verified end-to-end against the actual model files (io names/shapes/dtypes match,

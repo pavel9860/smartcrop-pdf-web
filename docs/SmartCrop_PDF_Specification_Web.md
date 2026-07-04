@@ -206,3 +206,33 @@ output colour are export-only, not applied to the preview), the LRU memory bound
 the keep-ratio lock enforced at the final normalisation step (§9.7), the batch fail-fast/cancel
 behavior (§14), the error taxonomy and dispatch contract (§20), the card layout and control order
 (§6, adapted per §W3), and every acceptance invariant in §22 except where §W2 documents a gap.
+
+---
+
+## W8. Committed-page crop coordinates (browser mechanism for desktop spec §9.3)
+
+A committed single-crop page (split = 1) is shown **cropped/zoomed to the committed box** and stays
+that way until Undo or a split-mode switch (desktop §9.1, §9.3). The desktop reads pointer input and
+paints overlays in the shown output's coordinates and maps them back to page coordinates; the web
+build makes that mapping explicit through one field.
+
+`ViewSnapshot.crop_origin {x,y}` is the full-page-unit top-left of the shown image: `{0,0}` on a full
+page, and the committed box's `(x0,y0)` on a committed page (where `page_w/page_h` are the box's own
+width/height). `canvas_view.ts` centres the cropped bitmap in the canvas, then for every
+page↔canvas conversion shifts by `crop_origin`:
+
+```
+canvas_px = img_origin + (page_coord − crop_origin) · scale      // painting overlays / draw_rect
+page_coord = crop_origin + (canvas_px − img_origin) / scale       // pointer → page
+```
+
+Consequences, matching desktop §9.3 behavior:
+
+- A drag on a committed page rubber-bands a **new drawn window over the cropped view with no zoom
+  change** — the canvas never flips back to the full page. The window is clamped to the committed box
+  (a new window can only tighten). It is committed only by the **Crop** button (draw is separate from
+  Crop, §12.2); `end_drag` never writes `applied`.
+- The committed crop itself is **not a drag target** — there is no "resize the committed box" gesture
+  (the web build has no `crop_edit` drag; grabbing the crop's edge draws a new window). Editing is:
+  draw a new window → Crop, or Undo. Esc / right-click drops the in-progress drawn window and leaves
+  the committed crop untouched (desktop §9.5 crop-never-dropped).

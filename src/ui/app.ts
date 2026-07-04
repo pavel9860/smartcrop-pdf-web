@@ -196,6 +196,9 @@ export class AppController {
   // Refresh
   // ---------------------------------------------------------------------------
 
+  // Test-only accessor (Playwright reads view_snapshot() via window.__model in DEV — see main.ts).
+  get model(): AppModel { return this._model }
+
   async refresh_all(): Promise<void> {
     await this._refresh_async()
   }

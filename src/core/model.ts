@@ -8,7 +8,7 @@ import {
 } from './document_state'
 import { History } from './history'
 import { type Settings, default_settings } from './settings'
-import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type CropEditDrag, type DrawnDrag } from './drag'
+import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type DrawnDrag } from './drag'
 import {
   type Box,
   hit_handle, point_in_box, apply_handle_drag, auto_crop_rect,
@@ -94,6 +94,10 @@ export interface ViewSnapshot {
   readonly image:      ImageBitmap | null   // null = loading
   readonly page_w:     number
   readonly page_h:     number
+  // Top-left of the coordinate space page_w/page_h/overlay/draw_rect live in, in full-page units.
+  // {0,0} for a full page; the committed box's origin on a committed (cropped) page so canvas_view
+  // can map pointer input and paint overlays into the zoomed cropped view (spec-web §W8).
+  readonly crop_origin: { readonly x: number; readonly y: number }
   readonly overlay:    readonly OverlayBox[]
   readonly draw_rect:  Box | null
   readonly position:   number               // 1-based output-page
@@ -130,7 +134,6 @@ export class AppModel {
   // Transient drag state (not snapshotted)
   private _drag:         DragState | null = null
   private _draw_rect:    Box | null = null
-  private _prev_applied: Box[] | null = null   // stash on drag start for cancel
 
   // History and settings
   readonly history = new History(DEFAULT_UNDO_DEPTH)
@@ -197,7 +200,6 @@ export class AppModel {
     this._current_follow = false
     this._drag = null
     this._draw_rect = null
-    this._prev_applied = null
     this._source_cache.clear()
     this._work_cache.clear()
     this._output_cache.clear()
@@ -543,8 +545,12 @@ export class AppModel {
       this._begin_draw_drag(pt, sz)   // outside the window → drop it, start a fresh draw
       return
     }
+    // A committed page (split = 1) is not itself a drag target — the crop is fixed until Undo or
+    // a new Crop. Any drag rubber-bands a NEW window over the cropped view (frozen spec §9.3),
+    // which commits only via the Crop button. So skip auto/crop-edit and draw directly.
+    const committed = this.document.applied.get(this._current_page)
+    if (committed && committed.length > 0) { this._begin_draw_drag(pt, sz); return }
     if (this._begin_auto_drag(pt, tol, sz)) return
-    if (this._begin_crop_edit_drag(pt, tol, sz)) return
     this._begin_draw_drag(pt, sz)
   }
 
@@ -581,8 +587,6 @@ export class AppModel {
     const h = hit_handle(live, px, py, tol)
     if (!h) return false
 
-    const committed = this.document.applied.get(this._current_page)
-    this._prev_applied = committed ? [...committed] : null
     this._drag = {
       kind: 'auto', handle: h, rect0: live, start: pt,
       page_w: sz.width, page_h: sz.height,
@@ -590,24 +594,6 @@ export class AppModel {
       left_base: this._anchor_left ? detected.x0 : union.x0,
       top_base:  this._anchor_top  ? detected.y0 : union.y0,
     } satisfies AutoDrag
-    return true
-  }
-
-  private _begin_crop_edit_drag(
-    pt: readonly [number, number], tol: number, sz: PageSize,
-  ): boolean {
-    const [px, py] = pt
-    const committed = this.document.applied.get(this._current_page)
-    if (!committed?.[0]) return false
-    const h = hit_handle(committed[0], px, py, tol)
-    if (!h) return false
-
-    this._prev_applied = [...committed]
-    this.history.push(this.document)
-    this._drag = {
-      kind: 'crop_edit', handle: h, rect0: committed[0],
-      start: pt, page_w: sz.width, page_h: sz.height,
-    } satisfies CropEditDrag
     return true
   }
 
@@ -625,16 +611,25 @@ export class AppModel {
     if (drag.kind === 'draw')      { this._update_draw_drag(drag, px, py, sz); return }
     if (drag.kind === 'auto')      { this._update_auto_drag(drag, px, py, sz); return }
     if (drag.kind === 'split')     { this._update_split_drag(drag, px, py); return }
-    if (drag.kind === 'drawn')     { this._update_drawn_drag(drag, px, py); return }
-    this._update_crop_edit_drag(drag, px, py, sz)
+    this._update_drawn_drag(drag, px, py)
   }
 
   private _update_draw_drag(drag: DrawDrag, px: number, py: number, sz: PageSize): void {
     const [sx, sy] = drag.start
-    this._draw_rect = clamp_box_drag({
+    let rect = clamp_box_drag({
       x0: Math.min(sx, px), y0: Math.min(sy, py),
       x1: Math.max(sx, px), y1: Math.max(sy, py),
     }, sz.width, sz.height)
+    // On a committed page the rubber-band lives in the cropped view's coordinates: keep it inside
+    // the committed box so a new window can only tighten, never spill past the crop (§9.3).
+    const committed = this.document.applied.get(this._current_page)?.[0]
+    if (committed) {
+      rect = {
+        x0: Math.max(rect.x0, committed.x0), y0: Math.max(rect.y0, committed.y0),
+        x1: Math.min(rect.x1, committed.x1), y1: Math.min(rect.y1, committed.y1),
+      }
+    }
+    this._draw_rect = rect
   }
 
   private _update_auto_drag(drag: AutoDrag, px: number, py: number, sz: PageSize): void {
@@ -664,14 +659,6 @@ export class AppModel {
       }
     }
     this.document.crop_rects = rects
-  }
-
-  private _update_crop_edit_drag(drag: CropEditDrag, px: number, py: number, sz: PageSize): void {
-    let updated = apply_handle_drag(drag.handle, drag.rect0,
-      drag.start, [px, py], drag.page_w, drag.page_h)
-    if (this._keep_ratio) updated = keep_ratio_normalise(updated, this._ratio, sz.width, sz.height)
-    this.document.applied.set(this._current_page, [updated])
-    this._invalidate_output_cache(this._current_page)
   }
 
   private _update_drawn_drag(drag: DrawnDrag, px: number, py: number): void {
@@ -720,7 +707,7 @@ export class AppModel {
       const sz = this._current_page_size()
       this.document.drawn = keep_ratio_normalise(this.document.drawn, this._ratio, sz.width, sz.height)
     }
-    // auto and crop_edit: already committed live during update_drag
+    // auto: already committed live during update_drag
   }
 
   cancel_drag(): void {
@@ -734,17 +721,6 @@ export class AppModel {
     if (drag.kind === 'auto') {
       this.document.offsets = drag.offsets0
     }
-    if (drag.kind === 'crop_edit' && this._prev_applied !== null) {
-      // Restore the committed crop exactly as it was before (spec §9.5)
-      if (this._prev_applied.length > 0) {
-        this.document.applied.set(this._current_page, this._prev_applied)
-      } else {
-        this.document.applied.delete(this._current_page)
-      }
-      this._invalidate_output_cache(this._current_page)
-      this.history.undo(this.document)   // discard the snapshot taken in begin_drag
-    }
-    this._prev_applied = null
   }
 
   // ---------------------------------------------------------------------------
@@ -1076,17 +1052,19 @@ export class AppModel {
 
     const committed = this.document.applied.get(p)
 
-    // A committed page (and no pending drawn window) paints the cropped output at the CROP box's
-    // OWN dimensions with no outline over it — desktop canvas_view.py returns
-    // ViewSnapshot(image, box.width, box.height, …). Returning full-page dims + the crop outline
-    // stretched the crop to the page aspect and left a stray frame on it (bug 18).
-    if (committed && committed.length > 0 && !this.document.drawn) {
+    // A committed page STAYS shown cropped — at the CROP box's own dimensions, origin at the box's
+    // top-left (crop_origin, so canvas_view maps pointer/overlay into the cropped view) — even while
+    // a drawn window exists: the new window is an outline OVER the cropped view with no zoom change
+    // (frozen spec §9.3). A plain committed page carries no outline (bug 18); it only appears once a
+    // window is being drawn. The crop unzooms only on Undo or a split-mode switch.
+    if (committed && committed.length > 0) {
       const box = committed[Math.min(split_idx, committed.length - 1)] ?? committed[0]
       return {
         image:  this._output_cache.get(`${p}:${split_idx}`) ?? null,
         page_w: box ? box_width(box)  : sz.width,
         page_h: box ? box_height(box) : sz.height,
-        overlay: [],
+        crop_origin: box ? { x: box.x0, y: box.y0 } : { x: 0, y: 0 },
+        overlay: this._committed_overlay(box),
         draw_rect:  this._draw_rect,
         position:   this._view_pos,
         total:      this.view_total,
@@ -1099,6 +1077,7 @@ export class AppModel {
       image:   this._current_bitmap ?? null,
       page_w:  sz.width,
       page_h:  sz.height,
+      crop_origin: { x: 0, y: 0 },
       overlay: this._build_overlay(p),
       draw_rect:  this._draw_rect,
       position:   this._view_pos,
@@ -1106,6 +1085,20 @@ export class AppModel {
       status:     this._status_string(p, sz),
       is_loading: this._is_loading,
     }
+  }
+
+  // The outline shown over a committed (cropped) page: only the drawn window, clamped to the crop
+  // box so it can never paint outside the cropped view (frozen spec §9.3). Empty when no window is
+  // being drawn (a plain committed crop shows no frame — bug 18).
+  private _committed_overlay(box: Box | undefined): OverlayBox[] {
+    const drawn = this.document.drawn
+    if (!drawn || !box) return []
+    return [{ kind: 'committed', box: {
+      x0: Math.max(box.x0, Math.min(drawn.x0, box.x1)),
+      y0: Math.max(box.y0, Math.min(drawn.y0, box.y1)),
+      x1: Math.max(box.x0, Math.min(drawn.x1, box.x1)),
+      y1: Math.max(box.y0, Math.min(drawn.y1, box.y1)),
+    } }]
   }
 
   // Call this before reading view_snapshot() to ensure bitmaps are ready.
@@ -1307,7 +1300,7 @@ export class AppModel {
 
   private _synth_snapshot(): ViewSnapshot {
     return {
-      image: null, page_w: SYNTH_W, page_h: SYNTH_H,
+      image: null, page_w: SYNTH_W, page_h: SYNTH_H, crop_origin: { x: 0, y: 0 },
       overlay: [], draw_rect: null, position: 1, total: 0,
       status: '', is_loading: false,
     }

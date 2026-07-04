@@ -24,6 +24,10 @@ export class CanvasView {
   private _scale = 1
   private _img_x = 0
   private _img_y = 0
+  // Full-page-unit origin of the shown image. {0,0} on a full page; the committed box's top-left on
+  // a committed (cropped) page, so pointer input and painted overlays map into the zoomed cropped
+  // view: canvas = _img + (page − crop_origin)·scale (spec-web §W8).
+  private _crop_origin = { x: 0, y: 0 }
   private _page_w = SYNTH_W
   private _page_h = SYNTH_H
   private readonly _coords_el: HTMLDivElement
@@ -113,6 +117,7 @@ export class CanvasView {
       (ch - CANVAS_MARGIN * 2) / snap.page_h,
     )
     this._scale = scale
+    this._crop_origin = snap.crop_origin
     this._img_x = (cw - snap.page_w * scale) / 2
     this._img_y = (ch - snap.page_h * scale) / 2
 
@@ -145,10 +150,11 @@ export class CanvasView {
     item: OverlayBox,
     scale: number,
   ): void {
-    const x0 = this._img_x + item.box.x0 * scale
-    const y0 = this._img_y + item.box.y0 * scale
-    const x1 = this._img_x + item.box.x1 * scale
-    const y1 = this._img_y + item.box.y1 * scale
+    const ox = this._crop_origin.x, oy = this._crop_origin.y
+    const x0 = this._img_x + (item.box.x0 - ox) * scale
+    const y0 = this._img_y + (item.box.y0 - oy) * scale
+    const x1 = this._img_x + (item.box.x1 - ox) * scale
+    const y1 = this._img_y + (item.box.y1 - oy) * scale
     const w  = x1 - x0, h = y1 - y0
 
     const color = item.kind === 'split' ? this._theme.split : this._theme.crop
@@ -198,8 +204,8 @@ export class CanvasView {
     ctx.lineWidth   = RUBBER_BAND_LINE_WIDTH
     ctx.setLineDash([...RUBBER_BAND_DASH])
     ctx.strokeRect(
-      this._img_x + rect.x0 * scale,
-      this._img_y + rect.y0 * scale,
+      this._img_x + (rect.x0 - this._crop_origin.x) * scale,
+      this._img_y + (rect.y0 - this._crop_origin.y) * scale,
       (rect.x1 - rect.x0) * scale,
       (rect.y1 - rect.y0) * scale,
     )
@@ -209,9 +215,12 @@ export class CanvasView {
   // Cursor read-out in the bottom-right label (desktop canvas_view.py: coords_label at relx/rely
   // 1.0, "se"). Empty when the pointer is off the page. Same font/colour as the sidebar text.
   private _update_coords(px: number, py: number): void {
-    const inside = px >= 0 && py >= 0 && px <= this._page_w && py <= this._page_h
+    // px/py are full-page units; the read-out is relative to the shown view (the crop on a
+    // committed page), so shift by crop_origin before the 0–100% mapping.
+    const rx = px - this._crop_origin.x, ry = py - this._crop_origin.y
+    const inside = rx >= 0 && ry >= 0 && rx <= this._page_w && ry <= this._page_h
     const text = inside
-      ? `x ${(px / this._page_w * 100).toFixed(1)}%  y ${(py / this._page_h * 100).toFixed(1)}%`
+      ? `x ${(rx / this._page_w * 100).toFixed(1)}%  y ${(ry / this._page_h * 100).toFixed(1)}%`
       : ''
     if (this._coords_el.textContent !== text) this._coords_el.textContent = text
   }
@@ -248,8 +257,8 @@ export class CanvasView {
     const cx   = ev.clientX - rect.left
     const cy   = ev.clientY - rect.top
     return [
-      (cx - this._img_x) / this._scale,
-      (cy - this._img_y) / this._scale,
+      this._crop_origin.x + (cx - this._img_x) / this._scale,
+      this._crop_origin.y + (cy - this._img_y) / this._scale,
     ]
   }
 

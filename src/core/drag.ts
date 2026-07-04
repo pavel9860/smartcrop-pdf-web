@@ -28,20 +28,12 @@ export interface SplitDrag {
   readonly page_h: number
 }
 
-// Rubber-banding a new crop rectangle on an empty/committed page
+// Rubber-banding a new crop rectangle on an empty/committed page. On a committed page it draws a
+// new window over the cropped view (frozen spec §9.3) — the committed crop is not itself a drag
+// target, so there is no separate "edit the committed box" gesture.
 export interface DrawDrag {
   readonly kind:  'draw'
   readonly start: readonly [number, number]
-  readonly page_w: number
-  readonly page_h: number
-}
-
-// Editing a committed single-crop (drag from committed-page handle)
-export interface CropEditDrag {
-  readonly kind:   'crop_edit'
-  readonly handle: HandleId
-  readonly rect0:  Box
-  readonly start:  readonly [number, number]
   readonly page_w: number
   readonly page_h: number
 }
@@ -56,4 +48,4 @@ export interface DrawnDrag {
   readonly page_h: number
 }
 
-export type DragState = AutoDrag | SplitDrag | DrawDrag | CropEditDrag | DrawnDrag
+export type DragState = AutoDrag | SplitDrag | DrawDrag | DrawnDrag

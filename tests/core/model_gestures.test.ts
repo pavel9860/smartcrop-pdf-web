@@ -114,6 +114,102 @@ describe('crop-edit drag', () => {
   })
 })
 
+// Committed-page (split=1) crop-window behavior (frozen spec §9.3, batch C tasks 6-8): a committed
+// page stays zoomed to its crop; a drag draws a NEW window OVER the cropped view (never flips back
+// to the full page); the committed crop itself is not a drag target; only Crop commits.
+describe('committed-page draw (spec §9.3)', () => {
+  // Draw a window then commit it → the page is shown cropped to that box.
+  async function committed(mode = Mode.NORMAL): Promise<AppModel> {
+    const m = await loaded(4, mode, 200, 300)
+    m.begin_drag(10, 10, 5); m.update_drag(150, 250); m.end_drag()   // draw {10,10,150,250}
+    m.apply_crop()                                                   // Crop commits it to applied
+    return m
+  }
+
+  it('committed page exposes crop_origin at the box top-left and crop dims', async () => {
+    const m = await committed()
+    await m.prepare_current_view()
+    const s = m.view_snapshot()
+    expect(s.crop_origin).toEqual({ x: 10, y: 10 })
+    expect([s.page_w, s.page_h]).toEqual([140, 240])
+    expect(s.image).not.toBeNull()          // cropped output bitmap rendered, not "loading"
+  })
+
+  it('a full page reports crop_origin {0,0}', async () => {
+    const m = await loaded(4, Mode.NORMAL, 200, 300)
+    const s = m.view_snapshot()
+    expect(s.crop_origin).toEqual({ x: 0, y: 0 })
+    expect([s.page_w, s.page_h]).toEqual([200, 300])
+  })
+
+  it('drawing on a committed page stays cropped and shows the window over it (no flip to full page)', async () => {
+    const m = await committed()
+    m.begin_drag(30, 40, 5); m.update_drag(120, 200); m.end_drag()
+    const s = m.view_snapshot()
+    expect([s.page_w, s.page_h]).toEqual([140, 240])   // STILL the committed crop, not 200×300
+    expect(s.crop_origin).toEqual({ x: 10, y: 10 })
+    const win = s.overlay.find(o => o.kind === 'committed')
+    expect(win?.box).toEqual({ x0: 30, y0: 40, x1: 120, y1: 200 })  // drawn window over the crop
+  })
+
+  it('only Crop commits — a draw does not change applied (crop dims unchanged until Crop)', async () => {
+    const m = await committed()
+    m.begin_drag(30, 40, 5); m.update_drag(120, 200); m.end_drag()
+    expect([m.view_snapshot().page_w, m.view_snapshot().page_h]).toEqual([140, 240])
+    m.apply_crop()                                     // now commit the drawn window
+    await m.prepare_current_view()
+    expect([m.view_snapshot().page_w, m.view_snapshot().page_h]).toEqual([90, 160])
+  })
+
+  it('the committed crop is not a drag target — a grab at its corner draws, never resizes applied', async () => {
+    const m = await committed()
+    m.begin_drag(150, 250, 6); m.update_drag(140, 240); m.end_drag()   // at the crop corner
+    expect([m.view_snapshot().page_w, m.view_snapshot().page_h]).toEqual([140, 240])  // applied intact
+  })
+
+  it('Esc / right-click mid-draw drops the window but leaves the committed crop', async () => {
+    const m = await committed()
+    m.begin_drag(30, 40, 5); m.update_drag(120, 200)
+    m.cancel_drag()
+    const s = m.view_snapshot()
+    expect([s.page_w, s.page_h]).toEqual([140, 240])   // crop intact
+    expect(s.overlay).toHaveLength(0)                  // drawn window gone, no outline
+  })
+
+  it('a sub-2·MIN_RECT draw on a committed page is a no-op', async () => {
+    const m = await committed()
+    m.begin_drag(60, 60, 5); m.update_drag(62, 62); m.end_drag()
+    const s = m.view_snapshot()
+    expect([s.page_w, s.page_h]).toEqual([140, 240])
+    expect(s.overlay).toHaveLength(0)                  // discarded, no window
+  })
+
+  it('cross-mode (task 7): the same sequence yields identical geometry in NORMAL and SCANNED', async () => {
+    const run = async (mode: Mode): Promise<{ o: { x: number; y: number }; w: number; h: number; box: Box | undefined }> => {
+      const m = await committed(mode)
+      m.begin_drag(30, 40, 5); m.update_drag(120, 200); m.end_drag()
+      const s = m.view_snapshot()
+      return { o: s.crop_origin, w: s.page_w, h: s.page_h, box: s.overlay.find(x => x.kind === 'committed')?.box }
+    }
+    const a = await run(Mode.NORMAL)
+    const b = await run(Mode.SCANNED)
+    expect(a).toEqual(b)
+  })
+
+  it('permutability (task 8): draw→Crop and Crop-committed→draw→Crop reach the same tightened crop', async () => {
+    // Path 1: draw a tighter window on the committed page, then Crop.
+    const m1 = await committed()
+    m1.begin_drag(30, 40, 5); m1.update_drag(120, 200); m1.end_drag()
+    m1.apply_crop(); await m1.prepare_current_view()
+    // Path 2: draw the final box directly on a fresh page, then Crop (no intermediate commit).
+    const m2 = await loaded(4, Mode.NORMAL, 200, 300)
+    m2.begin_drag(30, 40, 5); m2.update_drag(120, 200); m2.end_drag()
+    m2.apply_crop(); await m2.prepare_current_view()
+    expect([m1.view_snapshot().page_w, m1.view_snapshot().page_h])
+      .toEqual([m2.view_snapshot().page_w, m2.view_snapshot().page_h])
+  })
+})
+
 describe('draw with keep-ratio + misc', () => {
   it('a keep-ratio draw commits a ratio-normalised box', async () => {
     const m = await loaded(4, Mode.NORMAL, 200, 300)
