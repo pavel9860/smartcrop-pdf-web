@@ -54,6 +54,7 @@ actual running toolchain this update, not documentation staleness.
 | 5 | Batch responsiveness (§14, §17: ~150 ms/page target) | Long operations run off the interaction path via the Tk `after`-tick loop; the window stays responsive between pages | Detect / filter / dewarp run on the **main (UI) thread** — the tab can visibly pause for the duration of each page's processing (still bounded per-page, §W5) rather than staying responsive between pages. | ARCHITECTURE §7a |
 | 6 | `confirm_overwrite` setting (§15) | Warns before silently replacing an existing file on export | **Stored but not enforced.** No overwrite-detection path exists yet; the setting is inert. | §W6 below — no File System Access API overwrite check wired up |
 | 7 | Binarization DPI scaling (§10.2) | Sauvola window / background-kernel / min-area scale with the page's embedded DPI | Fixed kernel sizes — the web's scanned-mode source DPI (`SRC_DPI`) is a constant 200, unlike desktop's variable source DPI, so this mainly affects the B/W filter's kernel size relative to desktop's 150-DPI reference case, not correctness. | ARCHITECTURE §9 — low-severity fidelity residual |
+| 8 | Output quality → preview (§12.1 WYSIWYG) | Preview is the exact output raster (WYSIWYG) | **Deliberate deviation (2026-07-04).** Compress DPI and output colour (Grayscale) apply to the **exported file only**, never the on-screen preview. Rendering the committed-crop preview at the export DPI made a crop appear at e.g. 75 dpi (395×505) and in grayscale; the editing view must stay full-resolution and true-colour. `render_output_image` remains the single render path — WYSIWYG is preserved for crop geometry, filters and rotation; only the DPI/colour arguments differ (preview: `null`/`false`; export: preset/colour). Set by `_prerender_output_views` (preview) vs `_render_export_pages` (export). | ARCHITECTURE §1 |
 
 Everything else in the desktop spec — classification (§4), coordinate system/canvas fit (§5), the
 full crop-window state machine (§9) including keep-ratio (§9.7) and cancel-drag (§9.3/§9.6),
@@ -192,7 +193,8 @@ behavior this row describes.
 ## W7. What does not change
 
 Everything in desktop spec §4–§22 not listed in §W2's deviation table: the crop-never-dropped
-invariant (§9.5, §12.4), the one-render-path WYSIWYG guarantee (§12.1), the LRU memory bound (§17),
+invariant (§9.5, §12.4), the one-render-path WYSIWYG guarantee (§12.1, qualified by §W2 row 8 — compress DPI and
+output colour are export-only, not applied to the preview), the LRU memory bound (§17),
 the keep-ratio lock enforced at the final normalisation step (§9.7), the batch fail-fast/cancel
 behavior (§14), the error taxonomy and dispatch contract (§20), the card layout and control order
 (§6, adapted per §W3), and every acceptance invariant in §22 except where §W2 documents a gap.

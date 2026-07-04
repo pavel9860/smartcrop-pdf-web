@@ -1132,15 +1132,17 @@ export class AppModel {
   // between split views via view_snapshot() never blocks on a render call).
   private async _prerender_output_views(p: number, committed: Box[], work: ImageBitmap): Promise<void> {
     const sz = this._current_page_size()
-    const target_dpi = DPI_PRESETS[this.settings.compress_preset] ?? null
-    const greyscale  = this.settings.output_colours === 'Grayscale'
+    // Preview must NOT bake in output quality: compress DPI + grayscale are EXPORT-only
+    // (spec-web §W2 row 8). Rendering the working preview at the export DPI made a committed
+    // crop show at e.g. 75 dpi (395×505) and in grayscale; the editing view stays full-res and
+    // true-colour. render_output_image is still the single path — only the DPI/colour args differ.
     for (let i = 0; i < committed.length; i++) {
       const key = `${p}:${i}`
       if (this._output_cache.has(key)) continue
       const box = committed[i]
       if (!box) continue
       const out = await this._adapter.render_output_image(
-        work, box, sz.width, sz.height, target_dpi, greyscale)
+        work, box, sz.width, sz.height, null, false)
       this._output_cache.set(key, out)
     }
   }

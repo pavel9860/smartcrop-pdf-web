@@ -27,9 +27,11 @@ interface MockOpts {
 function make_mock_adapter(opts: MockOpts = {}): {
   adapter: RendererAdapter
   calls: Record<string, number>
+  render_args: { dpi: number | null; grey: boolean }[]
 } {
   const { page_count = 3, page_w = 200, page_h = 300, mode = Mode.NORMAL } = opts
   const calls: Record<string, number> = {}
+  const render_args: { dpi: number | null; grey: boolean }[] = []
   const bump = (k: string): void => { calls[k] = (calls[k] ?? 0) + 1 }
 
   const adapter: RendererAdapter = {
@@ -52,8 +54,9 @@ function make_mock_adapter(opts: MockOpts = {}): {
       bump('get_work_image')
       return Promise.resolve(make_bitmap(page_w, page_h))
     },
-    render_output_image: (_src, box): Promise<ImageBitmap> => {
+    render_output_image: (_src, box, _pw, _ph, target_dpi, greyscale): Promise<ImageBitmap> => {
       bump('render_output_image')
+      render_args.push({ dpi: target_dpi, grey: greyscale })
       const w = Math.max(1, Math.round(box.x1 - box.x0))
       const h = Math.max(1, Math.round(box.y1 - box.y0))
       return Promise.resolve(make_bitmap(w, h))
@@ -77,7 +80,7 @@ function make_mock_adapter(opts: MockOpts = {}): {
     },
     close: (): void => { bump('close') },
   }
-  return { adapter, calls }
+  return { adapter, calls, render_args }
 }
 
 const FILE = (name = 'a.pdf'): File => new File(['x'], name, { type: 'application/pdf' })
@@ -518,6 +521,28 @@ describe('output settings', () => {
     model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()
     model.undo()
     expect(model.output_colours).toBe('Grayscale')
+  })
+
+  it('output quality (DPI + colour) applies to export only, not the committed-crop preview (§W2 row 8)', async () => {
+    const { adapter, render_args } = make_mock_adapter({ page_w: 200, page_h: 300 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    model.set_compress_preset('Low — 75 dpi')
+    model.set_output_colours('Grayscale')
+    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag(); model.apply_crop()
+
+    render_args.length = 0
+    await model.prepare_current_view()
+    expect(render_args.length).toBeGreaterThan(0)          // committed page pre-rendered for preview
+    for (const a of render_args) {
+      expect(a.dpi).toBeNull()                             // preview stays full working resolution
+      expect(a.grey).toBe(false)                           // preview stays true-colour
+    }
+
+    render_args.length = 0
+    await model.export('out.pdf').result()
+    expect(render_args.some(a => a.dpi === 75)).toBe(true) // export honours the compress preset
+    expect(render_args.some(a => a.grey)).toBe(true)
   })
 })
 
