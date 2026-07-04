@@ -55,6 +55,7 @@ actual running toolchain this update, not documentation staleness.
 | 6 | `confirm_overwrite` setting (§15) | Warns before silently replacing an existing file on export | **Control removed (2026-07-04).** The web export path streams a browser download and cannot detect or block an overwrite (no File System Access write), so the setting was inert; the Settings checkbox is removed rather than shown with no effect. | §W6 below |
 | 7 | Binarization DPI scaling (§10.2) | Sauvola window / background-kernel / min-area scale with the page's embedded DPI | Fixed kernel sizes — the web's scanned-mode source DPI (`SRC_DPI`) is a constant 200, unlike desktop's variable source DPI, so this mainly affects the B/W filter's kernel size relative to desktop's 150-DPI reference case, not correctness. | ARCHITECTURE §9 — low-severity fidelity residual |
 | 8 | Output quality → preview (§12.1 WYSIWYG) | Preview is the exact output raster (WYSIWYG) | **Deliberate deviation (2026-07-04).** Compress DPI and output colour (Grayscale) apply to the **exported file only**, never the on-screen preview. Rendering the committed-crop preview at the export DPI made a crop appear at e.g. 75 dpi (395×505) and in grayscale; the editing view must stay full-resolution and true-colour. `render_output_image` remains the single render path — WYSIWYG is preserved for crop geometry, filters and rotation; only the DPI/colour arguments differ (preview: `null`/`false`; export: preset/colour). Set by `_prerender_output_views` (preview) vs `_render_export_pages` (export). | ARCHITECTURE §1 |
+| 9 | Keep-ratio during drags (§9.7) | Ratio snaps on RELEASE, anchored top-left; split rectangles snap on release | **Deliberate web deviation (2026-07-04).** Keep-ratio holds **live** throughout every resize (no deform-then-jump), including 2/4-split rectangles, and a resize is anchored on the corner/edge **opposite** the dragged handle — edge drags grow the perpendicular axis symmetrically about the box centre — so only the dragged side moves, never the whole window. Frozen §9.7 specifies on-release/top-left; this is a usability fix (extends the already-live drawn-window behavior to splits and corrects the anchor). `keep_ratio_anchored()` in `geometry.ts`, applied live in `_update_split_drag`/`_update_drawn_drag`; static sources (live auto crop, fresh-draw release) keep the top-left `keep_ratio_normalise`. | ARCHITECTURE §5.4 |
 
 Everything else in the desktop spec — classification (§4), coordinate system/canvas fit (§5), the
 full crop-window state machine (§9) including keep-ratio (§9.7) and cancel-drag (§9.3/§9.6),
@@ -203,7 +204,8 @@ behavior this row describes.
 Everything in desktop spec §4–§22 not listed in §W2's deviation table: the crop-never-dropped
 invariant (§9.5, §12.4), the one-render-path WYSIWYG guarantee (§12.1, qualified by §W2 row 8 — compress DPI and
 output colour are export-only, not applied to the preview), the LRU memory bound (§17),
-the keep-ratio lock enforced at the final normalisation step (§9.7), the batch fail-fast/cancel
+the keep-ratio lock (§9.7, qualified by §W2 row 9 — the web holds the ratio live during drags and
+anchors a resize on the opposite handle, not on-release/top-left), the batch fail-fast/cancel
 behavior (§14), the error taxonomy and dispatch contract (§20), the card layout and control order
 (§6, adapted per §W3), and every acceptance invariant in §22 except where §W2 documents a gap.
 

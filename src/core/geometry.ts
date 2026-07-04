@@ -203,6 +203,36 @@ export function keep_ratio_normalise(
   return { x0: box.x0, y0: box.y0, x1, y1 }
 }
 
+// Keep-ratio for a LIVE resize, anchored on the corner/edge OPPOSITE the dragged handle so only
+// the dragged side moves (never the whole window). Width is authoritative for corner + vertical-edge
+// drags, height for horizontal-edge drags; an edge drag grows the perpendicular axis symmetrically
+// about the box centre. A 'move' preserves the ratio already. Deviates from frozen §9.7's
+// on-release/top-left rule — see spec-web §W2 row 9.
+export function keep_ratio_anchored(
+  box: Box,
+  ratio: number,
+  handle: HandleId,
+  page_w: number,
+  page_h: number,
+): Box {
+  const w = box.x1 - box.x0
+  const h = box.y1 - box.y0
+  let { x0, y0, x1, y1 } = box
+
+  switch (handle) {
+    case 'BR': y1 = y0 + w / ratio; break                       // anchor TL
+    case 'BL': y1 = y0 + w / ratio; break                       // anchor TR
+    case 'TR': y0 = y1 - w / ratio; break                       // anchor BL
+    case 'TL': y0 = y1 - w / ratio; break                       // anchor BR
+    case 'L':
+    case 'R': { const nh = w / ratio, cy = (y0 + y1) / 2; y0 = cy - nh / 2; y1 = cy + nh / 2; break }
+    case 'T':
+    case 'B': { const nw = h * ratio, cx = (x0 + x1) / 2; x0 = cx - nw / 2; x1 = cx + nw / 2; break }
+    case 'move': break                                          // translation preserves the ratio
+  }
+  return clamp_box_drag({ x0, y0, x1, y1 }, page_w, page_h)
+}
+
 // Rotate a box 90° CW within a page (spec §13).
 // After rotation the page dimensions swap: new page is (page_h × page_w).
 export function rotate_box_cw(box: Box, page_h: number): Box {

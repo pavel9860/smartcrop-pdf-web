@@ -12,7 +12,7 @@ import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type Draw
 import {
   type Box,
   hit_handle, point_in_box, apply_handle_drag, auto_crop_rect,
-  offsets_from_rect, keep_ratio_normalise, clamp_box_drag,
+  offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
   split_rects_grid, rotate_box_cw, reindex_map, detection_union,
   MIN_RECT, box_width, box_height,
 } from './geometry'
@@ -645,8 +645,13 @@ export class AppModel {
   }
 
   private _update_split_drag(drag: SplitDrag, px: number, py: number): void {
-    const updated = apply_handle_drag(drag.handle, drag.rect0,
+    let updated = apply_handle_drag(drag.handle, drag.rect0,
       drag.start, [px, py], drag.page_w, drag.page_h)
+    // Keep-ratio holds LIVE during a split resize (spec-web §W2 row 9), anchored opposite the
+    // dragged handle so the window never deforms then jumps on release. A 'move' preserves it.
+    if (this._keep_ratio && drag.handle !== 'move') {
+      updated = keep_ratio_anchored(updated, this._ratio, drag.handle, drag.page_w, drag.page_h)
+    }
     const rects = [...this.document.crop_rects]
     rects[drag.idx] = updated
     if (this._same_size) {
@@ -662,14 +667,13 @@ export class AppModel {
   }
 
   private _update_drawn_drag(drag: DrawnDrag, px: number, py: number): void {
-    let box = apply_handle_drag(drag.handle ?? 'move', drag.rect0,
+    const box = apply_handle_drag(drag.handle ?? 'move', drag.rect0,
       drag.start, [px, py], drag.page_w, drag.page_h)
-    // Keep-ratio holds LIVE during a resize so the window never deforms then snaps; a plain move
-    // (handle null) already preserves the ratio, so it's left alone.
-    if (this._keep_ratio && drag.handle) {
-      box = keep_ratio_normalise(box, this._ratio, drag.page_w, drag.page_h)
-    }
-    this.document.drawn = box
+    // Keep-ratio holds LIVE during a resize, anchored opposite the dragged handle so only the
+    // dragged side moves (spec-web §W2 row 9). A move (null/'move' handle) preserves the ratio.
+    this.document.drawn = (this._keep_ratio && drag.handle && drag.handle !== 'move')
+      ? keep_ratio_anchored(box, this._ratio, drag.handle, drag.page_w, drag.page_h)
+      : box
   }
 
   end_drag(): void {
@@ -696,18 +700,9 @@ export class AppModel {
       return
     }
 
-    if (drag.kind === 'split' && this._keep_ratio) {
-      // Keep-ratio snap on release (spec §9.7)
-      const rects = this.document.crop_rects.map(r =>
-        keep_ratio_normalise(r, this._ratio, drag.page_w, drag.page_h))
-      this.document.crop_rects = rects
-    }
-
-    if (drag.kind === 'drawn' && this._keep_ratio && this.document.drawn) {
-      const sz = this._current_page_size()
-      this.document.drawn = keep_ratio_normalise(this.document.drawn, this._ratio, sz.width, sz.height)
-    }
-    // auto: already committed live during update_drag
+    // split & drawn: keep-ratio is now held LIVE during the drag (spec-web §W2 row 9), so there is
+    // no release-time re-snap — that used a top-left anchor and would shift the window on mouse-up.
+    // auto: already committed live during update_drag.
   }
 
   cancel_drag(): void {

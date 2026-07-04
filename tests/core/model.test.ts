@@ -569,6 +569,35 @@ describe('output settings', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Keep-ratio live + anchored (spec-web §W2 row 9)
+// ---------------------------------------------------------------------------
+
+describe('keep-ratio live + anchored', () => {
+  it('drawn-window resize anchors the opposite corner (bug 2, 1-split)', async () => {
+    const model = await loaded_model({ page_w: 400, page_h: 400 })
+    model.begin_drag(50, 50, 5); model.update_drag(250, 250); model.end_drag()  // draw {50,50,250,250}
+    model.set_keep_ratio(true, 2.0)
+    model.begin_drag(50, 50, 8); model.update_drag(80, 80); model.end_drag()     // drag TL handle
+    const box = model.view_snapshot().overlay[0]?.box
+    expect(box).toBeDefined()
+    expect(box!.x1).toBeCloseTo(250)                          // BR x fixed (opposite anchor)
+    expect(box!.y1).toBeCloseTo(250)                          // BR y fixed
+    expect((box!.x1 - box!.x0) / (box!.y1 - box!.y0)).toBeCloseTo(2.0)
+  })
+
+  it('2-split resize holds the ratio LIVE during the drag (bug 1)', async () => {
+    const model = await loaded_model({ page_w: 400, page_h: 600 })
+    model.set_split(2)
+    model.set_keep_ratio(true, 1.0)                           // square
+    model.begin_drag(200, 600, 10); model.update_drag(150, 300)  // BR of rect 0, no end_drag yet
+    const boxes = model.view_snapshot().overlay.filter(o => o.kind === 'split').map(o => o.box)
+    expect(boxes).toHaveLength(2)
+    const r0 = boxes[0]!
+    expect((r0.x1 - r0.x0) / (r0.y1 - r0.y0)).toBeCloseTo(1.0) // ratio held mid-drag, not on release
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Rotate / delete
 // ---------------------------------------------------------------------------
 
