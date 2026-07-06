@@ -244,6 +244,34 @@ export function rotate_box_cw(box: Box, page_h: number): Box {
   }
 }
 
+// Per-edge deltas of a drag (updated − rect0) — the unit that same-size v2 propagates to the
+// partner windows (spec-web §W2 row 10).
+export interface EdgeDeltas { dl: number; dt: number; dr: number; db: number }
+
+export function edge_deltas(rect0: Box, updated: Box): EdgeDeltas {
+  return {
+    dl: updated.x0 - rect0.x0, dt: updated.y0 - rect0.y0,
+    dr: updated.x1 - rect0.x1, db: updated.y1 - rect0.y1,
+  }
+}
+
+// Apply mirrored edge deltas to a partner window's own drag-start rectangle (same-size v2,
+// spec-web §W2 row 10): a partner in the other column swaps+negates the x pair (ΔL′=−ΔR,
+// ΔR′=−ΔL), the other row the y pair (ΔT′=−ΔB, ΔB′=−ΔT); unmirrored axes copy unchanged.
+// The window keeps its own placement — only its sides move, in mirrored directions.
+export function apply_edge_deltas(
+  base: Box, d: EdgeDeltas, mirror_cols: boolean, mirror_rows: boolean,
+  page_w: number, page_h: number,
+): Box {
+  const dl = mirror_cols ? -d.dr : d.dl
+  const dr = mirror_cols ? -d.dl : d.dr
+  const dt = mirror_rows ? -d.db : d.dt
+  const db = mirror_rows ? -d.dt : d.db
+  return clamp_box_drag(
+    { x0: base.x0 + dl, y0: base.y0 + dt, x1: base.x1 + dr, y1: base.y1 + db },
+    page_w, page_h)
+}
+
 // Initial split rectangles as an even grid (spec §7.3, §9.6).
 // Order: 1=top-left, 2=bottom-left, 3=top-right, 4=bottom-right (spec TODO §17).
 export function split_rects_grid(n: 1 | 2 | 4, page_w: number, page_h: number): Box[] {

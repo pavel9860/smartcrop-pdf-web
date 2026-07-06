@@ -7,9 +7,11 @@ describe('output-quality persistence (task 12)', () => {
   it('round-trips saved prefs across a (simulated) session', () => {
     save_output_prefs({
       compress_preset: 'Custom', custom_dpi: 220, output_colours: 'Grayscale', export_format: 'PNG',
+      paper_size: 'A4',
     })
     expect(load_output_prefs()).toEqual({
       compress_preset: 'Custom', custom_dpi: 220, output_colours: 'Grayscale', export_format: 'PNG',
+      paper_size: 'A4',
     })
   })
 

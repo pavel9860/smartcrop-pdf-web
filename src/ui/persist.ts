@@ -7,6 +7,7 @@ const KEY = 'scw.output.v1'
 export interface OutputPrefs {
   compress_preset: string
   custom_dpi:      number
+  paper_size:      string
   output_colours:  string
   export_format:   string
 }

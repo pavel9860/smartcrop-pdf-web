@@ -3,7 +3,9 @@
 
 import type { AppModel } from '@core/model'
 import type { AppController, UIConfig } from './app'
-import { UNDO_DEPTH_OPTIONS } from '@core/constants'
+import {
+  UNDO_DEPTH_OPTIONS, PAPER_SIZES, CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
+} from '@core/constants'
 import { FONT_SIZE_PRESETS, ZOOM_PRESETS } from './constants'
 import { requireEl } from './dom'
 
@@ -19,6 +21,8 @@ export class SettingsView {
   private readonly _folder_inp:   HTMLInputElement
   private readonly _folder_pick:  HTMLButtonElement
   private readonly _postfix_inp:  HTMLInputElement
+  private readonly _custom_dpi_inp: HTMLInputElement
+  private readonly _paper_sel:      HTMLSelectElement
 
   // Behaviour
   private readonly _remember_cb: HTMLInputElement
@@ -36,6 +40,8 @@ export class SettingsView {
     const font_opts = FONT_SIZE_PRESETS.map(n => `<option value="${n}">${n}</option>`).join('')
     const zoom_opts = ZOOM_PRESETS.map(p =>
       `<option value="${p}">${Math.round(p * 100)}%</option>`).join('')
+    const paper_opts = Object.keys(PAPER_SIZES).map(n =>
+      `<option value="${n}">${n}</option>`).join('')
 
     this._el.innerHTML = `
       <section class="settings-section">
@@ -71,6 +77,15 @@ export class SettingsView {
           <span class="settings-label">Output postfix</span>
           <input class="text-input" id="sv-postfix" type="text" />
         </div>
+        <div class="settings-row">
+          <span class="settings-label">Custom DPI</span>
+          <input class="text-input" id="sv-custom-dpi" type="number"
+                 min="${CUSTOM_DPI_MIN}" max="${CUSTOM_DPI_MAX}" step="1" />
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Paper size</span>
+          <select class="select" id="sv-paper">${paper_opts}</select>
+        </div>
       </section>
 
       <section class="settings-section">
@@ -102,6 +117,8 @@ export class SettingsView {
     this._folder_inp   = requireEl(this._el, '#sv-folder')
     this._folder_pick  = requireEl(this._el, '#sv-folder-pick')
     this._postfix_inp  = requireEl(this._el, '#sv-postfix')
+    this._custom_dpi_inp = requireEl(this._el, '#sv-custom-dpi')
+    this._paper_sel      = requireEl(this._el, '#sv-paper')
 
     this._remember_cb = requireEl(this._el, '#sv-remember')
     this._undo_sel    = requireEl(this._el, '#sv-undo')
@@ -116,13 +133,26 @@ export class SettingsView {
     this._zoom_sel.addEventListener('change', () =>
       { ctrl.set_ui_scale(parseFloat(this._zoom_sel.value)) })
 
-    // Output quality (compress DPI / colour / format) lives solely in the sidebar Output Quality
-    // card and persists across sessions (ui/persist.ts) — no duplicate here (spec-web §W3).
+    // Output quality (compress preset / colour / format) lives in the sidebar Output Quality
+    // card; this section adds two shared-state fields (spec-web §W3): Custom DPI (same
+    // settings.custom_dpi as the sidebar field — editing it switches the preset to Custom)
+    // and Paper size (the export sizing base, §W2 row 8).
     this._folder_inp.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_output_folder(this._folder_inp.value) }) })
     this._folder_pick.addEventListener('click', () => { void this._pick_folder(model, ctrl) })
     this._postfix_inp.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_output_postfix(this._postfix_inp.value) }) })
+    this._custom_dpi_inp.addEventListener('change', () => {
+      const v = parseInt(this._custom_dpi_inp.value, 10)
+      if (!isNaN(v)) {
+        ctrl.dispatch(() => {
+          model.set_custom_dpi(v)
+          model.set_compress_preset(CUSTOM_DPI_PRESET)
+        })
+      }
+    })
+    this._paper_sel.addEventListener('change', () =>
+      { ctrl.dispatch(() => { model.set_paper_size(this._paper_sel.value) }) })
 
     this._remember_cb.addEventListener('change', () =>
       { ctrl.set_remember_folder(this._remember_cb.checked) })
@@ -146,6 +176,10 @@ export class SettingsView {
 
     if (document.activeElement !== this._folder_inp) this._folder_inp.value = model.output_folder
     if (document.activeElement !== this._postfix_inp) this._postfix_inp.value = model.output_postfix
+    if (document.activeElement !== this._custom_dpi_inp) {
+      this._custom_dpi_inp.value = String(model.custom_dpi)
+    }
+    this._paper_sel.value = model.paper_size
 
     this._remember_cb.checked = ui.remember_folder
     this._undo_sel.value = String(model.undo_depth)

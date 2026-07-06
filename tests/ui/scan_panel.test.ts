@@ -32,11 +32,11 @@ describe('ScanPanel', () => {
     expect(root.querySelector('.panel-card')!.classList.contains('hidden')).toBe(true)
   })
 
-  it('dewarp / filter / strength buttons dispatch (instant, lazy processing)', () => {
+  it('dewarp / filter / strength buttons dispatch warm-batch jobs (spec-web §W2 row 5)', () => {
     root.querySelector<HTMLButtonElement>('#sp-dewarp')!.click()
     root.querySelector<HTMLButtonElement>('#sp-bw')!.click()
     root.querySelector<HTMLButtonElement>('[data-str="2"]')!.click()
-    expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBe(3)
+    expect(fc.calls.filter(c => c.kind === 'dispatch_job').length).toBe(3)
   })
 
   it('refresh marks the active filter mode', () => {

@@ -93,6 +93,13 @@ export const DEFAULT_CUSTOM_DPI = 300
 export const CUSTOM_DPI_MIN = 50
 export const CUSTOM_DPI_MAX = 1200
 
+// Output paper sizes (spec-web §W2 row 8): the export raster's long side = dpi × height_in —
+// each output page's long side is assumed to be the paper height. Settings → Output option.
+export const PAPER_SIZES = {
+  A4: { width_in: 8.27, height_in: 11.69 },
+} as const
+export const DEFAULT_PAPER = 'A4'
+
 // Export format names. Image formats (JPG/PNG/TIFF) deliver a single zip archive; TIFF is
 // hand-encoded (baseline RGB) since canvas has no native TIFF path.
 export const EXPORT_FORMATS = ['PDF', 'JPG', 'PNG', 'TIFF'] as const

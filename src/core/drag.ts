@@ -23,6 +23,9 @@ export interface SplitDrag {
   readonly idx:    number                // which rect in crop_rects
   readonly handle: HandleId
   readonly rect0:  Box
+  // ALL windows at drag start: same-size v2 applies mirrored edge deltas to each partner's own
+  // drag-start rectangle, and cancel restores every window (§9.6; spec-web §W2 row 10).
+  readonly rects0: readonly Box[]
   readonly start:  readonly [number, number]
   readonly page_w: number
   readonly page_h: number

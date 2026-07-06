@@ -169,17 +169,6 @@ input, select { font: inherit; }
   z-index: 2;
 }
 
-/* Status bar (bottom-left): page index / page size read-out (spec §3.3). */
-.canvas-status {
-  position: absolute;
-  left: 10px;
-  bottom: 8px;
-  color: var(--text-dim);
-  font-size: 0.9375rem;
-  pointer-events: none;
-  z-index: 2;
-}
-
 /* Hover ◀/▶ page-nav arrows at the canvas edge midpoints (bug 10). */
 .canvas-nav {
   position: absolute;

@@ -21,23 +21,23 @@ something changes):
 
 | Area | Status |
 |---|---|
-| Core state/logic (`src/core/*.ts`) | Implemented, 1:1 with desktop `AppModel`/`DocumentState`/`History`/`Settings`/`DragState`/`BatchJob` (§5, §10). `model.ts` (1167 lines) has a 50-test suite (`tests/core/model.test.ts`) covering every public method — caught and fixed a real `delete_pages()` regression (page count never shrank) during authoring. Branch coverage is 70.91%, below the `vitest.config.ts` 90%-on-core gate in §19 — **gap open, not closed**. |
+| Core state/logic (`src/core/*.ts`) | Implemented, 1:1 with desktop `AppModel`/`DocumentState`/`History`/`Settings`/`DragState`/`BatchJob` (§5, §10). `model.ts` is covered by `tests/core/model*.ts` + gesture/workflow suites (every public method; a real `delete_pages()` regression was caught during authoring). Coverage status: see the Test suite row below. |
 | PDF load/classify/render (`src/pdf/loader.ts`) | Implemented — one adapter class, runs on the **main thread**, not `render.worker.ts` (that file no longer exists — see §7a) |
 | OpenCV.js scan processing (`src/pdf/imaging.ts`) | Implemented — also main thread, not `imaging.worker.ts` (deleted — see §7a). Detect/Auto-detect/Crop/B-W/Sharpen all verified working via headless-browser E2E. |
 | PDF glyph shaping (CJK/Bengali/Devanagari/standard-14 fonts) | Implemented — `cMapUrl`/`standardFontDataUrl`/`useWorkerFetch` wired into `getDocument()`, resources served via `vite-plugin-static-copy`. Previously garbled without this. |
 | Rotate | Implemented — rotates the actual raster (`rotate_bitmap_cw` in loader.ts) and the page-unit coordinate frame (`AppModel._page_dims`, §5a). Previously a state-only no-op: `document.rotation` was written but never read by the render path, so the button visibly did nothing. Fixed and E2E-verified. |
 | Detection + B/W filter (real Sauvola) | Implemented (§9) — was `cv.adaptiveThreshold` approximation, now a faithful box-filter Sauvola port |
 | Sharpen filter | Implemented, strength drives denoise + unsharp (§9) |
-| Dewarp (docuwarp/ONNX mesh unwarp) | **Not implemented** — `apply_dewarp()` stub, real gap (§9) |
+| Dewarp (docuwarp/ONNX mesh unwarp) | Implemented (2026-07-03) — full two-stage UVDoc pipeline in `imaging.ts` (`ensure_onnx` + `apply_dewarp`), EPs `['webgpu','wasm']` gated on `navigator.gpu`, `numThreads=1`, no SharedArrayBuffer. Verified against the actual model files (io names/shapes/dtypes, non-identity output); WebGPU-on-real-GPU still unconfirmed (§W2 row 1) |
 | DPI-scaled kernels, 2× supersample refinement | Not ported (minor fidelity residuals, §9) |
-| Multi-file PDF documents | **Broken** — `PdfRendererAdapter._pdf` holds a single `PDFDocumentProxy`; loading multiple PDFs leaves only the last file's pages reachable via `get_source_image`. Not fixed this pass. |
-| Mixed PDF + image documents | **Broken** — `get_source_image()` unconditionally assumes `this._pdf` is set for any page index; an image-only page in a mixed load throws. Not fixed this pass. |
+| Multi-file PDF documents | Fixed (2026-07-03) — `loader.ts` holds `_pdfs[]` + per-output-page `_pages[]` `PageSource` map; pages combine in selection order. Unit-tested (`tests/pdf/loader.test.ts`) |
+| Mixed PDF + image documents | Fixed (2026-07-03) — image pages carry `{kind:'image', blob}` sources decoded on demand via the same `_pages[]` map. Unit-tested |
 | Export (PDF single file; JPG/PNG/TIFF → single `.zip`) | Implemented (§8.4, §13). TIFF via `workers/tiff.ts` (baseline RGB); image formats zipped in `export.worker.ts` via `fflate`. |
 | Settings panel (spec §15: Appearance/Output/Behaviour/Scan) | Implemented (§2, `settings_view.ts`) |
 | Help panel (spec §16: Contents card + sections) | Implemented (§2, `help_view.ts`) |
 | Output Quality / Export as two cards (matches desktop `panels.py`, not the merged card an earlier draft shipped) | Implemented |
-| `confirm_overwrite` setting | Stored, **not yet enforced** — no File System Access API overwrite-detection path exists yet (§13); the setting is inert pending that |
-| Test suite (`tests/`) | `tests/core/` complete — `geometry`, `viewmodel`, `parsing`, `lru`, `enums`, `model` (122 tests total, all passing, `tsc`/`eslint` clean). All of `pdf/` and `ui/` still at 0% (need Playwright, not Vitest — global 80%-lines gate fails at 41% because of this). No Playwright e2e suite committed yet (ad hoc scripts verified prior fixes, not checked in). |
+| `confirm_overwrite` setting | **Control removed (2026-07-04)** — the browser download path cannot detect an overwrite (no File System Access write), so the inert Settings checkbox was removed rather than shown with no effect (§W2 row 6) |
+| Test suite (`tests/`) | 319 unit tests green (2026-07-05): `tests/core/` (17 files), `tests/ui/` (jsdom, every panel/view), `tests/pdf/loader.test.ts`, `tests/architecture.test.ts`. Playwright e2e committed (`tests/e2e/`: smoke, crop_split, committed_window; chromium + firefox projects). Coverage gate: 90% on `src/core/**`, 80% global lines, with `imaging.ts`/`canvas_view.ts`/`app.ts`/workers excluded as e2e-covered (vitest.config.ts) — some `ui/`/`pdf/` files still below threshold, gap open. |
 
 Where this document and the running code disagree, that is a bug in the document (or a
 regression in the code) — file it as such, not as an acceptable drift.
@@ -187,7 +187,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               - make_synth_page(idx, w, h) — synthetic placeholder (§14), drawn
                                 directly with Canvas API, no worker involved.
 
-      imaging.ts             OpenCV.js scan processing (detect / filter / dewarp stub), main
+      imaging.ts             OpenCV.js scan processing (detect / filter / ONNX dewarp), main
                               thread — see §7a for why. Exposes `detect_content_async()` and
                               `process_page_async()`, called directly by loader.ts (no postMessage).
 
@@ -210,8 +210,9 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               Manages three-column layout state (§3).
 
       canvas_view.ts        <canvas> element management:
-                              - paint(snapshot: ViewSnapshot) — draws page bitmap + overlay boxes +
-                                status text on the page image (spec §6, §19)
+                              - paint(snapshot: ViewSnapshot) — draws page bitmap + overlay boxes;
+                                the only text is the bottom-right cursor DOM overlay — no status
+                                element, nothing painted on the raster (spec-web §W3, inv 32)
                               - Pointer events (pointerdown/move/up) → page-unit coords →
                                 model.begin_drag / update_drag / end_drag / cancel_drag
                               - Wheel → next/prev page (spec §5)
@@ -327,9 +328,10 @@ state: `width: DETAIL_PANEL_WIDTH` (380px), transitioned via CSS `transition: wi
 Canvas column is `flex: 1` so it fills whatever space remains (clamped to a 400px minimum in CSS).
 No modal, no overlay, no z-index stacking — the panel is a normal DOM sibling.
 
-**Status text** — rendered inside `canvas_view.ts`'s `paint()` call directly onto the canvas
-bitmap (same technique as desktop's `draw_status()`), not a separate DOM element. Mouse
-coordinates update on `pointermove`; the page counter updates on navigation.
+**Status text** — one DOM overlay owned by `canvas_view.ts`, appended next to the canvas:
+`_coords_el` (`.canvas-coords`, bottom-right cursor read-out), updated on `pointermove`. There is
+no page/size status element (removed 2026-07-05, spec-web §W3); `ViewSnapshot.status` remains in
+the model but is not displayed. Nothing is painted onto the canvas bitmap (desktop inv 32).
 
 ---
 
@@ -505,7 +507,9 @@ interface ViewSnapshot {
   draw_rect: Box | null
   position: number          // 1-based output-page position
   total: number
-  status: string            // drawn on page image (§3.3)
+  status: string            // page/size string; model-level only, not displayed (spec-web §W3)
+  crop_origin: {x: number, y: number}  // full-page-unit origin of shown image (spec-web §W8)
+  is_loading: boolean       // image=null + loading indicator
 }
 ```
 
@@ -718,7 +722,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | Unsharp mask (Sharpen) | `cv.bilateralFilter` (strength-scaled `d`/`sigmaColor`/`sigmaSpace` from `SHARPEN_STRENGTH`) → `cv.GaussianBlur` (strength-scaled radius) → `cv.addWeighted` (`CLEAN_AMOUNT` gain) | Implemented, strength now drives denoise/blur radius **and** gain (matches `imaging.py sharpen_grayscale`/`_GRAY_STRENGTH` — the fix for the regression the desktop code comments describe: fixed-denoise Sharpen amplified noise at high strength) |
 | DPI-scaled kernels | — | **Not ported.** `imaging.py`'s `_dpi_scale()` scales the Sauvola window / bg-kernel / min-area by source DPI (0.5×–4× clamp) so scans at different resolutions binarize comparably. The web always uses the base `SAUVOLA_WINDOW`/`BG_KERNEL_SIZE` regardless of DPI. Low-severity residual gap — SRC_DPI is fixed at 200 in the web (no variable-DPI source rasters), so this mainly affects the B/W filter's absolute kernel size relative to `imaging.py`'s 150 DPI reference, not correctness. |
 | 2× supersample refinement | — | **Not ported.** `clean_document_bilevel` upscales 2× before thresholding then downsamples for a cleaner edge; the web version thresholds at native resolution. Cosmetic quality difference only. |
-| Dewarp mesh | `ort.InferenceSession.run()` → mesh field → `cv.remap` | **Not implemented.** `apply_dewarp()` is a stub that returns the source unchanged. This is a real behavioral gap (the Dewarp & Deskew toggle is a no-op on the web today) — see "Dewarp: known gap" below, not a minor fidelity note. |
+| Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model → bilinear resample | **Implemented (2026-07-03)** — two-stage ONNX pipeline, EPs `['webgpu','wasm']` gated on `navigator.gpu`, `numThreads=1`. Verified headlessly against the real model tensors (io names/dims/dtypes, non-identity output); WebGPU on a real GPU pending (§W2 row 1) |
 | Deskew angle | — | Spec §10.1 folds deskew into the single Dewarp & Deskew mesh-unwarp control ("there is no separate deskew step") — there is intentionally no standalone deskew function to port; it ships (or doesn't) together with dewarp. |
 
 `detect_content()` downscales to `DETECT_MAX_PX` for speed (same as Python), then runs
@@ -728,15 +732,12 @@ earlier revisions of this doc and of `imaging.worker.ts` used a direct `cv.adapt
 for detection with no relationship to the B/W filter's algorithm at all, which was wrong on two
 counts (not Sauvola, and not shared with the filter). Both are fixed.
 
-**Dewarp: known gap, not a fidelity nuance.** Real dewarp requires the actual docuwarp ONNX model
-weights, correct input/output tensor wiring (`Int64Session`'s int32→int64 cast, `bilinear_unwarping`
-grid semantics — see `core/imaging.py unwarp_bgr`), and pixel-level validation against the desktop
-output. That is a substantial, separate porting effort with real numerical-correctness risk if
-rushed; it is intentionally out of scope for this pass rather than shipped as an unverified
-approximation. `ensure_onnx()` already wires the session-loading/IndexedDB-cache plumbing so a
-future pass only needs to implement `apply_dewarp()`'s body.
-
-ONNX model cache (already wired, session unused until `apply_dewarp` is implemented):
+**Dewarp: implemented (2026-07-03).** `apply_dewarp()` runs the two-stage UVDoc pipeline
+(warp-field inference → bilinear resample), wired button→AppModel→`ensure_onnx`→`apply_dewarp`.
+Validated headlessly against the actual model files (io names/dims/dtypes match, output raster
+non-identity). Remaining risk: WebGPU EP on a real GPU and end-to-end visual correctness on an
+actual scanned page are unconfirmed — the verification sandbox had no GPU, so only the wasm EP
+ran in-browser (§W2 row 1).
 
 ONNX model cache:
 ```ts
@@ -818,8 +819,8 @@ Canvas paint (`canvas_view.paint(snap)`):
 1. Draw `snap.image` (page bitmap) centred in canvas
 2. Draw overlay boxes (dashed crop frames, handles, split badges)
 3. Draw `draw_rect` (rubber-band) if active
-4. Draw status text (coordinates + page counter) on the image at top-left with drop shadow
-   (spec §3.3, §19)
+4. Update the bottom-right cursor DOM overlay — no status element, and nothing is painted onto
+   the page raster (desktop inv 32, spec-web §W3)
 
 Throttle: canvas paint is debounced at `SCALE_THROTTLE_MS` on resize. All other refreshes
 are immediate (user action → synchronous model mutation → immediate repaint, < 1 ms for non-
@@ -839,8 +840,8 @@ on canvas/window. `File` objects passed directly to `loader.ts` (no temp files).
 - Image formats (JPG/PNG/TIFF): every page encoded in `export.worker.ts`, packed into one `.zip`
   with `fflate` (`zipSync`, pure JS ~10KB) → single `<base>.zip` download on all browsers. Entries
   `<base>_NNN.<ext>`. TIFF pages via `workers/tiff.ts`. No per-page loose downloads.
-- Overwrite confirmation is **not implemented** (spec Web §W2 row 6) — no code path checks File
-  System Access API for an existing file before writing.
+- Overwrite confirmation has no web code path (browser download cannot detect an overwrite); the
+  inert Settings checkbox was removed 2026-07-04 (spec Web §W2 row 6).
 
 ---
 
@@ -888,7 +889,7 @@ properties for the two-theme palette (dark/light/system via `prefers-color-schem
 
 All sizes in `rem`; root `font-size` = `FONT_SIZE_DEFAULT` (15px) scaled by the zoom setting.
 Crop frame: dashed border + diamond handles at corners + midpoints. Split badges: circle with
-number, 30% larger than base font. Status text: drawn on canvas with `ctx.shadowBlur` drop shadow.
+number, 30% larger than base font. Cursor coords: DOM overlay, not canvas-drawn (spec-web §W3).
 Icons: SVG inline, colour via `currentColor` (follows button active/inactive state; no independent
 colour channel).
 

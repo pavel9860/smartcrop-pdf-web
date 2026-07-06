@@ -14,6 +14,7 @@ import {
   hit_handle, point_in_box, apply_handle_drag, auto_crop_rect,
   offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
   split_rects_grid, rotate_box_cw, reindex_map, detection_union,
+  edge_deltas, apply_edge_deltas,
   MIN_RECT, box_width, box_height,
 } from './geometry'
 import { LRUCache } from './lru'
@@ -29,6 +30,7 @@ import {
   FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX, UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
   MAX_SPLIT, SYNTH_W, SYNTH_H, type ExportFormat,
   CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
+  PAPER_SIZES, DEFAULT_PAPER,
 } from './constants'
 import { resolve_pages } from './parsing'
 import {
@@ -63,8 +65,10 @@ export interface RendererAdapter {
   get_source_image(page_idx: number, dpi: number, rotation: number): Promise<ImageBitmap>
   get_work_image(page_idx: number, intent: PageProcessIntent, supersample: number,
                  rotation: number): Promise<ImageBitmap>
+  // target_long_px: export sizing — the crop's long side scales to this many pixels
+  // (= dpi × paper height, spec-web §W2 row 8); null = keep source resolution (and preview).
   render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,
-                      target_dpi: number | null, greyscale: boolean): Promise<ImageBitmap>
+                      target_long_px: number | null, greyscale: boolean): Promise<ImageBitmap>
   detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode): Promise<Box>
   // Fast NORMAL-mode detection from the PDF text layer (desktop detect.py normal_page_box) — no
   // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
@@ -491,6 +495,15 @@ export class AppModel {
     this._keep_ratio = on
     if (ratio !== undefined && ratio > 0) this._ratio = ratio
     else if (on && was_off) {
+      // Split 2/4 active: pre-populate from the split CELL aspect — split 2 cell = (w/2)×h,
+      // split 4 = (w/2)×(h/2). The union/page sources below describe a full-page single crop;
+      // the split-2 cell is half a page wide, so those started ~2× too wide (spec-web §W2 row 9).
+      if (this._split_count > 1 && this._doc) {
+        const sz = this._current_page_size()
+        const cell_h = this._split_count === 4 ? sz.height / 2 : sz.height
+        if (cell_h > 0) this._ratio = (sz.width / 2) / cell_h
+        return
+      }
       // Pre-populate from the detection union's aspect ratio when detection has run; otherwise
       // default to the current PAGE's aspect ratio, not a bare 1.0 (bug E — "keep ratio set by
       // default 1 not page w/h"). keep-ratio then locks to the content shape, or the page.
@@ -565,6 +578,7 @@ export class AppModel {
       if (h) {
         this._drag = {
           kind: 'split', idx: i, handle: h, rect0: rect,
+          rects0: [...this.document.crop_rects],   // same-size v2 bases + §9.6 cancel restore
           start: pt, page_w: sz.width, page_h: sz.height,
         } satisfies SplitDrag
         return
@@ -655,12 +669,21 @@ export class AppModel {
     const rects = [...this.document.crop_rects]
     rects[drag.idx] = updated
     if (this._same_size) {
-      const w = box_width(updated), h = box_height(updated)
-      for (let i = 0; i < rects.length; i++) {
+      // Same-size v2 = LIVE directional edge symmetry (spec-web §W2 row 10): partners keep their
+      // own placement; only the dragged window's per-edge deltas propagate, mirrored by grid
+      // parity (n=2 [left,right]; n=4 [TL,BL,TR,BR]: col = idx>>1, row = idx&1), each applied to
+      // the partner's drag-start rectangle. Overlap allowed; per-window page clamp only.
+      const d = edge_deltas(drag.rect0, updated)
+      const n = rects.length
+      const col = (i: number): number => (n === 2 ? i : i >> 1)
+      const row = (i: number): number => (n === 2 ? 0 : i & 1)
+      for (let i = 0; i < n; i++) {
         if (i === drag.idx) continue
-        const r = rects[i]
-        if (r) rects[i] = clamp_box_drag({ x0: r.x0, y0: r.y0, x1: r.x0 + w, y1: r.y0 + h },
-          drag.page_w, drag.page_h)
+        const base = drag.rects0[i]
+        if (base) {
+          rects[i] = apply_edge_deltas(base, d,
+            col(i) !== col(drag.idx), row(i) !== row(drag.idx), drag.page_w, drag.page_h)
+        }
       }
     }
     this.document.crop_rects = rects
@@ -716,28 +739,35 @@ export class AppModel {
     if (drag.kind === 'auto') {
       this.document.offsets = drag.offsets0
     }
+    if (drag.kind === 'split') {
+      // §9.6: Esc/right-click during a drag leaves the windows unchanged — restore EVERY window
+      // (same-size v2 moves partners live, so the dragged rect alone is not enough).
+      this.document.crop_rects = [...drag.rects0]
+    }
   }
 
   // ---------------------------------------------------------------------------
   // Scan processing
   // ---------------------------------------------------------------------------
 
-  // Scan toggles apply LAZILY (return void, no BatchJob): they record the new intent for the
-  // selected pages and drop those pages' cached rasters, but do NOT run OpenCV/ONNX up front. Each
-  // page's dewarp/filter is computed on demand when it is next viewed or exported (_get_work). This
-  // keeps the toggle instant even on a 300-page book — the old eager pass over every page froze the
-  // UI (main-thread WASM), made Cancel meaningless (its own freeze), and only ever finished the
-  // first pages before the user gave up. Pages-to-Process selection is still honoured.
-  run_dewarp(): void {
+  // Scan toggles: the intent flips SYNCHRONOUSLY (undoable — history pushed first), then the
+  // returned BatchJob pre-computes the selection's work rasters under the §14 progress overlay,
+  // yielding to the event loop between pages so the overlay repaints and Cancel works. A cancel
+  // keeps the intent: unprocessed pages fall back to on-view lazy compute in _get_work. This is
+  // desktop §14 parity — the lazy-only design (16c1b6d) deferred ALL processing to view/detect
+  // time, which made scanned-mode Auto-detect and navigation pay render+OpenCV(+ONNX) per page
+  // with no progress UI (spec-web §W2 row 5).
+  run_dewarp(): BatchJob {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
     if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
     this.history.push(this.document)   // snapshot BEFORE the toggle so undo reverts it
     this.document.dewarp_on = !this.document.dewarp_on
     this._apply_scan_intents(pages)
+    return this._warm_work_cache(pages, 'Dewarping…')
   }
 
-  set_filter_mode(mode: FilterMode): void {
+  set_filter_mode(mode: FilterMode): BatchJob {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
     if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
@@ -745,15 +775,41 @@ export class AppModel {
     // Toggle: pressing the active filter turns it off (spec §7.2)
     this.document.filter_mode = (mode === this.document.filter_mode) ? FilterMode.NONE : mode
     this._apply_scan_intents(pages)
+    return this._warm_work_cache(pages, 'Applying filter…')
   }
 
-  set_filter_strength(n: number): void {
+  set_filter_strength(n: number): BatchJob {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
     this.history.push(this.document)
     this.document.filter_strength =
       Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n))
     this._apply_scan_intents(pages)
+    return this._warm_work_cache(pages, 'Applying filter…')
+  }
+
+  private _warm_work_cache(pages: number[], title: string): BatchJob {
+    const job = new PageBatchJob(title, pages.length)
+    void this._run_warm(job, pages)
+    return job
+  }
+
+  private async _run_warm(job: PageBatchJob, pages: number[]): Promise<void> {
+    const ctrl = job.controller
+    for (const p of pages) {
+      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return }
+      try {
+        await this._get_work(p)
+      } catch (e) {
+        ctrl.complete(new Failed(new ImagingError(String(e))))
+        return
+      }
+      ctrl.advance()
+      // Yield between pages so the progress overlay repaints (per-page OpenCV/ONNX blocks the
+      // main thread; the yield restores §14's between-page responsiveness).
+      await this._yield_to_paint()
+    }
+    ctrl.complete(new Ok())
   }
 
   // Record the CURRENT global scan flags as each selected page's intent and drop its cached
@@ -810,6 +866,10 @@ export class AppModel {
   set_compress_preset(name: string): void {
     if (name === CUSTOM_DPI_PRESET || name in DPI_PRESETS) this.settings.compress_preset = name
   }
+  set_paper_size(name: string): void {
+    if (name in PAPER_SIZES) this.settings.paper_size = name
+  }
+
   set_custom_dpi(dpi: number): void {
     this.settings.custom_dpi = Math.max(CUSTOM_DPI_MIN, Math.min(CUSTOM_DPI_MAX, Math.round(dpi)))
   }
@@ -830,12 +890,17 @@ export class AppModel {
     this.settings.dewarp_supersample = Math.max(1.0, Math.min(4.0, factor))
   }
 
-  // Resolve the effective export DPI: 'Custom' uses settings.custom_dpi, every other preset maps
-  // through DPI_PRESETS (null = keep source resolution). Export-only (spec-web §W2 row 8).
-  private _resolved_target_dpi(): number | null {
-    return this.settings.compress_preset === CUSTOM_DPI_PRESET
+  // Resolve the export target LONG-SIDE pixel count (spec-web §W2 row 8): the output page's long
+  // side is assumed to be the paper height, so long side = dpi × paper_height_in. 'Custom' uses
+  // settings.custom_dpi; null = keep source resolution. Export-only, never the preview.
+  private _resolved_target_long_px(): number | null {
+    const dpi = this.settings.compress_preset === CUSTOM_DPI_PRESET
       ? this.settings.custom_dpi
       : (DPI_PRESETS[this.settings.compress_preset] ?? null)
+    if (dpi === null) return null
+    const papers: Record<string, { width_in: number; height_in: number }> = PAPER_SIZES
+    const paper = papers[this.settings.paper_size] ?? PAPER_SIZES[DEFAULT_PAPER]
+    return Math.round(dpi * paper.height_in)
   }
 
   get output_folder(): string { return this.settings.output_folder }
@@ -953,10 +1018,10 @@ export class AppModel {
 
   private async _run_export(job: PageBatchJob, filename: string): Promise<void> {
     const ctrl = job.controller
-    const target_dpi = this._resolved_target_dpi()
+    const target_long_px = this._resolved_target_long_px()
     const greyscale  = this.settings.output_colours === 'Grayscale'
 
-    const pages_out = await this._render_export_pages(ctrl, target_dpi, greyscale)
+    const pages_out = await this._render_export_pages(ctrl, target_long_px, greyscale)
     if (!pages_out) return
 
     try {
@@ -982,7 +1047,7 @@ export class AppModel {
 
   private async _render_export_pages(
     ctrl: BatchController,
-    target_dpi: number | null, greyscale: boolean,
+    target_long_px: number | null, greyscale: boolean,
   ): Promise<OutputPage[] | null> {
     const pages_out: OutputPage[] = []
     for (let p = 0; p < this.page_count(); p++) {
@@ -993,7 +1058,7 @@ export class AppModel {
         const boxes = this._export_boxes_for_page(p, sz)
         for (const box of boxes) {
           const bitmap = await this._adapter.render_output_image(
-            src, box, sz.width, sz.height, target_dpi, greyscale)
+            src, box, sz.width, sz.height, target_long_px, greyscale)
           pages_out.push({ bitmap, width: bitmap.width, height: bitmap.height })
           ctrl.advance()
         }
@@ -1168,6 +1233,7 @@ export class AppModel {
   get current_follow(): boolean { return this._current_follow }
   get compress_preset(): string { return this.settings.compress_preset }
   get custom_dpi(): number { return this.settings.custom_dpi }
+  get paper_size(): string { return this.settings.paper_size }
   get output_colours(): string { return this.settings.output_colours }
   get export_format(): ExportFormat { return this.settings.export_format }
   get undo_depth(): number { return this.settings.undo_depth }

@@ -296,6 +296,7 @@ export class AppController {
     const p = load_output_prefs()
     if (p.compress_preset !== undefined) this._model.set_compress_preset(p.compress_preset)
     if (typeof p.custom_dpi === 'number') this._model.set_custom_dpi(p.custom_dpi)
+    if (p.paper_size !== undefined)      this._model.set_paper_size(p.paper_size)
     if (p.output_colours !== undefined)  this._model.set_output_colours(p.output_colours)
     if (p.export_format !== undefined)   this._model.set_export_format(p.export_format)
   }
@@ -304,6 +305,7 @@ export class AppController {
     save_output_prefs({
       compress_preset: this._model.compress_preset,
       custom_dpi:      this._model.custom_dpi,
+      paper_size:      this._model.paper_size,
       output_colours:  this._model.output_colours,
       export_format:   this._model.export_format,
     })

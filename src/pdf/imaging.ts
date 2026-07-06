@@ -82,6 +82,10 @@ async function ensure_onnx(): Promise<void> {
     // internally. Explicit selection keeps behaviour deterministic across Firefox/Safari.
     const has_webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator
     const execution_providers = has_webgpu ? ['webgpu', 'wasm'] : ['wasm']
+    // One-time diagnostic (TODO §17): dewarp on the 1-thread WASM EP costs seconds/page — this
+    // line lets a user verify in the console whether WebGPU was even requested on their machine.
+    console.info('[smartcrop] ONNX EPs requested:', execution_providers.join(','),
+      '— webgpu available:', has_webgpu)
     // Prefix with the deployment base so the vendored model weights resolve under a GH Pages
     // project-page subpath (see vite.config.ts base / constants.ts note). Does not change ORT
     // execution behaviour — same weights, same providers, only the fetch URL adapts.

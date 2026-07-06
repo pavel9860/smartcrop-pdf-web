@@ -58,6 +58,19 @@ describe('SettingsView', () => {
     expect(fc.calls.some(c => c.kind === 'set_remember_folder')).toBe(true)
   })
 
+  it('Output section has shared-state Custom DPI + Paper size (spec-web §W3)', () => {
+    const dpi = root.querySelector<HTMLInputElement>('#sv-custom-dpi')!
+    expect(dpi).toBeTruthy()
+    dpi.value = '240'; dpi.dispatchEvent(new Event('change'))
+    expect(model.custom_dpi).toBe(240)
+    expect(model.compress_preset).toBe('Custom')   // editing the field switches the preset
+    const paper = root.querySelector<HTMLSelectElement>('#sv-paper')!
+    expect(paper).toBeTruthy()
+    expect(paper.value).toBe('A4')
+    view.refresh(model, UI)
+    expect(dpi.value).toBe('240')                  // refresh reads back the shared state
+  })
+
   it('output + scan fields dispatch model setters', () => {
     const folder = root.querySelector<HTMLInputElement>('#sv-folder')!
     folder.value = '/out'; folder.dispatchEvent(new Event('change'))

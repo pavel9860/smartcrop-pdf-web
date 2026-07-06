@@ -22,7 +22,7 @@ import type { PageProcessIntent } from '@core/document_state'
 import { Mode } from '@core/enums'
 import { DocumentLoadError } from '@core/errors'
 import {
-  SRC_DPI, NORMAL_DPI, JPEG_QUALITY, SYNTH_PAGES, SYNTH_W, SYNTH_H,
+  SRC_DPI, JPEG_QUALITY, SYNTH_PAGES, SYNTH_W, SYNTH_H,
   SYNTH_BG_COLOR, SYNTH_BORDER_COLOR, SYNTH_TEXT_COLOR, SYNTH_FONT, SYNTH_PADDING,
   MODE_TEXT_MIN,
 } from '@core/constants'
@@ -271,20 +271,21 @@ export class PdfRendererAdapter implements RendererAdapter {
     box: Box,
     page_w: number,
     page_h: number,
-    target_dpi: number | null,
+    target_long_px: number | null,
     greyscale: boolean,
   ): Promise<ImageBitmap> {
-    const src_dpi = this._doc_info?.mode === Mode.SCANNED ? SRC_DPI : NORMAL_DPI
     const crop_w = box.x1 - box.x0
     const crop_h = box.y1 - box.y0
     const scale  = src.width / page_w   // pixels per page unit
 
-    const out_w = target_dpi
-      ? Math.round(crop_w * target_dpi / src_dpi)
-      : Math.round(crop_w * scale)
-    const out_h = target_dpi
-      ? Math.round(crop_h * target_dpi / src_dpi)
-      : Math.round(crop_h * scale)
+    // Export sizing (spec-web §W2 row 8): the crop's long side maps to target_long_px
+    // (= dpi × paper height, A4 default), short side follows the crop's own aspect.
+    // null (preview / 'Original resolution') keeps the source raster resolution.
+    const out_scale = target_long_px !== null
+      ? target_long_px / Math.max(crop_w, crop_h)
+      : scale
+    const out_w = Math.round(crop_w * out_scale)
+    const out_h = Math.round(crop_h * out_scale)
 
     const canvas = new OffscreenCanvas(Math.max(1, out_w), Math.max(1, out_h))
     const ctx    = canvas.getContext('2d')

@@ -9,12 +9,14 @@ import {
   DEFAULT_UNDO_DEPTH,
   DEFAULT_DEWARP_SUPERSAMPLE,
   DEFAULT_CUSTOM_DPI,
+  DEFAULT_PAPER,
   type ExportFormat,
 } from './constants'
 
 export interface Settings {
   compress_preset:     string          // DPI preset name → DPI_PRESETS lookup (or 'Custom')
   custom_dpi:          number          // resolved DPI when compress_preset === 'Custom'
+  paper_size:          string          // PAPER_SIZES key — export sizing base (spec-web §W2 row 8)
   output_colours:      string          // 'Original colors' | 'Grayscale'
   export_format:       ExportFormat
   output_folder:       string          // '' = same as source
@@ -27,6 +29,7 @@ export function default_settings(): Settings {
   return {
     compress_preset:    DEFAULT_COMPRESS_PRESET,
     custom_dpi:         DEFAULT_CUSTOM_DPI,
+    paper_size:         DEFAULT_PAPER,
     output_colours:     DEFAULT_OUTPUT_COLOURS,
     export_format:      DEFAULT_EXPORT_FORMAT,
     output_folder:      '',

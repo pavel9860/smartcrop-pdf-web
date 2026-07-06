@@ -70,3 +70,27 @@
     theme values corrected to desktop's light tuples. Verified dark+light by screenshot; full
     gate green (279 unit, build, 6/6 chromium e2e). Remaining nicety: Scan card's Filter is a
     group not a nested card (desktop nests it) — cosmetic, deferred.
+17. PARTIALLY ADDRESSED (2026-07-05) — the dominant structural cause is FIXED: scan toggles
+    (dewarp/B-W/Sharpen/strength) are eager again — they return a BatchJob that pre-computes the
+    selection's work rasters under the §14 progress overlay (yield between pages, cancellable;
+    cancel keeps the intent, remaining pages lazy). Auto-detect and navigation now hit the warm
+    cache instead of paying render+OpenCV(+ONNX) per page view. Added a one-time console line
+    logging the ONNX EPs requested (check it: if dewarp runs wasm-only on a GPU machine, that is
+    the next bug). STILL OPEN (engine-level): the vendored opencv.js is scalar non-SIMD WASM —
+    a SIMD build swap (~2-4×) and deeper prefetch remain the levers for the residual cost of the
+    warm pass itself and of detect on never-processed pages. Original diagnosis below.
+    OPEN originally flagged 2026-07-05 — SCANNED-mode perf: navigation,
+    Auto-detect and filters are slow vs desktop. Diagnosis (verified, not from any recent change —
+    the pipeline is byte-identical to the pre-session HEAD): (a) every scanned work raster =
+    pdf.js render at SRC_DPI 200 + OpenCV.js on the MAIN thread (§7a, deliberate); the vendored
+    @techstark/opencv-js 4.10 build is single-threaded SCALAR WASM — zero SIMD in the binary
+    (checked) — ≈2–5× slower than desktop's native OpenCV for the same Sauvola/despeckle/bilateral;
+    threads impossible (no SharedArrayBuffer on Pages). (b) filters are lazy-on-view (16c1b6d):
+    desktop hides processing in its §14 background tick loop, web pays it per cache-miss at
+    NAVIGATION time, LRU=16, prefetch ±1. (c) dewarp falls back to 1-thread WASM if WebGPU init
+    fails — unverified on a real GPU. Ranked levers, none violating the no-worker/no-threads
+    rules: (1) idle background pipeline warming the work cache for the Pages selection (port of
+    desktop §14 root.after pattern; biggest structural win), (2) WASM-SIMD opencv.js build swap
+    (~2–4× CV math; dependency change, verify numerics on a real scan), (3) one-time console log
+    of the ONNX EP actually engaged, (4) prefetch depth ±2–3. Do NOT resize/alter detection
+    boxes math — algorithm matches desktop (user rule).

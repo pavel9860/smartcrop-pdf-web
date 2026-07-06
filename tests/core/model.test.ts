@@ -425,7 +425,7 @@ describe('gestures: draw / cancel', () => {
 // Scan processing
 // ---------------------------------------------------------------------------
 
-describe('scan processing (lazy — toggles are instant, rendering deferred to view/export)', () => {
+describe('scan processing (toggle flips instantly; warm batch behavior in scan_batch.test.ts)', () => {
   it('run_dewarp toggles dewarp_on synchronously', async () => {
     const model = await loaded_model({ mode: Mode.SCANNED })
     expect(model.dewarp_on).toBe(false)
@@ -449,12 +449,12 @@ describe('scan processing (lazy — toggles are instant, rendering deferred to v
     expect(model.filter_strength).toBe(1)
   })
 
-  it('run_dewarp does no eager rendering — a failing renderer does not throw here', async () => {
+  it('a failing renderer does not throw at the toggle call (failure surfaces via the job result)', async () => {
     const { adapter } = make_mock_adapter({ mode: Mode.SCANNED })
     adapter.get_work_image = (): Promise<ImageBitmap> => Promise.reject(new Error('boom'))
     const model = new AppModel(adapter)
     await model.load_files([FILE()])
-    expect(() => { model.run_dewarp() }).not.toThrow()   // intent recorded; render is deferred
+    expect(() => { model.run_dewarp() }).not.toThrow()   // intent recorded; job fails async
     expect(model.dewarp_on).toBe(true)
   })
 })
@@ -542,7 +542,8 @@ describe('output settings', () => {
 
     render_args.length = 0
     await model.export('out.pdf').result()
-    expect(render_args.some(a => a.dpi === 75)).toBe(true) // export honours the compress preset
+    // Export honours the preset via the A4 sizing rule: long side = dpi × 11.69 in (§W2 row 8)
+    expect(render_args.some(a => a.dpi === Math.round(75 * 11.69))).toBe(true)
     expect(render_args.some(a => a.grey)).toBe(true)
   })
 
@@ -564,7 +565,8 @@ describe('output settings', () => {
     model.set_custom_dpi(220)
     render_args.length = 0
     await model.export('out.pdf').result()
-    expect(render_args.some(a => a.dpi === 220)).toBe(true)
+    // A4 sizing rule (§W2 row 8): long side = custom_dpi × 11.69 in
+    expect(render_args.some(a => a.dpi === Math.round(220 * 11.69))).toBe(true)
   })
 })
 
