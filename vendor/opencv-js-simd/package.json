@@ -1,0 +1,12 @@
+{
+  "name": "@techstark/opencv-js",
+  "version": "4.10.0-simd-wasm.1",
+  "description": "OpenCV.js 4.10.0, custom-built with -msimd128 (WASM SIMD), single-thread (no SharedArrayBuffer). See BUILD.md in this directory for exact provenance/reproduction steps.",
+  "main": "dist/opencv.js",
+  "types": "dist/src/index.d.ts",
+  "files": [
+    "dist/",
+    "src/"
+  ],
+  "license": "Apache-2.0"
+}

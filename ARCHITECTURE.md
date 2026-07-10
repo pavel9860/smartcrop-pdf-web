@@ -623,8 +623,30 @@ package has its own separate esbuild strictness quirk (the build error above) th
 avoid by not re-bundling it for a Worker target at all.
 
 Trade-off: detect/filter/dewarp now run on the UI thread instead of off it. Each call is one
-bounded operation (spec §17 budgets ~150 ms/page), so this is a brief-UI-block UX regression, not
-a correctness one — tracked as follow-up, not silently accepted as fine.
+bounded operation (per-page budgets now met, §9a below), so this is a brief-UI-block UX regression,
+not a correctness one — tracked as follow-up, not silently accepted as fine.
+
+### 7b. OpenCV.js build variant — SIMD, single-thread (task T4)
+
+The vendored `@techstark/opencv-js@4.10.0-release.1` was a **scalar (non-SIMD)** WASM build — a
+straight mirror of `docs.opencv.org/4.10.0/opencv.js`, confirmed by disassembling the shipped
+`.wasm`: **0** `v128`/`i32x4`/`f32x4`/… instructions. It was replaced with a from-source build of
+the **same OpenCV 4.10.0**, compiled `-msimd128`, single-thread (`USE_PTHREADS=0`, no
+`SharedArrayBuffer` — GitHub Pages can't set COOP/COEP), vendored under `vendor/opencv-js-simd/`
+and wired in via a `file:` dependency in `package.json`. **How SIMD was verified (not just "it
+loads"):** the shipped `.wasm` was extracted from the `SINGLE_FILE=1` JS (via a
+`WebAssembly.instantiate` capture hook) and disassembled with `wabt` → **166,485** v128-family
+instructions (vs 0 before); `grep SharedArrayBuffer` → 0 (threads held at 1); and the matched
+pipeline (blur → adaptiveThreshold → morphology → connectedComponents, 1400×1980) measured **~4.5×
+faster** in Node with **identical** output (same CC count, same output-Mat checksum) vs the scalar
+build. Full build/verification/reproduction steps, and why emsdk `latest` (not the tutorial's
+2.0.10, which lacks `emscripten/version.h` that `--simd` needs) plus two one-line patches to
+OpenCV's own build files were required, are in `vendor/opencv-js-simd/BUILD.md`. The modern
+emscripten export is an async `Promise<Module>`; a small appended shim bridges it back to the
+stable-object + assignable `onRuntimeInitialized` shape `imaging.ts::ensure_cv` expects, and a
+`var Module` fix makes OpenCV's UMD wrapper strict-mode/ESM safe. **Key finding:** SIMD alone gave
+only ~1.5–4.5×; it did **not** meet the per-page budget on its own — the architecture fixes (§9a)
+and the downscaled-morphology change (spec-web §W2 row 12) did the bulk of the work.
 
 ---
 
@@ -728,7 +750,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | Spec algorithm | OpenCV.js implementation | Status |
 |---|---|---|
 | Sauvola binarization | `sauvola_ink_mask()`: `cv.boxFilter` on the image and its square to get local mean/std, `T = mean·(1+k·(std/R−1))`, `ink = flat < T` | **Faithful port** of `core/imaging.py _sauvola_threshold` — real formula, not `cv.adaptiveThreshold` (see history note below) |
-| Illumination flatten | `illumination_flatten()`: `cv.morphologyEx(MORPH_CLOSE)` + divide | Implemented, shared by detect and both filter modes (matches `imaging.py`) |
+| Illumination flatten | `illumination_flatten()`: `cv.morphologyEx(MORPH_CLOSE)` **on a 1/`BG_DOWNSCALE` copy, upscaled** (`morph_close_background`) + divide | Implemented, shared by detect and both filter modes. The large-kernel close is estimated on a downscale then upscaled (spec-web §W2 row 12): opencv.js's single-thread morphology is O(pixels·kernel²) with no large-kernel optimization and, full-res, dominated everything (0.6–9 s/page). ~36× faster, final bilevel ~95% identical (unchanged vs the opencv.js-vs-opencv-python baseline) |
 | `clean_document_bilevel` | `clean_document_bilevel()`: flatten → Sauvola → single-pass label-LUT despeckle | Implemented for both `detect_content()` (strength-2 params, downscaled) and the B/W filter (per-strength `k`/`min_area` from `BW_STRENGTH`) — same function backs both, as spec §8 requires |
 | Connected-component despeckle | `cv.connectedComponentsWithStats` → per-label keep array → one `O(pixels)` LUT pass (not per-component `cv.compare`, which would be `O(components·pixels)` and miss the spec §17 "single-pass despeckle" performance target) | Implemented |
 | `content_box()` | bounding rect of kept components, border-touching fallback | Implemented |
@@ -744,6 +766,38 @@ this is what spec §8 means by "content_box over a real Sauvola filter (clean_do
 earlier revisions of this doc and of `imaging.worker.ts` used a direct `cv.adaptiveThreshold` call
 for detection with no relationship to the B/W filter's algorithm at all, which was wrong on two
 counts (not Sauvola, and not shared with the filter). Both are fixed.
+
+### 9a. Scan pipeline dataflow and the two-tier work cache (task T4)
+
+The scan pipeline was ~10–20× too slow; profiling (not the SIMD width — see §7b) found four causes,
+all fixed. The model (`core/model.ts`) rasterizes each page **exactly once** through `_get_source(p)`
+(cached in the RAM source LRU); every consumer — NORMAL view, SCANNED work pipeline, Auto-detect —
+goes through it.
+
+- **Single-raster work pipeline.** `RendererAdapter.get_work_image` now takes the **already-rendered
+  source bitmap** (`get_work_image(source, intent, supersample)`), not a page index. Previously the
+  model rendered the page for `get_source_image`, then `get_work_image` re-rendered the same PDF page
+  a *second* time internally (double rasterization). `process_page_async` applies dewarp then filter,
+  staying in `cv.Mat` across stages (one ImageBitmap→Mat in, one Mat→ImageBitmap out).
+- **Detect on the raw source.** `_detect_each_page` runs `detect_content_box` on `_get_source(p)`, the
+  **raw** raster — never the processed work image. Detection was running the full dewarp+filter
+  pipeline per page and then discarding most of it by downscaling to `DETECT_MAX_PX`. Desktop detects
+  the content box on the raw scan's cleaned bilevel too, so this is parity; the only tradeoff is that
+  dewarp's small geometric shift is not reflected in the detected bounds (documented, spec-web §W2 row 5).
+- **Two-tier processed-raster cache.** `_work_cache` is a small RAM LRU for the viewing window; the
+  disk tier is `pdf/work_store.ts` (IndexedDB, PNG blobs) behind the adapter's optional
+  `load_work`/`persist_work`/`clear_work_cache` (kept in `pdf/` because `core/` may not touch
+  IndexedDB — architecture rule). `_get_work(p)` is: RAM hit → return; else disk hit → return; else
+  compute via `get_work_image`, cache in RAM, and fire-and-forget persist to disk. The key
+  (`_work_disk_key`) is original page index + full intent (dewarp/filter/strength) + rotation +
+  supersample, so any settings change is a different key (never a stale raster) and re-toggling a
+  prior setting is a disk hit. Cleared on load/reset (`_disk_ready` gates every disk op so a clear
+  can't race a persist). Net effect: each page is processed **at most once per settings-generation**;
+  revisiting an evicted page reloads from disk instead of re-running OpenCV/ONNX.
+
+Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spec-web §W5).
+Regression-guarded by `tests/perf/scan_speed.test.ts` (`npm run test:perf`) and, end-to-end in a real
+browser, `tests/e2e/scan_simd.spec.ts`.
 
 **Dewarp: implemented (2026-07-03).** `apply_dewarp()` runs the two-stage UVDoc pipeline
 (warp-field inference → bilinear resample), wired button→AppModel→`ensure_onnx`→`apply_dewarp`.

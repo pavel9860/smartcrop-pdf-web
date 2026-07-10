@@ -43,6 +43,12 @@ should mark it DONE with the commit that fixed it, not delete the entry.
    Severity: HIGH (silent data-quality regression, not a crash). Owner: unclear — closest existing
    task is T5 (auto-detect), but T5's brief (00_README_MASTER.txt) is scoped to progress-freeze/jump
    and outlier tolerance, not this. May need its own bug ID.
+   DONE (T4, 2026-07-10): both rebuild paths now route through `_compute_detection_union` (the same
+   FULL_PAGE_FRAC-filtered helper the initial detect uses). `_rotate_page` calls it directly;
+   `delete_pages` was reordered so `_page_map` is reindexed BEFORE the union rebuild, so each box is
+   judged against its own POST-reindex page dims (the delete test's requirement). Both union-rebuild
+   tests pass; `detection_union` is no longer called raw from either mutation path. Fixed opportunistically
+   under T4 (scan-perf) because the model.ts detection paths were already open for the perf rework.
 
    2b. NORMAL-mode detection uses a PDF text-layer fast path that the test explicitly says must
    never be used. `src/core/model.ts:348-350` (`_detect_each_page`): "NORMAL pages: derive the
@@ -66,6 +72,13 @@ should mark it DONE with the commit that fixed it, not delete the entry.
    would be wrong on native/NORMAL documents) — needs someone to actually reproduce it against a
    real PDF with justified/wide text runs before deciding which side is correct. Do not just delete
    the failing test to go green; the comment reads like a genuine bug report, not noise.
+   DECIDED (T4, 2026-07-10, by the user): KEEP the text-layer fast path (desktop parity). The test
+   was REWRITTEN (not deleted) to assert the shipped behavior — text-layer used when a usable layer
+   exists, ink fallback when it doesn't — plus a new second test for the fallback. The behavior is
+   now documented at spec-web §W2 row 13. The "advance-based right-margin inflation" was NOT
+   reproduced against a real justified-text PDF; IF it is confirmed later, the agreed fix is to clamp
+   `textItem.width`'s trailing advance in `PdfRendererAdapter.detect_text_box` (loader.ts), NOT to
+   abandon the text-layer path. All 3 detect_union tests now pass (2a fix + this 2b decision).
    Owner: unclear, likely T5 (auto-detect) or a new bug ID; needs a spec-web §W2 row once resolved
    either way.
 

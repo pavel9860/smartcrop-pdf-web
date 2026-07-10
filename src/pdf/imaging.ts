@@ -37,7 +37,7 @@ import { Mode } from '@core/enums'
 import { MissingDependencyError } from '@core/errors'
 import {
   BORDER_FRAC, MIN_COMP_FRAC, DETECT_MAX_PX, CLEAN_AMOUNT,
-  CC_CONNECTIVITY, BG_KERNEL_SIZE, SAUVOLA_WINDOW, SAUVOLA_R,
+  CC_CONNECTIVITY, BG_KERNEL_SIZE, BG_DOWNSCALE, SAUVOLA_WINDOW, SAUVOLA_R,
   BW_STRENGTH, SHARPEN_STRENGTH,
   DEWARP_MODEL_W, DEWARP_MODEL_H, DEWARP_UVDOC_URL, DEWARP_BILINEAR_URL,
   DEWARP_UVDOC_CACHE_KEY, DEWARP_BILINEAR_CACHE_KEY,
@@ -52,19 +52,33 @@ const cv = (cvModule as unknown as { default: typeof cvModule }).default
 // ReturnType<typeof cv.matFromImageData>, as elsewhere in this file.
 type Mat = ReturnType<typeof cv.matFromImageData>
 
-let _cv_ready = false
-
 // ONNX sessions for dewarp (pstwh/docuwarp, two-stage) — loaded once on first dewarp call.
 let _uvdoc_session: InferenceSession | null = null
 let _bilinear_session: InferenceSession | null = null
 
-async function ensure_cv(): Promise<void> {
-  if (_cv_ready) return
-  await new Promise<void>((resolve): void => {
-    cv.onRuntimeInitialized = (): void => { _cv_ready = true; resolve() }
-    // Fallback timeout in case the callback doesn't fire (matches prior behaviour)
-    setTimeout(() => { if (!_cv_ready) { _cv_ready = true; resolve() } }, 10_000)
-  })
+// Cached at module scope so concurrent callers share one init and one onRuntimeInitialized
+// assignment (C3): previously each call installed its own callback, so a second concurrent
+// call clobbered the first's, and the first caller's `resolve` never fired.
+let _cv_init: Promise<void> | null = null
+
+// Exported for tests/pdf/imaging.test.ts only (C3/M3 races need direct unit coverage — jsdom has
+// no WASM cv context to exercise them through detect_content_async/process_page_async).
+export function ensure_cv(): Promise<void> {
+  if (!_cv_init) {
+    // Fast path: some builds' WASM init can complete before this is ever called (e.g. it
+    // finished during module load), in which case onRuntimeInitialized already fired as a
+    // no-op — assigning a new handler here would never be invoked and we'd eat the full 10s
+    // fallback for nothing every time. cv.Mat existing is proof the runtime is already up.
+    // (cv.Mat is typed as an always-present constructor but is genuinely undefined pre-init —
+    // read through an optional view so the runtime guard isn't type-narrowed away.)
+    const cv_ready = (cv as { Mat?: unknown }).Mat != null
+    _cv_init = cv_ready ? Promise.resolve() : new Promise<void>((resolve): void => {
+      cv.onRuntimeInitialized = (): void => { resolve() }
+      // Fallback timeout in case the callback doesn't fire (matches prior behaviour)
+      setTimeout(resolve, 10_000)
+    })
+  }
+  return _cv_init
 }
 
 // Loads both docuwarp ONNX sessions from same-origin /models/ (vite-plugin-static-copy, see
@@ -271,12 +285,16 @@ function sauvola_ink_mask(flat: Mat, window: number, k: number): Mat {
 
 // Illumination flatten: divide by a large-kernel morphological close (imaging.py:118-121),
 // shared by detect and both filter modes.
+//
+// The morphological-close background is estimated on a 1/BG_DOWNSCALE copy then upscaled, NOT at
+// full resolution (spec-web §W2 row 12): opencv.js's single-thread WASM `morphologyEx` with a 51×51
+// kernel is O(pixels × kernel²) with no large-kernel/parallel optimization — full-res it is the
+// single dominant cost of the B/W filter and Auto-detect (0.6–9 s/page) and SIMD does not help it.
+// The background is low-frequency so the downscale is near-lossless: the flat image differs by up to
+// ~78/255 at a few high-contrast edges but the final bilevel (after Sauvola) is ~95% identical to
+// the full-res result — the same agreement opencv.js already has vs opencv-python. ~36× faster.
 function illumination_flatten(gray: Mat, kernel_size: number): Mat {
-  const k = kernel_size | 1
-  const se = cv.getStructuringElement(Number(cv.MORPH_ELLIPSE), new cv.Size(k, k))
-  const bg = new cv.Mat()
-  cv.morphologyEx(gray, bg, Number(cv.MORPH_CLOSE), se)
-  se.delete()
+  const bg = morph_close_background(gray, kernel_size | 1)
   const gray_f = new cv.Mat(); gray.convertTo(gray_f, Number(cv.CV_32F))
   const bg_f = new cv.Mat(); bg.convertTo(bg_f, Number(cv.CV_32F), 1, 1e-6)
   bg.delete()
@@ -287,6 +305,33 @@ function illumination_flatten(gray: Mat, kernel_size: number): Mat {
   ratio.convertTo(flat, Number(cv.CV_8U))
   ratio.delete()
   return flat
+}
+
+// Morphological-close background estimate on a downscaled copy (see illumination_flatten's note).
+// Falls back to a full-resolution close only when the page is already small enough that the
+// downscaled morphology kernel would degenerate (< 3 px) — there the full close is already cheap.
+function morph_close_background(gray: Mat, kernel: number): Mat {
+  const scale: number = BG_DOWNSCALE
+  const sw = Math.round(gray.cols / scale)
+  const sh = Math.round(gray.rows / scale)
+  const k_small = Math.round(kernel / scale) | 1
+  if (scale <= 1 || k_small < 3 || sw < 1 || sh < 1) {
+    const se = cv.getStructuringElement(Number(cv.MORPH_ELLIPSE), new cv.Size(kernel, kernel))
+    const bg = new cv.Mat()
+    cv.morphologyEx(gray, bg, Number(cv.MORPH_CLOSE), se)
+    se.delete()
+    return bg
+  }
+  const small = new cv.Mat()
+  cv.resize(gray, small, new cv.Size(sw, sh), 0, 0, Number(cv.INTER_AREA))
+  const se = cv.getStructuringElement(Number(cv.MORPH_ELLIPSE), new cv.Size(k_small, k_small))
+  const bg_small = new cv.Mat()
+  cv.morphologyEx(small, bg_small, Number(cv.MORPH_CLOSE), se)
+  se.delete(); small.delete()
+  const bg = new cv.Mat()
+  cv.resize(bg_small, bg, new cv.Size(gray.cols, gray.rows), 0, 0, Number(cv.INTER_LINEAR))
+  bg_small.delete()
+  return bg
 }
 
 // clean_document_bilevel equivalent (imaging.py:90-140), minus the 2x supersample refinement
@@ -633,14 +678,18 @@ function clamp_u8(v: number): number {
 // IndexedDB cache for ONNX model
 // ---------------------------------------------------------------------------
 
-async function fetch_with_idb_cache(key: string, url: string): Promise<ArrayBuffer> {
+// Exported for tests/pdf/imaging.test.ts only (see ensure_cv's note above).
+export async function fetch_with_idb_cache(key: string, url: string): Promise<ArrayBuffer> {
   const db  = await open_idb()
   const tx  = db.transaction('models', 'readonly')
   const req = tx.objectStore('models').get(key) as IDBRequest<ArrayBuffer | undefined>
   const cached = await idb_req(req)
   if (cached) return cached
 
-  const resp  = await fetch(url)
+  const resp = await fetch(url)
+  // M3: a failed fetch (404/500) must not be cached — caching it would permanently poison the
+  // IDB entry for `key`, since a truthy `cached` short-circuits every future call above.
+  if (!resp.ok) throw new Error(`Fetch failed for ${url}: ${resp.status} ${resp.statusText}`)
   const bytes = await resp.arrayBuffer()
 
   const tx2   = db.transaction('models', 'readwrite')

@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run --coverage",
     "test:watch": "vitest",
+    "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:e2e": "playwright test",
     "lint": "eslint src tests",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.worker.json",
@@ -23,7 +24,7 @@
   "devDependencies": {
     "@eslint/js": "^9.8.0",
     "@playwright/test": "^1.46.0",
-    "@techstark/opencv-js": "4.10.0-release.1",
+    "@techstark/opencv-js": "file:vendor/opencv-js-simd",
     "@vitest/coverage-v8": "^4.1.9",
     "eslint": "^9.8.0",
     "jsdom": "^29.1.1",

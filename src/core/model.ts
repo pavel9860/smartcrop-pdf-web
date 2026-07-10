@@ -63,8 +63,11 @@ export interface OutputPage {
 export interface RendererAdapter {
   load_files(files: File[]): Promise<DocInfo>
   get_source_image(page_idx: number, dpi: number, rotation: number): Promise<ImageBitmap>
-  get_work_image(page_idx: number, intent: PageProcessIntent, supersample: number,
-                 rotation: number): Promise<ImageBitmap>
+  // Scan processing (dewarp/filter) applied to an ALREADY-rendered source bitmap. Taking the
+  // source (not a page index) means the model renders each page exactly once and hands that raster
+  // straight to processing — no second internal rasterization (spec-web §W2 row 5).
+  get_work_image(source: ImageBitmap, intent: PageProcessIntent,
+                 supersample: number): Promise<ImageBitmap>
   // target_long_px: export sizing — the crop's long side scales to this many pixels
   // (= dpi × paper height, spec-web §W2 row 8); null = keep source resolution (and preview).
   render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,
@@ -73,6 +76,12 @@ export interface RendererAdapter {
   // Fast NORMAL-mode detection from the PDF text layer (desktop detect.py normal_page_box) — no
   // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
   detect_text_box?(page_idx: number): Promise<Box | null>
+  // Disk (IndexedDB) tier of the two-tier processed-raster cache (spec-web §W2 row 5). The model
+  // owns the opaque key (page + intent generation). All optional: an adapter without them (test
+  // mocks) simply has no disk tier and the model recomputes on a RAM-cache miss.
+  load_work?(key: string): Promise<ImageBitmap | null>
+  persist_work?(key: string, bitmap: ImageBitmap): Promise<void>
+  clear_work_cache?(): Promise<void>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
   export_images(
     pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
@@ -165,6 +174,11 @@ export class AppModel {
   private _current_bitmap: ImageBitmap | null = null
   private _is_loading = false
 
+  // Resolves once the disk (IndexedDB) tier of the work cache has been cleared for the current
+  // document. Every disk load/persist awaits it, so a fresh document never reads a previous
+  // document's rasters and a clear can't race a persist (spec-web §W2 row 5).
+  private _disk_ready: Promise<void> = Promise.resolve()
+
   // Logical page index -> original adapter page index. The adapter (pdf.js) has no page-deletion
   // primitive — unlike desktop's PyMuPDF `doc.delete_pages()`, which physically shrinks the
   // document so indices simply renumber — so delete_pages() here removes entries from this map
@@ -211,6 +225,8 @@ export class AppModel {
     this._source_cache.clear()
     this._work_cache.clear()
     this._output_cache.clear()
+    // Drop the previous document's processed rasters from disk; every disk op awaits this first.
+    this._disk_ready = this._adapter.clear_work_cache?.() ?? Promise.resolve()
     this._current_bitmap = null
     this._page_map = this._doc ? Array.from({ length: this._doc.page_count }, (_, i) => i) : []
     // Keep-ratio initialises to the first page's real w/h, not a bare 1.0, so the ratio field
@@ -353,7 +369,12 @@ export class AppModel {
           box = await this._adapter.detect_text_box(orig)
         }
         if (!box) {
-          const img = await this._get_work(p)
+          // Detect on the RAW source raster, never the processed work image (desktop detects the
+          // content box on the raw scan's cleaned bilevel; running dewarp+filter first was pure
+          // waste — detect_content_box downscales to DETECT_MAX_PX and re-binarizes anyway). This
+          // is what makes Auto-detect meet its <0.1 s/page budget (§W5). Dewarp's small geometric
+          // shift is not reflected in the bounds — a documented fidelity tradeoff (§W2 row 5).
+          const img = await this._get_source(p)
           box = await this._adapter.detect_content_box(img, size.width, size.height, this._mode)
         }
         per_page_boxes.set(p, box)
@@ -999,8 +1020,10 @@ export class AppModel {
 
     this.document.offsets = DEFAULT_OFFSETS
     if (this.document.union) {
-      const boxes = [...this.document.detect_cache.values()]
-      this.document.union = boxes.length > 0 ? detection_union(boxes) : null
+      // Rebuild with the SAME FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a,
+      // 99_FOUND_ISSUES): the old raw detection_union() re-admitted full-page fallback boxes after
+      // a rotate, silently inflating every crop. Judged against each page's rotated dims.
+      this.document.union = this._compute_detection_union(this.document.detect_cache)
     }
   }
 
@@ -1027,16 +1050,23 @@ export class AppModel {
     this.document.rotation     = reindex_map(this.document.rotation,     sorted)
     this.document.processed    = reindex_map(this.document.processed,    sorted)
     this.document.detect_cache = reindex_map(this.document.detect_cache, sorted)
+
+    // Rebuild the logical->original page index map (model.py:581-583's `doc.delete_pages` +
+    // page_sizes rebuild, adapted since pdf.js has no equivalent in-place deletion primitive).
+    // MUST precede the union rebuild below: _compute_detection_union reads each surviving page's
+    // dimensions through _page_map, so it has to be reindexed first (bug 2a — the union was judged
+    // against a stale page map).
+    this._page_map = this._page_map.filter((_, i) => !removed.has(i))
+
     if (this.document.auto_active && this.document.detect_cache.size > 0) {
-      this.document.union = detection_union([...this.document.detect_cache.values()])
+      // Same FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a): the old raw
+      // detection_union() re-admitted full-page fallback boxes, distorting the union after a delete.
+      this.document.union = this._compute_detection_union(this.document.detect_cache)
+      this.document.auto_active = this.document.union !== null
     } else {
       this.document.union = null
       this.document.auto_active = false
     }
-
-    // Rebuild the logical->original page index map (model.py:581-583's `doc.delete_pages` +
-    // page_sizes rebuild, adapted since pdf.js has no equivalent in-place deletion primitive).
-    this._page_map = this._page_map.filter((_, i) => !removed.has(i))
 
     this._source_cache.clear()
     this._work_cache.clear()
@@ -1318,24 +1348,29 @@ export class AppModel {
     return this._page_dims(this._current_page)
   }
 
-  private async _get_work(p: number): Promise<ImageBitmap> {
-    const cached = this._work_cache.get(p)
+  // Raw page raster (before scan processing), rendered once per page and cached. Every consumer
+  // that needs pixels — the NORMAL view, the SCANNED work pipeline, and Auto-detect — goes through
+  // here, so the PDF is rasterized exactly once per (page, rotation), never twice (§W2 row 5).
+  private async _get_source(p: number): Promise<ImageBitmap> {
+    const cached = this._source_cache.get(p)
     if (cached) return cached
-
     const doc = this._doc
     const dpi = this._mode === Mode.SCANNED ? SRC_DPI : NORMAL_DPI
     const rotation = this.document.rotation.get(p) ?? 0
     // p is logical (post-delete); the adapter only knows original pdf.js page indices.
     const orig = this._page_map[p] ?? p
-    const src = this._source_cache.get(p)
-      ?? await (async (): Promise<ImageBitmap> => {
-        const b = doc && !doc.synthetic
-          ? await this._adapter.get_source_image(orig, dpi, rotation)
-          : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
-        this._source_cache.set(p, b)
-        return b
-      })()
+    const b = doc && !doc.synthetic
+      ? await this._adapter.get_source_image(orig, dpi, rotation)
+      : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
+    this._source_cache.set(p, b)
+    return b
+  }
 
+  private async _get_work(p: number): Promise<ImageBitmap> {
+    const cached = this._work_cache.get(p)
+    if (cached) return cached
+
+    const src = await this._get_source(p)
     if (this._mode !== Mode.SCANNED) {
       // NORMAL: the work raster IS the source raster. Do NOT also store it in _work_cache — the
       // same bitmap in two close-on-evict caches gets double-closed, detaching a bitmap the other
@@ -1343,10 +1378,17 @@ export class AppModel {
       return src
     }
 
+    // A no-op intent (no dewarp, no filter) has no work raster distinct from the source — return
+    // src directly rather than caching a duplicate (same double-close hazard as NORMAL).
     const intent = this._page_process_intent(p)
-    const work = await this._adapter.get_work_image(
-      orig, intent, this.settings.dewarp_supersample, rotation)
+    if (!intent.dewarp && !intent.filter) return src
+
+    const disk = await this._load_work_from_disk(p, intent)
+    if (disk) { this._work_cache.set(p, disk); return disk }
+
+    const work = await this._adapter.get_work_image(src, intent, this.settings.dewarp_supersample)
     this._work_cache.set(p, work)
+    void this._persist_work_to_disk(p, intent, work)
     return work
   }
 
@@ -1356,6 +1398,29 @@ export class AppModel {
       filter: this.document.filter_mode === FilterMode.NONE ? null
         : [this.document.filter_mode, this.document.filter_strength],
     }
+  }
+
+  // Two-tier work cache — disk (IndexedDB) tier. Key = original page index + full intent (dewarp,
+  // filter mode/strength), rotation and supersample: any change yields a different key, so a
+  // settings change never returns a stale raster (it re-processes into a new key instead). The disk
+  // store is cleared on every load/reset (_disk_ready), so keys never collide across documents.
+  private _work_disk_key(p: number, intent: PageProcessIntent): string {
+    const orig = this._page_map[p] ?? p
+    const filt = intent.filter ? `${intent.filter[0]}-${intent.filter[1]}` : 'none'
+    const rot = this.document.rotation.get(p) ?? 0
+    return `${orig}|d${intent.dewarp ? 1 : 0}|f${filt}|r${rot}|s${this.settings.dewarp_supersample}`
+  }
+
+  private async _load_work_from_disk(p: number, intent: PageProcessIntent): Promise<ImageBitmap | null> {
+    if (!this._adapter.load_work) return null
+    await this._disk_ready
+    return this._adapter.load_work(this._work_disk_key(p, intent))
+  }
+
+  private async _persist_work_to_disk(p: number, intent: PageProcessIntent, bmp: ImageBitmap): Promise<void> {
+    if (!this._adapter.persist_work) return
+    await this._disk_ready
+    await this._adapter.persist_work(this._work_disk_key(p, intent), bmp)
   }
 
   private _live_auto_crop_for(p: number): Box | null {

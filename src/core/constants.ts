@@ -36,6 +36,12 @@ export const CC_CONNECTIVITY = 8   // connectedComponentsWithStats connectivity
 export const SAUVOLA_R = 127.5
 export const SAUVOLA_WINDOW = 51        // base window size @ 150 DPI reference, scaled by DPI (odd)
 export const BG_KERNEL_SIZE = 51        // illumination-flatten morphology kernel, same DPI scaling
+// The illumination background is low-frequency, so its 51×51 morphological close is computed on a
+// 1/BG_DOWNSCALE copy then upscaled (spec-web §W2 row 12). opencv.js's single-thread WASM morphology
+// is O(pixels × kernel_area) with no large-kernel optimization — full-res it costs 0.6–9 s/page and
+// dominates both the B/W filter and Auto-detect; the downscale makes it ~36× cheaper for ≈0 change in
+// the final bilevel. 4 was measured to add no extra bilevel error vs the full-res result.
+export const BG_DOWNSCALE = 4
 
 // B/W (bilevel) filter strength -> (sauvola k, min despeckle area at DPI=150). imaging.py:40-44.
 export const BW_STRENGTH: Record<1 | 2 | 3, { k: number; minArea: number }> = {

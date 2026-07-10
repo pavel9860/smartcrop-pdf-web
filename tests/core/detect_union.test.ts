@@ -1,6 +1,7 @@
-// Auto-detect union regression tests (spec §8, spec-web §W2 row 10).
-// 1. NORMAL-mode detection must use the ink path (detect_content_box), never a pdf.js
-//    text-layer box — advance-based text boxes inflate x1 (right-margin regression).
+// Auto-detect union regression tests (spec §8, spec-web §W2 rows 5/13).
+// 1. NORMAL-mode detection uses the PDF text-layer fast path (detect_text_box) when a usable text
+//    layer exists — desktop parity with detect.py normal_page_box (spec-web §W2 row 13). It only
+//    falls back to the ink path (detect_content_box) when there is no text layer.
 // 2. The union rebuilds after rotate/delete must keep the FULL_PAGE_FRAC exclusion and
 //    judge each box against its OWN page's post-reindex dimensions.
 import { describe, it, expect } from 'vitest'
@@ -48,33 +49,59 @@ function make_adapter(page_sizes: PageSize[], detect_boxes: Box[]): {
   return { adapter, calls }
 }
 
-describe('NORMAL-mode detection source (spec-web §W2 row 10)', () => {
-  it('uses the ink path even when the adapter offers a text-layer box', async () => {
+describe('NORMAL-mode detection source (spec-web §W2 row 13)', () => {
+  it('uses the PDF text-layer fast path when a usable text layer exists (desktop parity)', async () => {
     const sizes = [{ width: 200, height: 300 }, { width: 200, height: 300 }]
+    // Ink boxes the adapter would return IF the image path were taken — used here only to prove it
+    // is NOT taken (the text-layer path short-circuits before detect_content_box).
     const ink = [
-      { x0: 20, y0: 20, x1: 120, y1: 280 },
-      { x0: 30, y0: 30, x1: 110, y1: 260 },
+      { x0: 0, y0: 0, x1: 5, y1: 5 },
+      { x0: 0, y0: 0, x1: 5, y1: 5 },
     ]
     const { adapter, calls } = make_adapter(sizes, ink)
-    // Inflated advance-based box a pdf.js text layer would return. The intersection type keeps
-    // this compiling after detect_text_box is removed from RendererAdapter.
+    // The text layer returns a real content box per page (keyed by page index).
+    const text_boxes: Record<number, Box> = {
+      0: { x0: 20, y0: 20, x1: 120, y1: 280 },   // 100×260
+      1: { x0: 30, y0: 30, x1: 110, y1: 260 },   // 80×230
+    }
     const text_calls = { n: 0 }
     const with_text: RendererAdapter & {
       detect_text_box?: (i: number) => Promise<Box | null>
     } = {
       ...adapter,
-      detect_text_box: (): Promise<Box | null> => {
+      detect_text_box: (i: number): Promise<Box | null> => {
         text_calls.n += 1
-        return Promise.resolve({ x0: 10, y0: 10, x1: 190, y1: 290 })
+        return Promise.resolve(text_boxes[i] ?? null)
       },
     }
     const model = new AppModel(with_text)
     await model.load_files([FILE()])
     await model.detect_content().result()
 
-    expect(text_calls.n).toBe(0)                    // text layer never consulted
+    expect(text_calls.n).toBe(2)                    // text layer consulted for both NORMAL pages
+    expect(calls['detect_content_box'] ?? 0).toBe(0) // ink path short-circuited (text layer sufficed)
+    // §8 aggregate over the text-layer boxes: gL=20, gT=20, W=max(100,80), H=max(260,230)
+    expect(model.document.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
+  })
+
+  it('falls back to the ink path when the text layer yields nothing', async () => {
+    const sizes = [{ width: 200, height: 300 }, { width: 200, height: 300 }]
+    const ink = [
+      { x0: 20, y0: 20, x1: 120, y1: 280 },
+      { x0: 30, y0: 30, x1: 110, y1: 260 },
+    ]
+    const { adapter, calls } = make_adapter(sizes, ink)
+    const with_text: RendererAdapter & {
+      detect_text_box?: (i: number) => Promise<Box | null>
+    } = {
+      ...adapter,
+      detect_text_box: (): Promise<Box | null> => Promise.resolve(null),   // no usable text layer
+    }
+    const model = new AppModel(with_text)
+    await model.load_files([FILE()])
+    await model.detect_content().result()
+
     expect(calls['detect_content_box']).toBe(2)     // ink path used for every page
-    // §8 aggregate over the ink boxes: gL=20, gT=20, W=max(100,80), H=max(260,230)
     expect(model.document.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
   })
 })
