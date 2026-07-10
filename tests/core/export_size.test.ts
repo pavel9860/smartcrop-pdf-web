@@ -70,6 +70,16 @@ describe('A4-based export sizing', () => {
     expect(long_px.some(v => v === Math.round(300 * 11.69))).toBe(true)   // 3507
   })
 
+  it('Custom paper size uses settings.custom_paper_in', async () => {
+    const { model, long_px } = await committed_model()
+    model.set_compress_preset('High — 300 dpi')
+    model.set_paper_size('Custom')
+    model.set_custom_paper_in(20)
+    long_px.length = 0
+    await model.export('out.pdf').result()
+    expect(long_px.some(v => v === Math.round(300 * 20))).toBe(true)   // 6000
+  })
+
   it('Custom preset uses settings.custom_dpi', async () => {
     const { model, long_px } = await committed_model()
     model.set_compress_preset('Custom')

@@ -68,11 +68,26 @@ describe('SettingsView', () => {
     const paper = root.querySelector<HTMLSelectElement>('#sv-paper')!
     expect(paper).toBeTruthy()
     expect(paper.value).toBe('A4')
-    expect(Array.from(paper.options).map(o => o.value)).toEqual(['A2', 'A3', 'A4', 'A5', 'A6'])
+    expect(Array.from(paper.options).map(o => o.value)).toEqual(['A2', 'A3', 'A4', 'A5', 'A6', 'Custom'])
     paper.value = 'A3'; paper.dispatchEvent(new Event('change'))
     expect(model.paper_size).toBe('A3')
     view.refresh(model, UI)
     expect(dpi.value).toBe('240')                  // refresh reads back the shared state
+  })
+
+  it('paper size \'Custom\' reveals a numeric height field, like the Custom DPI field (task #6)', () => {
+    const paper = root.querySelector<HTMLSelectElement>('#sv-paper')!
+    const row   = root.querySelector<HTMLElement>('#sv-custom-paper-row')!
+    const custom = root.querySelector<HTMLInputElement>('#sv-custom-paper')!
+    // Hidden from construction (the markup's own `hidden` attribute), same as #op-custom-dpi —
+    // NOT only after the first refresh(), which would still flash it visible on initial mount.
+    expect(row.hidden).toBe(true)
+    paper.value = 'Custom'; paper.dispatchEvent(new Event('change'))
+    view.refresh(model, UI)
+    expect(model.paper_size).toBe('Custom')
+    expect(row.hidden).toBe(false)                 // revealed once Custom is chosen
+    custom.value = '20'; custom.dispatchEvent(new Event('change'))
+    expect(model.custom_paper_in).toBe(20)
   })
 
   it('no longer shows an Output folder control (meaningless in the browser)', () => {

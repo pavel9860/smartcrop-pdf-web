@@ -8,6 +8,7 @@ export interface OutputPrefs {
   compress_preset: string
   custom_dpi:      number
   paper_size:      string
+  custom_paper_in: number
   output_colours:  string
   export_format:   string
 }

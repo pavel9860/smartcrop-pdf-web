@@ -1,14 +1,18 @@
 CLAUDE.md — SmartCrop PDF Web
 
 Current state (read this before anything else)
-HEAD is GREEN again, verified 2026-07-10 (T2 same-size v3/v2-restore pass): `tsc --noEmit` is 0
-errors — the dead `mirror_x`/`mirror_y` import that broke it (`tests/core/split_mirror.test.ts`)
-was deleted along with its duplicate `tests/core/split_symmetry.test.ts` (see 99_FOUND_ISSUES.txt
-item 1, DONE, and item 7 for the full same-size design history/reversal). `vitest run`: 364/367
-passing, 3 failures, all in `tests/core/detect_union.test.ts` (a union-rebuild-after-rotate/delete
-regression, and a NORMAL-mode text-layer-vs-ink-path detection contradiction; both unresolved, see
+HEAD is GREEN, verified 2026-07-10 (T3 export-sizing/output-settings pass, after the T2 same-size
+v3/v2-restore pass — see 99_FOUND_ISSUES.txt item 7 for that design history/reversal): `tsc
+--noEmit` is 0 errors. `vitest run`: 374/377 passing, 3 failures, all in
+`tests/core/detect_union.test.ts` (a union-rebuild-after-rotate/delete regression, and a
+NORMAL-mode text-layer-vs-ink-path detection contradiction; both unresolved, see
 99_FOUND_ISSUES.txt item 2). `eslint src tests` is clean. `vite build` succeeds. `playwright test`:
-14/14 passing (chromium + firefox; smoke/crop_split/committed_window). Red still: vitest run
+14/14 passing (chromium + firefox; smoke/crop_split/committed_window). T3 verified export sizing
+is paper-based (C2, locked by a new `tests/pdf/loader.test.ts` test against the real
+`render_output_image` math, not just the mock target_long_px parameter); added `PAPER_SIZES`
+Custom entry (`settings.custom_paper_in`, reveals like Custom DPI via the new shared
+`ui/dom.ts:syncCustomReveal()`); set `UNDO_DEPTH_OPTIONS = [1,2,4,8]` (was `[2,4,10,20,50]`);
+removed the dead `Output folder` setting end to end (T2's continuation task). Red still: vitest run
 --coverage (ui/ and pdf/ below threshold on some files) — not touched this pass.
 Do not trust a "gate green" claim in an old commit message without re-running it —
 commit 9cf743d claimed "344 unit + 7 e2e green" while already shipping the tsc-breaking import

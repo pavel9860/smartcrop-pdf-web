@@ -30,7 +30,7 @@ import {
   FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX, UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
   MAX_SPLIT, SYNTH_W, SYNTH_H, type ExportFormat,
   CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
-  PAPER_SIZES, DEFAULT_PAPER,
+  PAPER_SIZES, DEFAULT_PAPER, CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
 } from './constants'
 import { resolve_pages } from './parsing'
 import {
@@ -923,7 +923,10 @@ export class AppModel {
     if (name === CUSTOM_DPI_PRESET || name in DPI_PRESETS) this.settings.compress_preset = name
   }
   set_paper_size(name: string): void {
-    if (name in PAPER_SIZES) this.settings.paper_size = name
+    if (name in PAPER_SIZES || name === CUSTOM_PAPER_PRESET) this.settings.paper_size = name
+  }
+  set_custom_paper_in(height_in: number): void {
+    this.settings.custom_paper_in = Math.max(CUSTOM_PAPER_MIN, Math.min(CUSTOM_PAPER_MAX, height_in))
   }
 
   set_custom_dpi(dpi: number): void {
@@ -946,16 +949,19 @@ export class AppModel {
   }
 
   // Resolve the export target LONG-SIDE pixel count (spec-web §W2 row 8): the output page's long
-  // side is assumed to be the paper height, so long side = dpi × paper_height_in. 'Custom' uses
-  // settings.custom_dpi; null = keep source resolution. Export-only, never the preview.
+  // side is assumed to be the paper height, so long side = dpi × paper_height_in. 'Custom' compress
+  // preset uses settings.custom_dpi; 'Custom' paper_size uses settings.custom_paper_in; null = keep
+  // source resolution. Export-only, never the preview.
   private _resolved_target_long_px(): number | null {
     const dpi = this.settings.compress_preset === CUSTOM_DPI_PRESET
       ? this.settings.custom_dpi
       : (DPI_PRESETS[this.settings.compress_preset] ?? null)
     if (dpi === null) return null
     const papers: Record<string, { width_in: number; height_in: number }> = PAPER_SIZES
-    const paper = papers[this.settings.paper_size] ?? PAPER_SIZES[DEFAULT_PAPER]
-    return Math.round(dpi * paper.height_in)
+    const height_in = this.settings.paper_size === CUSTOM_PAPER_PRESET
+      ? this.settings.custom_paper_in
+      : (papers[this.settings.paper_size] ?? PAPER_SIZES[DEFAULT_PAPER]).height_in
+    return Math.round(dpi * height_in)
   }
 
   get output_postfix(): string { return this.settings.output_postfix }
@@ -1288,6 +1294,7 @@ export class AppModel {
   get compress_preset(): string { return this.settings.compress_preset }
   get custom_dpi(): number { return this.settings.custom_dpi }
   get paper_size(): string { return this.settings.paper_size }
+  get custom_paper_in(): number { return this.settings.custom_paper_in }
   get output_colours(): string { return this.settings.output_colours }
   get export_format(): ExportFormat { return this.settings.export_format }
   get undo_depth(): number { return this.settings.undo_depth }

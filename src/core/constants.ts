@@ -104,6 +104,13 @@ export const PAPER_SIZES = {
 } as const
 export const DEFAULT_PAPER = 'A4'
 
+// Custom paper height (task #6): a 'Custom' paper_size resolved against settings.custom_paper_in
+// (inches) instead of PAPER_SIZES — same reveal/resolve pattern as CUSTOM_DPI_PRESET above.
+export const CUSTOM_PAPER_PRESET = 'Custom'
+export const DEFAULT_CUSTOM_PAPER_IN = PAPER_SIZES.A4.height_in
+export const CUSTOM_PAPER_MIN = 1
+export const CUSTOM_PAPER_MAX = 60
+
 // Export format names. Image formats (JPG/PNG/TIFF) deliver a single zip archive; TIFF is
 // hand-encoded (baseline RGB) since canvas has no native TIFF path.
 export const EXPORT_FORMATS = ['PDF', 'JPG', 'PNG', 'TIFF'] as const
@@ -121,7 +128,7 @@ export const DEFAULT_OUTPUT_COLOURS   = 'Original colors'
 export const DEFAULT_EXPORT_FORMAT: ExportFormat = 'PDF'
 export const DEFAULT_OUTPUT_POSTFIX   = '_cropped'
 export const DEFAULT_UNDO_DEPTH       = 2
-export const UNDO_DEPTH_OPTIONS: readonly number[] = [2, 4, 10, 20, 50]
+export const UNDO_DEPTH_OPTIONS: readonly number[] = [1, 2, 4, 8]
 export const UNDO_DEPTH_MIN = 1
 export const UNDO_DEPTH_MAX = 50
 export const DEFAULT_DEWARP_SUPERSAMPLE = 2.0

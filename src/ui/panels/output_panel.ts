@@ -6,7 +6,7 @@
 import type { AppModel } from '@core/model'
 import type { AppController } from '../app'
 import { DPI_PRESETS, EXPORT_FORMATS, CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX } from '@core/constants'
-import { requireEl } from '../dom'
+import { requireEl, syncCustomReveal } from '../dom'
 
 export class OutputPanel {
   private readonly _compress_sel:   HTMLSelectElement
@@ -71,11 +71,8 @@ export class OutputPanel {
 
   refresh(model: AppModel, busy: boolean): void {
     this._compress_sel.value = model.compress_preset
-    const custom = model.compress_preset === CUSTOM_DPI_PRESET
-    this._custom_dpi_inp.hidden = !custom
-    if (custom && document.activeElement !== this._custom_dpi_inp) {
-      this._custom_dpi_inp.value = String(model.custom_dpi)
-    }
+    syncCustomReveal(this._compress_sel, this._custom_dpi_inp, this._custom_dpi_inp,
+      CUSTOM_DPI_PRESET, String(model.custom_dpi))
     this._colours_sel.value  = model.output_colours
     this._format_sel.value   = model.export_format
     this._export_btn.textContent = `💾︎  Export ${model.export_format}`

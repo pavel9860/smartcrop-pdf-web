@@ -5,9 +5,10 @@ import type { AppModel } from '@core/model'
 import type { AppController, UIConfig } from './app'
 import {
   UNDO_DEPTH_OPTIONS, PAPER_SIZES, CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
+  CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
 } from '@core/constants'
 import { FONT_SIZE_PRESETS, ZOOM_PRESETS } from './constants'
-import { requireEl } from './dom'
+import { requireEl, syncCustomReveal } from './dom'
 
 export class SettingsView {
   private readonly _el: HTMLElement
@@ -21,6 +22,8 @@ export class SettingsView {
   private readonly _postfix_inp:  HTMLInputElement
   private readonly _custom_dpi_inp: HTMLInputElement
   private readonly _paper_sel:      HTMLSelectElement
+  private readonly _custom_paper_row: HTMLElement
+  private readonly _custom_paper_inp: HTMLInputElement
 
   // Behaviour
   private readonly _remember_cb: HTMLInputElement
@@ -40,6 +43,7 @@ export class SettingsView {
       `<option value="${p}">${Math.round(p * 100)}%</option>`).join('')
     const paper_opts = Object.keys(PAPER_SIZES).map(n =>
       `<option value="${n}">${n}</option>`).join('')
+      + `<option value="${CUSTOM_PAPER_PRESET}">Custom…</option>`
 
     this._el.innerHTML = `
       <section class="settings-section">
@@ -77,6 +81,11 @@ export class SettingsView {
           <span class="settings-label">Paper size</span>
           <select class="select" id="sv-paper">${paper_opts}</select>
         </div>
+        <div class="settings-row" id="sv-custom-paper-row" hidden>
+          <span class="settings-label">Custom height (in)</span>
+          <input class="text-input" id="sv-custom-paper" type="number"
+                 min="${CUSTOM_PAPER_MIN}" max="${CUSTOM_PAPER_MAX}" step="0.1" />
+        </div>
       </section>
 
       <section class="settings-section">
@@ -108,6 +117,8 @@ export class SettingsView {
     this._postfix_inp  = requireEl(this._el, '#sv-postfix')
     this._custom_dpi_inp = requireEl(this._el, '#sv-custom-dpi')
     this._paper_sel      = requireEl(this._el, '#sv-paper')
+    this._custom_paper_row = requireEl(this._el, '#sv-custom-paper-row')
+    this._custom_paper_inp = requireEl(this._el, '#sv-custom-paper')
 
     this._remember_cb = requireEl(this._el, '#sv-remember')
     this._undo_sel    = requireEl(this._el, '#sv-undo')
@@ -139,6 +150,10 @@ export class SettingsView {
     })
     this._paper_sel.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_paper_size(this._paper_sel.value) }) })
+    this._custom_paper_inp.addEventListener('change', () => {
+      const v = parseFloat(this._custom_paper_inp.value)
+      if (!isNaN(v)) ctrl.dispatch(() => { model.set_custom_paper_in(v) })
+    })
 
     this._remember_cb.addEventListener('change', () =>
       { ctrl.set_remember_folder(this._remember_cb.checked) })
@@ -165,6 +180,8 @@ export class SettingsView {
       this._custom_dpi_inp.value = String(model.custom_dpi)
     }
     this._paper_sel.value = model.paper_size
+    syncCustomReveal(this._paper_sel, this._custom_paper_row, this._custom_paper_inp,
+      CUSTOM_PAPER_PRESET, String(model.custom_paper_in))
 
     this._remember_cb.checked = ui.remember_folder
     this._undo_sel.value = String(model.undo_depth)

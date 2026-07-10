@@ -8,7 +8,10 @@ import { Ok } from '@core/batch'
 import {
   NoDocumentError, EmptySelectionError, InvalidSplitError, DeleteAllPagesError,
 } from '@core/errors'
-import { CUSTOM_DPI_MIN, CUSTOM_DPI_MAX } from '@core/constants'
+import {
+  CUSTOM_DPI_MIN, CUSTOM_DPI_MAX, UNDO_DEPTH_OPTIONS,
+  CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DEFAULT_CUSTOM_PAPER_IN,
+} from '@core/constants'
 
 // ---------------------------------------------------------------------------
 // Mock adapter
@@ -625,6 +628,31 @@ describe('output settings', () => {
     expect(model.export_format).toBe('JPG')   // rejected, unchanged
     model.set_undo_depth(2)
     expect(model.undo_depth).toBe(2)
+  })
+
+  it('UNDO_DEPTH_OPTIONS offers [1,2,4,8] (task #9)', () => {
+    expect(UNDO_DEPTH_OPTIONS).toEqual([1, 2, 4, 8])
+  })
+
+  it('set_paper_size accepts a PAPER_SIZES key or the Custom sentinel, rejects anything else', async () => {
+    const model = await loaded_model()
+    model.set_paper_size('A2')
+    expect(model.paper_size).toBe('A2')
+    model.set_paper_size('Custom')
+    expect(model.paper_size).toBe('Custom')
+    model.set_paper_size('not-a-real-size')
+    expect(model.paper_size).toBe('Custom')   // rejected, unchanged
+  })
+
+  it('custom_paper_in defaults to A4 height and clamps to [CUSTOM_PAPER_MIN,MAX]', async () => {
+    const model = await loaded_model()
+    expect(model.custom_paper_in).toBeCloseTo(DEFAULT_CUSTOM_PAPER_IN)
+    model.set_custom_paper_in(20)
+    expect(model.custom_paper_in).toBe(20)
+    model.set_custom_paper_in(9999)
+    expect(model.custom_paper_in).toBe(CUSTOM_PAPER_MAX)
+    model.set_custom_paper_in(-5)
+    expect(model.custom_paper_in).toBe(CUSTOM_PAPER_MIN)
   })
 
   it('set_output_postfix / set_dewarp_supersample', async () => {

@@ -63,7 +63,7 @@ beforeEach(() => {
   ;(globalThis as any).OffscreenCanvas = class {
     width: number; height: number
     constructor(w: number, h: number) { this.width = w; this.height = h }
-    getContext(): unknown { return {} }
+    getContext(): unknown { return { drawImage: () => { /* no-op */ } } }
     transferToImageBitmap(): any { return { width: this.width, height: this.height, close: () => { /* no-op */ } } }
   }
 })
@@ -136,5 +136,29 @@ describe('state lifecycle', () => {
     shared.pdfQueue = []                              // getDocument rejects
     const a = new PdfRendererAdapter()
     await expect(a.load_files([pdf_file('bad.pdf')])).rejects.toBeInstanceOf(DocumentLoadError)
+  })
+})
+
+// C2 (verified): export sizing is paper-based (target_long_px = dpi × paper_height_in), not
+// crop_w(points) / src_dpi(200) — locks render_output_image's ACTUAL output pixel dimensions for
+// a known page size + DPI + paper, not just the target_long_px parameter passed into it.
+describe('render_output_image sizing (C2, spec-web §W2 row 8)', () => {
+  it('locks exported pixel dimensions for a known page size + DPI + paper', async () => {
+    const a = new PdfRendererAdapter()
+    const src = { width: 400, height: 600, close: () => { /* no-op */ } }
+    const box = { x0: 0, y0: 0, x1: 200, y1: 300 }        // full 200x300 page
+    const target_long_px = Math.round(300 * 11.69)        // DPI 300 on A4 height -> 3507
+    const out = await a.render_output_image(src, box, 200, 300, target_long_px, false)
+    expect(out.height).toBe(target_long_px)               // crop's long side (300 > 200) hits it exactly
+    expect(out.width).toBe(Math.round(200 * (target_long_px / 300)))   // short side follows the aspect
+  })
+
+  it("'Original resolution' (null target) keeps the source scale, not a DPI/paper computation", async () => {
+    const a = new PdfRendererAdapter()
+    const src = { width: 400, height: 600, close: () => { /* no-op */ } }
+    const box = { x0: 0, y0: 0, x1: 200, y1: 300 }
+    const out = await a.render_output_image(src, box, 200, 300, null, false)
+    expect(out.width).toBe(400)
+    expect(out.height).toBe(600)
   })
 })

@@ -37,7 +37,7 @@ something changes):
 | Help panel (spec §16: Contents card + sections) | Implemented (§2, `help_view.ts`) |
 | Output Quality / Export as two cards (matches desktop `panels.py`, not the merged card an earlier draft shipped) | Implemented |
 | `confirm_overwrite` setting | **Control removed (2026-07-04)** — the browser download path cannot detect an overwrite (no File System Access write), so the inert Settings checkbox was removed rather than shown with no effect (§W2 row 6) |
-| Test suite (`tests/`) | **GREEN again, verified 2026-07-10 (T2 pass)**: `tsc --noEmit` — 0 errors; the `tests/core/split_mirror.test.ts` dead `mirror_x`/`mirror_y` import that broke it was deleted along with its duplicate `tests/core/split_symmetry.test.ts` (99_FOUND_ISSUES.txt item 1, DONE). `vitest run` — 364/367 passing, 367 total across `tests/core/` (20 files, incl. `detect_union.test.ts`), `tests/ui/` (jsdom, every panel/view), `tests/pdf/loader.test.ts`, `tests/architecture.test.ts`; 3 failures, all in `detect_union.test.ts` (union-rebuild-after-rotate/delete regression + a NORMAL-mode text-layer-vs-ink-path detection contradiction, both unresolved — 99_FOUND_ISSUES.txt item 2). `eslint src tests` clean. `vite build` succeeds. Playwright e2e re-run this pass: 14/14 passing (chromium + firefox; smoke, crop_split, committed_window). Prior "319/344/349 green" figures in commit messages and older doc revisions predate this check and were not actually verified — do not cite them. Coverage gate (separate, not re-run): 90% on `src/core/**`, 80% global lines, with `imaging.ts`/`canvas_view.ts`/`app.ts`/workers excluded as e2e-covered (vitest.config.ts) — some `ui/`/`pdf/` files reported below threshold as of the last coverage run, gap open. |
+| Test suite (`tests/`) | **GREEN, verified 2026-07-10 (T3 pass)**: `tsc --noEmit` — 0 errors. `vitest run` — 374/377 passing, 377 total across `tests/core/` (20 files, incl. `detect_union.test.ts`), `tests/ui/` (jsdom, every panel/view), `tests/pdf/loader.test.ts`, `tests/architecture.test.ts`; 3 failures, all in `detect_union.test.ts` (union-rebuild-after-rotate/delete regression + a NORMAL-mode text-layer-vs-ink-path detection contradiction, both unresolved — 99_FOUND_ISSUES.txt item 2). `eslint src tests` clean. `vite build` succeeds. Playwright e2e re-run this pass: 14/14 passing (chromium + firefox; smoke, crop_split, committed_window). Prior "319/344/349 green" figures in commit messages and older doc revisions predate this check and were not actually verified — do not cite them. Coverage gate (separate, not re-run): 90% on `src/core/**`, 80% global lines, with `imaging.ts`/`canvas_view.ts`/`app.ts`/workers excluded as e2e-covered (vitest.config.ts) — some `ui/`/`pdf/` files reported below threshold as of the last coverage run, gap open. |
 
 Where this document and the running code disagree, that is a bug in the document (or a
 regression in the code) — file it as such, not as an acceptable drift.
@@ -98,8 +98,9 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               synthetic placeholder styling lives here, not ui/constants.ts,
                               because pdf/loader.ts cannot import ui/ — see §4 dependency graph),
                               DPI_PRESETS, EXPORT_FORMATS, IMAGE_LOAD_EXT,
-                              PAPER_SIZES, CUSTOM_DPI_PRESET, DEFAULT_CUSTOM_DPI,
-                              CUSTOM_DPI_MIN/MAX (paper-based export sizing, §W2 row 8),
+                              PAPER_SIZES (A2-A6), CUSTOM_DPI_PRESET, DEFAULT_CUSTOM_DPI,
+                              CUSTOM_DPI_MIN/MAX, CUSTOM_PAPER_PRESET, DEFAULT_CUSTOM_PAPER_IN,
+                              CUSTOM_PAPER_MIN/MAX (paper-based export sizing, §W2 row 8),
                               FILTER_STRENGTH_MIN/MAX, UNDO_DEPTH_MIN/MAX, MAX_SPLIT,
                               CC_CONNECTIVITY, DETECT_THRESHOLD_BLOCK/C, BG_KERNEL_SIZE,
                               BW_THRESHOLD_C, BW_BLOCK_SIZE, SHARPEN_BILATERAL_D/SIGMA_COLOR/SPACE
@@ -133,7 +134,8 @@ C:/DOCS/Code/SmartCroPDF-Web/
       document_state.ts     Offsets (frozen), PageProcessIntent (frozen), DocumentState
                               (the 11 undoable fields + snapshot()), identical to Python
 
-      settings.ts           Settings dataclass — compress_preset, output_colours, export_format,
+      settings.ts           Settings dataclass — compress_preset, custom_dpi, paper_size,
+                              custom_paper_in, output_colours, export_format,
                               output_postfix, undo_depth, dewarp_supersample
 
       history.ts            History — bounded undo/redo of DocumentState snapshots, same interface
@@ -424,7 +426,7 @@ class AppModel {
   get filter_mode(): FilterMode
   get filter_strength(): number
   // + split_count, mode, pages_mode, select_pattern, current_follow,
-  //   keep_ratio, ratio, same_size, compress_preset, paper_size, custom_dpi,
+  //   keep_ratio, ratio, same_size, compress_preset, paper_size, custom_dpi, custom_paper_in,
   //   output_colours, export_format — all plain readonly properties
 
   // pages selection
@@ -465,7 +467,8 @@ class AppModel {
 
   // output settings (outside History — survive Undo)
   set_compress_preset(name: string): void
-  set_paper_size(name: string): void  // PAPER_SIZES key, export sizing base, §W2 row 8
+  set_paper_size(name: string): void  // PAPER_SIZES key or CUSTOM_PAPER_PRESET, §W2 row 8
+  set_custom_paper_in(height_in: number): void  // paper height (in) when paper_size === 'Custom'
   set_custom_dpi(dpi: number): void   // shared by sidebar Output Quality card + Settings → Output
   set_output_colours(mode: string): void
   set_export_format(fmt: string): void
