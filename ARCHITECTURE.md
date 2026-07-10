@@ -784,16 +784,22 @@ goes through it.
   pipeline per page and then discarding most of it by downscaling to `DETECT_MAX_PX`. Desktop detects
   the content box on the raw scan's cleaned bilevel too, so this is parity; the only tradeoff is that
   dewarp's small geometric shift is not reflected in the detected bounds (documented, spec-web §W2 row 5).
-- **Two-tier processed-raster cache.** `_work_cache` is a small RAM LRU for the viewing window; the
-  disk tier is `pdf/work_store.ts` (IndexedDB, PNG blobs) behind the adapter's optional
+- **Two-tier, write-back processed-raster cache.** `_work_cache` is a small RAM LRU for the viewing
+  window; the disk tier is `pdf/work_store.ts` (IndexedDB, PNG blobs) behind the adapter's optional
   `load_work`/`persist_work`/`clear_work_cache` (kept in `pdf/` because `core/` may not touch
-  IndexedDB — architecture rule). `_get_work(p)` is: RAM hit → return; else disk hit → return; else
-  compute via `get_work_image`, cache in RAM, and fire-and-forget persist to disk. The key
-  (`_work_disk_key`) is original page index + full intent (dewarp/filter/strength) + rotation +
-  supersample, so any settings change is a different key (never a stale raster) and re-toggling a
-  prior setting is a disk hit. Cleared on load/reset (`_disk_ready` gates every disk op so a clear
-  can't race a persist). Net effect: each page is processed **at most once per settings-generation**;
-  revisiting an evicted page reloads from disk instead of re-running OpenCV/ONNX.
+  IndexedDB — architecture rule). It is **write-back**: `_work_cache`'s `onCapacityEvict` (a new
+  LRU hook distinct from delete/clear) persists a raster **only when it is evicted for capacity** —
+  never eagerly on compute. Eager persist fired N concurrent PNG-encode+IDB-write jobs per pass that
+  ballooned to hundreds of ms and contended with the next page's OpenCV work (measured). The disk is
+  **read only for a key in `_persisted_keys`** (an in-memory set of what was actually written), so a
+  document that fits in RAM (≤ `CACHE_WINDOW`) does zero IndexedDB I/O on the hot path — a stray read
+  would otherwise serialize behind the load-time `clear` transaction for ~300 ms. The key
+  (`_work_disk_key`) is `_doc_gen` + original page index + full intent + rotation + supersample: a
+  settings change is a new key (never a stale raster), a new document is a new generation (no
+  cross-document collision, so reads need not wait on the fire-and-forget load-time clear).
+  Net effect: each page is processed **at most once per settings-generation**; revisiting an evicted
+  page reloads from disk instead of re-running OpenCV/ONNX. Regression-guarded by
+  `tests/core/work_cache.test.ts`.
 
 Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spec-web §W5).
 Regression-guarded by `tests/perf/scan_speed.test.ts` (`npm run test:perf`) and, end-to-end in a real

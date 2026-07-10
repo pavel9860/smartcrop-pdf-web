@@ -163,8 +163,31 @@ export class AppModel {
   // every page through _get_work and would otherwise evict+close the live page (bug: site dead).
   private _source_cache = new LRUCache<number, ImageBitmap>(CACHE_WINDOW,
     (_, b) => { if (b !== this._current_bitmap) b.close() })
+  // Processed-raster RAM tier. WRITE-BACK to the disk tier: a raster is persisted to IndexedDB only
+  // when the RAM cache is full and it is genuinely evicted (onCapacityEvict) — NOT eagerly on every
+  // compute. Eager persist made a warm pass fire N concurrent PNG-encode+IDB-write jobs that piled
+  // up (hundreds of ms each) and contended with the next page's OpenCV work; for a document that
+  // fits in RAM (≤ CACHE_WINDOW pages) the disk tier is never even read, so that work was pure
+  // overhead. Delete/clear (intent change, reset) close without a disk write. `_work_disk_keys`
+  // carries each cached page's disk key (the intent it was computed under) so eviction persists it
+  // under the right key even if the document's current intent has since changed.
+  private _work_disk_keys = new Map<number, string>()
+  // Keys actually written to the disk tier (on capacity eviction). _get_work only reads disk for a
+  // key in this set — so a document that fits in RAM does ZERO disk reads and never touches
+  // IndexedDB on the hot path (a stray read would serialize behind the load-time clear transaction
+  // for ~300 ms; this set makes that read never happen). In-memory, cleared on load/reset.
+  private _persisted_keys = new Set<string>()
   private _work_cache = new LRUCache<number, ImageBitmap>(CACHE_WINDOW,
-    (_, b) => { if (b !== this._current_bitmap) b.close() })
+    (p, b) => { this._work_disk_keys.delete(p); if (b !== this._current_bitmap) b.close() },
+    (p, b) => {
+      const key = this._work_disk_keys.get(p)
+      // persist_work snapshots pixels synchronously (drawImage before any await), so closing right
+      // after is safe; a capacity eviction only happens deep into processing, long after any
+      // load-time clear. Record the key so _get_work knows this raster is retrievable from disk.
+      if (key && this._adapter.persist_work) { void this._adapter.persist_work(key, b); this._persisted_keys.add(key) }
+      this._work_disk_keys.delete(p)
+      if (b !== this._current_bitmap) b.close()
+    })
 
   // Pre-rendered output bitmaps for committed pages (keyed "page:split_idx")
   private _output_cache = new LRUCache<string, ImageBitmap>(CACHE_WINDOW * 2,
@@ -174,10 +197,12 @@ export class AppModel {
   private _current_bitmap: ImageBitmap | null = null
   private _is_loading = false
 
-  // Resolves once the disk (IndexedDB) tier of the work cache has been cleared for the current
-  // document. Every disk load/persist awaits it, so a fresh document never reads a previous
-  // document's rasters and a clear can't race a persist (spec-web §W2 row 5).
-  private _disk_ready: Promise<void> = Promise.resolve()
+  // Monotonic document generation, bumped on every load/reset and baked into each disk-cache key.
+  // This namespaces a document's processed rasters so a disk read can never return a PREVIOUS
+  // document's raster (key collision), which means reads/persists do NOT have to wait for the
+  // load-time IndexedDB clear to finish — that wait added ~300 ms to the first pages of a scan pass.
+  // The clear still runs (fire-and-forget) to bound storage; correctness no longer depends on it.
+  private _doc_gen = 0
 
   // Logical page index -> original adapter page index. The adapter (pdf.js) has no page-deletion
   // primitive — unlike desktop's PyMuPDF `doc.delete_pages()`, which physically shrinks the
@@ -224,9 +249,13 @@ export class AppModel {
     this._draw_rect = null
     this._source_cache.clear()
     this._work_cache.clear()
+    this._work_disk_keys.clear()
+    this._persisted_keys.clear()
     this._output_cache.clear()
-    // Drop the previous document's processed rasters from disk; every disk op awaits this first.
-    this._disk_ready = this._adapter.clear_work_cache?.() ?? Promise.resolve()
+    // New generation → new disk-key namespace (see _doc_gen). Drop the old generation's rasters
+    // from disk to bound storage, but fire-and-forget: correctness no longer waits on it.
+    this._doc_gen += 1
+    void this._adapter.clear_work_cache?.()
     this._current_bitmap = null
     this._page_map = this._doc ? Array.from({ length: this._doc.page_count }, (_, i) => i) : []
     // Keep-ratio initialises to the first page's real w/h, not a bare 1.0, so the ratio field
@@ -1383,13 +1412,24 @@ export class AppModel {
     const intent = this._page_process_intent(p)
     if (!intent.dewarp && !intent.filter) return src
 
-    const disk = await this._load_work_from_disk(p, intent)
-    if (disk) { this._work_cache.set(p, disk); return disk }
+    const key = this._work_disk_key(p, intent)
+    // Only hit the disk tier for a key we actually persisted (see _persisted_keys) — a page that
+    // never left RAM was never written, so skip the IndexedDB round-trip (and its clear-serialized
+    // stall) entirely.
+    const disk = this._persisted_keys.has(key) ? await this._load_work_from_disk(key) : null
+    if (disk) { this._cache_work(p, key, disk); return disk }
 
     const work = await this._adapter.get_work_image(src, intent, this.settings.dewarp_supersample)
-    this._work_cache.set(p, work)
-    void this._persist_work_to_disk(p, intent, work)
+    // Write-back cache: don't persist here — the disk write happens only if/when this raster is
+    // evicted from RAM (see _work_cache's onCapacityEvict). Small documents never evict, so they
+    // never pay for a disk write they'd never read back.
+    this._cache_work(p, key, work)
     return work
+  }
+
+  private _cache_work(p: number, key: string, work: ImageBitmap): void {
+    this._work_disk_keys.set(p, key)
+    this._work_cache.set(p, work)
   }
 
   private _page_process_intent(p: number): PageProcessIntent {
@@ -1400,27 +1440,21 @@ export class AppModel {
     }
   }
 
-  // Two-tier work cache — disk (IndexedDB) tier. Key = original page index + full intent (dewarp,
-  // filter mode/strength), rotation and supersample: any change yields a different key, so a
-  // settings change never returns a stale raster (it re-processes into a new key instead). The disk
-  // store is cleared on every load/reset (_disk_ready), so keys never collide across documents.
+  // Two-tier work cache — disk (IndexedDB) tier. Key = document generation + original page index +
+  // full intent (dewarp, filter mode/strength), rotation and supersample: any change yields a
+  // different key, so a settings change never returns a stale raster (it re-processes into a new
+  // key instead) and a new document (new _doc_gen) never collides with a prior one's rasters.
   private _work_disk_key(p: number, intent: PageProcessIntent): string {
     const orig = this._page_map[p] ?? p
     const filt = intent.filter ? `${intent.filter[0]}-${intent.filter[1]}` : 'none'
     const rot = this.document.rotation.get(p) ?? 0
-    return `${orig}|d${intent.dewarp ? 1 : 0}|f${filt}|r${rot}|s${this.settings.dewarp_supersample}`
+    return `g${this._doc_gen}|${orig}|d${intent.dewarp ? 1 : 0}|f${filt}|r${rot}|s${this.settings.dewarp_supersample}`
   }
 
-  private async _load_work_from_disk(p: number, intent: PageProcessIntent): Promise<ImageBitmap | null> {
-    if (!this._adapter.load_work) return null
-    await this._disk_ready
-    return this._adapter.load_work(this._work_disk_key(p, intent))
-  }
-
-  private async _persist_work_to_disk(p: number, intent: PageProcessIntent, bmp: ImageBitmap): Promise<void> {
-    if (!this._adapter.persist_work) return
-    await this._disk_ready
-    await this._adapter.persist_work(this._work_disk_key(p, intent), bmp)
+  private _load_work_from_disk(key: string): Promise<ImageBitmap | null> {
+    // No wait on the load-time clear: _doc_gen namespaces the key, so there is no cross-document
+    // collision to guard against, and the read just misses (fast) for a never-persisted page.
+    return this._adapter.load_work?.(key) ?? Promise.resolve(null)
   }
 
   private _live_auto_crop_for(p: number): Box | null {
