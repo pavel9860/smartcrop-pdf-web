@@ -1,0 +1,93 @@
+FOUND ISSUES — spotted while doing T0 (docs reconciliation), not fixed there (docs-only task).
+Verified against running code 2026-07-10. Append, don't rewrite; each task that resolves an item
+should mark it DONE with the commit that fixed it, not delete the entry.
+================================================================================================
+
+1. GATE IS CURRENTLY RED (tsc + vitest) — root cause: dead import, not environment.
+   `tests/core/split_mirror.test.ts:7` does `import { mirror_x, mirror_y, type Box } from
+   '@core/geometry'`. Neither `mirror_x` nor `mirror_y` is exported by `src/core/geometry.ts` (it
+   never existed there per `git log --all -p -- src/core/geometry.ts`) — this breaks `tsc --noEmit`
+   (2 errors) and fails 2 tests in that file ("mirror_x is not a function", "mirror_y is not a
+   function"). The rest of that file's ~14 tests (same-size 2/4-split live behavior, keep-ratio on
+   splits) all PASS — they exercise the actually-shipped `edge_deltas`/`apply_edge_deltas` v2
+   implementation (spec-web §W2 row 10), so this looks like dead test code for an abandoned
+   mirror-reflection approach that was superseded by the edge-delta approach within the same commit,
+   without the orphaned import/describe block being removed.
+   Commit 9cf743d ("split same-size v2 ... spec/docs cleanup", 2026-07-06) introduced both the test
+   file and the gate break in the same commit, and its own message claims "Gate: 344 unit + 7 e2e
+   green" — that claim was false at commit time (tsc was already broken by this same import). Do not
+   trust historic "gate green" claims in commit messages without re-running the gate.
+   Likely resolved as a side effect of T2 (split same-size v3 rewrite) if it removes/replaces this
+   file; if T2 doesn't touch this file, whoever picks it up should either implement `mirror_x`/
+   `mirror_y` (if a genuine reflection helper is still wanted) or delete the dead
+   `describe('geometry.mirror_x / mirror_y', ...)` block (lines 49-59).
+   Severity: HIGH (blocks tsc gate). Owner: T2 or a standalone cleanup.
+
+2. tests/core/detect_union.test.ts — 3 failing tests, TWO DISTINCT real issues, neither is the
+   mirror_x/mirror_y problem above:
+
+   2a. Union rebuild after rotate_pages()/delete_pages() does not reapply the FULL_PAGE_FRAC
+   exclusion (spec §8). `model.document.union` is correctly computed (fallback full-page boxes
+   excluded) at detect time, but after `rotate_pages()` or `delete_pages()` the rebuilt union comes
+   back as the raw bounding box of ALL boxes including full-page fallbacks — e.g. rotate case:
+   expected `{x0:20,y0:20,x1:280,y1:250}`, got `{x0:0,y0:0,x1:260,y1:300}` (test lines 100-102);
+   delete case: expected `{x0:10,y0:10,x1:110,y1:210}`, got `{x0:0,y0:0,x1:198,y1:295}` (lines
+   126-128). This is a genuine correctness bug (data quality of the auto-crop union after any
+   rotate/delete on a document with a detected union), not a stub/WIP issue. Root cause not yet
+   diagnosed — likely wherever rotate_pages()/delete_pages() rebuild `document.union` in
+   `src/core/model.ts`, that rebuild path skips the same FULL_PAGE_FRAC filter the initial
+   `_compute_detection_union` (model.ts ~line 366) applies.
+   Severity: HIGH (silent data-quality regression, not a crash). Owner: unclear — closest existing
+   task is T5 (auto-detect), but T5's brief (00_README_MASTER.txt) is scoped to progress-freeze/jump
+   and outlier tolerance, not this. May need its own bug ID.
+
+   2b. NORMAL-mode detection uses a PDF text-layer fast path that the test explicitly says must
+   never be used. `src/core/model.ts:348-350` (`_detect_each_page`): "NORMAL pages: derive the
+   content box from the PDF text layer ... Falls back to the Sauvola image path only when there is
+   no usable text layer" — deliberately mirrors desktop `detect.py normal_page_box`, implemented via
+   `PdfRendererAdapter.detect_text_box()` in `src/pdf/loader.ts:324`. The test file's own header
+   comment (detect_union.test.ts:1-3) says the opposite is required: "NORMAL-mode detection must use
+   the ink path (detect_content_box), never a pdf.js text-layer box — advance-based text boxes
+   inflate x1 (right-margin regression)" and its first test asserts `text_calls.n` stays 0 (it's 2).
+   Neither side is obviously wrong without more context — desktop parity (text-layer fast path,
+   matches Python `detect.py`) vs. a specific "right-margin regression" bug report that this test
+   was apparently written to codify as a fix (TDD-style) but whose corresponding model.ts change was
+   never made. The test's own comment cites "spec-web §W2 row 10" for this, which is WRONG even
+   under the doc's history — row 10 has only ever been "Same-size split windows" (added same commit,
+   9cf743d) or didn't exist (pre-9cf743d table had 9 rows total, W2 row 10 was never
+   detection-related). This citation was probably a placeholder guess made before the final row
+   numbering landed, and neither the fix nor its doc row were ever completed. No existing spec-web
+   §W2 row documents NORMAL-mode text-layer-vs-ink-path detection at all — this behavior (whichever
+   way it's decided) is currently UNDOCUMENTED.
+   Severity: HIGH if the "right-margin regression" bug is real on production PDFs (auto-detect boxes
+   would be wrong on native/NORMAL documents) — needs someone to actually reproduce it against a
+   real PDF with justified/wide text runs before deciding which side is correct. Do not just delete
+   the failing test to go green; the comment reads like a genuine bug report, not noise.
+   Owner: unclear, likely T5 (auto-detect) or a new bug ID; needs a spec-web §W2 row once resolved
+   either way.
+
+3. Environment: `node_modules/.bin/tsc` and `node_modules/.bin/eslint` currently lack the execute
+   bit on this mount (`-rw-rw-r--`) — `npx tsc`/`npx eslint` fail (`Permission denied`; eslint falls
+   back to an unrelated global v6.4.0 install with no flat-config support, producing a confusing
+   "couldn't find a configuration file" error that looks like a project misconfiguration but isn't).
+   Workaround used this session: `node node_modules/typescript/bin/tsc --noEmit` / `node
+   node_modules/eslint/bin/eslint.js src tests`. Noted in CLAUDE.md's Environment constraints
+   section. Not a code bug; flagging so nobody "fixes" the eslint config chasing a phantom.
+
+4. TODO.txt was found deleted from the working tree (uncommitted, not staged) at the start of this
+   session, with no corresponding commit — stray/unexplained state, possibly the same class of
+   mount-write issue CLAUDE.md's Environment constraints section already warns about (though this
+   was a full deletion, not a truncation). Per explicit user instruction this session, it was left
+   deleted/not restored ("don't use TODO, it's dated"). Both spec-web and ARCHITECTURE.md referenced
+   TODO.txt in a few places (items 4, 8, 15) — those dangling citations were removed as part of T0's
+   doc reconciliation (spec-web only; ARCHITECTURE.md had no TODO.txt references). If TODO.txt's
+   remaining open items (it had unresolved perf/GPU-verification items beyond what's now in
+   00_README_MASTER.txt) still matter, someone should reconcile its content into
+   00_README_MASTER.txt before it's gone for good — not done here, out of scope.
+
+5. `docs/SmartCrop_PDF_Specification_Web.md` §W2 rows 9-10 cited "ARCHITECTURE §5.4" — that
+   subsection does not exist in ARCHITECTURE.md (sections run 5, 5a, 6, 7, 7a, 8, 8.1, 8.1a, ... —
+   no 5.x below 5a). Fixed in T0 to point at ARCHITECTURE §2 (the geometry.ts module-map entry,
+   which now lists `keep_ratio_anchored`/`edge_deltas`/`apply_edge_deltas`). Flagging in case a
+   future session intended to actually add a real §5.4 subsection for split/keep-ratio mechanism
+   detail rather than just fixing the pointer.

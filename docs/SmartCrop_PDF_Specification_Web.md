@@ -42,8 +42,10 @@ is authoritative over this section's prose.
 
 ## W2. Known behavioral deviations from the desktop spec
 
-Real, user-visible gaps as of this document's last update (2026-07-03) — verified against the
-actual running toolchain this update, not documentation staleness.
+Real, user-visible gaps as of this document's last update (2026-07-10) — each row re-verified
+against the actual running code this update (file:line, not documentation staleness); the
+individual "Fixed/Deliberate deviation (date)" tags below record when each behavior itself last
+changed, which predates this verification pass.
 
 | # | Area (desktop spec) | Desktop behavior | Web behavior today | Architecture reference |
 |---|---|---|---|---|
@@ -55,21 +57,21 @@ actual running toolchain this update, not documentation staleness.
 | 6 | `confirm_overwrite` setting (§15) | Warns before silently replacing an existing file on export | **Control removed (2026-07-04).** The web export path streams a browser download and cannot detect or block an overwrite (no File System Access write), so the setting was inert; the Settings checkbox is removed rather than shown with no effect. | §W6 below |
 | 7 | Binarization DPI scaling (§10.2) | Sauvola window / background-kernel / min-area scale with the page's embedded DPI | Fixed kernel sizes — the web's scanned-mode source DPI (`SRC_DPI`) is a constant 200, unlike desktop's variable source DPI, so this mainly affects the B/W filter's kernel size relative to desktop's 150-DPI reference case, not correctness. | ARCHITECTURE §9 — low-severity fidelity residual |
 | 8 | Output quality → preview (§12.1 WYSIWYG) | Preview is the exact output raster (WYSIWYG) | **Deliberate deviation (2026-07-04).** Compress DPI and output colour (Grayscale) apply to the **exported file only**, never the on-screen preview. Rendering the committed-crop preview at the export DPI made a crop appear at e.g. 75 dpi (395×505) and in grayscale; the editing view must stay full-resolution and true-colour. `render_output_image` remains the single render path — WYSIWYG is preserved for crop geometry, filters and rotation; only the DPI/colour arguments differ (preview: `null`/`false`; export: preset/colour). Set by `_prerender_output_views` (preview) vs `_render_export_pages` (export). **Output pixel size (2026-07-05):** the exported raster is sized as **output DPI × paper size** — each output page's long side `m = max(w,h)` is assumed to be the paper height, so the long side becomes `L = dpi × paper_height_in` pixels (A4 = 11.69 in → 300 dpi → 3507 px) and the short side scales by the crop's own aspect (no distortion, no padding). 'Original resolution' keeps the source raster size. Paper size is a Settings → Output option (`PAPER_SIZES`, default A4). Custom DPI is editable in **both** the sidebar Output Quality card and Settings → Output — one shared state (`settings.custom_dpi`); editing the Settings field switches the preset to Custom. | ARCHITECTURE §1 |
-| 9 | Keep-ratio during drags (§9.7) | Ratio snaps on RELEASE, anchored top-left; split rectangles snap on release | **Deliberate web deviation (2026-07-04).** Keep-ratio holds **live** throughout every resize (no deform-then-jump), including 2/4-split rectangles, and a resize is anchored on the corner/edge **opposite** the dragged handle — edge drags grow the perpendicular axis symmetrically about the box centre — so only the dragged side moves, never the whole window. Frozen §9.7 specifies on-release/top-left; this is a usability fix (extends the already-live drawn-window behavior to splits and corrects the anchor). `keep_ratio_anchored()` in `geometry.ts`, applied live in `_update_split_drag`/`_update_drawn_drag`; static sources (live auto crop, fresh-draw release) keep the top-left `keep_ratio_normalise`. Enabling keep-ratio with split 2/4 active pre-populates the ratio from the split CELL aspect — split 2: `(page_w/2)/page_h`, split 4: `(page_w/2)/(page_h/2)` — not the union/page aspect (those pre-populate sources apply at split = 1 only); the split-2 cell is half a page wide, so the union/page aspect started ~2× too wide. | ARCHITECTURE §5.4 |
-| 10 | Same-size split windows (§7.3, §9.6) | "Same size" is enforced on RELEASE: the other windows adopt the dragged window's w×h, keeping their own origins | **Deliberate deviation (2026-07-05, v2).** Same-size holds **LIVE** as **directional edge symmetry**: windows keep their own positions; only the dragged window's per-edge **deltas** propagate, mirrored by grid parity, each applied to the partner's own rectangle at drag start. Partner in the other **column** (x-mirrored): `ΔL′=−ΔR, ΔR′=−ΔL`; other **row** (y-mirrored): `ΔT′=−ΔB, ΔB′=−ΔT`; diagonal partner mirrors both; unmirrored axes copy unchanged. (Grid order n=2 [left,right]; n=4 [TL,BL,TR,BR].) So dragging the LEFT edge of the left 2-split window moves the RIGHT edge of the right window the opposite direction; TOP/BOTTOM edges move the same direction — and nothing else about the partner changes. A move propagates all four edge deltas (mirrored translation). Keep-ratio applies to the dragged window; partners receive the resulting deltas. **Windows may overlap** — symmetry of motion is the only constraint, no anti-overlap clamping; each window clamps to the page independently. **Esc/right-click during the drag restores every window** to its drag-start rectangle (`SplitDrag.rects0`), per frozen §9.6 "windows left unchanged". Replaces both the on-release copy (diagonal-overlap bug) and the v1 positional mirroring (windows snapped to mirrored places). `geometry.apply_edge_deltas`, driven from `_update_split_drag`. | ARCHITECTURE §5.4 |
+| 9 | Keep-ratio during drags (§9.7) | Ratio snaps on RELEASE, anchored top-left; split rectangles snap on release | **Deliberate web deviation (2026-07-04).** Keep-ratio holds **live** throughout every resize (no deform-then-jump), including 2/4-split rectangles, and a resize is anchored on the corner/edge **opposite** the dragged handle — edge drags grow the perpendicular axis symmetrically about the box centre — so only the dragged side moves, never the whole window. Frozen §9.7 specifies on-release/top-left; this is a usability fix (extends the already-live drawn-window behavior to splits and corrects the anchor). `keep_ratio_anchored()` in `geometry.ts`, applied live in `_update_split_drag`/`_update_drawn_drag`; static sources (live auto crop, fresh-draw release) keep the top-left `keep_ratio_normalise`. Enabling keep-ratio with split 2/4 active pre-populates the ratio from the split CELL aspect — split 2: `(page_w/2)/page_h`, split 4: `(page_w/2)/(page_h/2)` — not the union/page aspect (those pre-populate sources apply at split = 1 only); the split-2 cell is half a page wide, so the union/page aspect started ~2× too wide. | ARCHITECTURE §2 |
+| 10 | Same-size split windows (§7.3, §9.6) | "Same size" is enforced on RELEASE: the other windows adopt the dragged window's w×h, keeping their own origins | **Deliberate deviation (2026-07-05, v2).** Same-size holds **LIVE** as **directional edge symmetry**: windows keep their own positions; only the dragged window's per-edge **deltas** propagate, mirrored by grid parity, each applied to the partner's own rectangle at drag start. Partner in the other **column** (x-mirrored): `ΔL′=−ΔR, ΔR′=−ΔL`; other **row** (y-mirrored): `ΔT′=−ΔB, ΔB′=−ΔT`; diagonal partner mirrors both; unmirrored axes copy unchanged. (Grid order n=2 [left,right]; n=4 [TL,BL,TR,BR].) So dragging the LEFT edge of the left 2-split window moves the RIGHT edge of the right window the opposite direction; TOP/BOTTOM edges move the same direction — and nothing else about the partner changes. A move propagates all four edge deltas (mirrored translation). Keep-ratio applies to the dragged window; partners receive the resulting deltas. **Windows may overlap** — symmetry of motion is the only constraint, no anti-overlap clamping; each window clamps to the page independently. **Esc/right-click during the drag restores every window** to its drag-start rectangle (`SplitDrag.rects0`), per frozen §9.6 "windows left unchanged". Replaces both the on-release copy (diagonal-overlap bug) and the v1 positional mirroring (windows snapped to mirrored places). `geometry.apply_edge_deltas`, driven from `_update_split_drag`. | ARCHITECTURE §2 |
 
 Everything else in the desktop spec — classification (§4), coordinate system/canvas fit (§5), the
 full crop-window state machine (§9) including keep-ratio (§9.7) and cancel-drag (§9.3/§9.6),
 auto-detect (§8), the B/W and Sharpen filters (§10.2), pages selection (§11), apply/export/compress
-(§12), history/reset/rotate/delete (§13), and the error taxonomy (§20) — is implemented and passes
-the unit-test gate (349/349 as of 2026-07-05 — tests/core + tests/ui jsdom coverage for every
-panel/view + tests/pdf/loader). The Playwright end-to-end suite (`tests/e2e/`: smoke, crop_split,
-committed_window; chromium + firefox projects) exercises the synthetic-doc boot, three-column
-layout, split/crop output-page math, committed-window gestures, and Settings-panel open/Esc-close
-in a real browser. Confidence [high] for unit-level correctness and the chromium e2e paths; [med] for
-(a) Firefox (the e2e project exists but was not runnable in the update sandbox — missing OS libs)
-and (b) in-app WebGPU dewarp on a real GPU (the sandbox has no GPU; only the wasm EP was exercised
-in-browser). See TODO.txt items 8 and 15.
+(§12), history/reset/rotate/delete (§13), and the error taxonomy (§20) — is implemented and
+exercised by the test suite. Current pass/fail counts and coverage live in ARCHITECTURE.md's status
+table and §19 (Quality gates), not here, so this document doesn't go stale every time the suite
+changes. The Playwright end-to-end suite (`tests/e2e/`: smoke, crop_split, committed_window;
+chromium + firefox projects) exercises the synthetic-doc boot, three-column layout, split/crop
+output-page math, committed-window gestures, and Settings-panel open/Esc-close in a real browser.
+Confidence [high] for unit-level correctness and the chromium e2e paths; [med] for (a) Firefox (the
+e2e project exists but was not runnable in the update sandbox — missing OS libs) and (b) in-app
+WebGPU dewarp on a real GPU (the sandbox has no GPU; only the wasm EP was exercised in-browser).
 
 ---
 
@@ -110,10 +112,9 @@ buttons, then Undo/Redo/Reset, then page nav — same content and order as deskt
 The loaded document name sits in **its own card at the very top** of the sidebar (above Document &
 State), same card frame as Advanced and the Load-button label font — single file → its name, several
 → "first.pdf +N more", card hidden entirely when nothing is loaded (`AppModel.document_name`).
-The canvas carries a **bottom-right cursor read-out** as a DOM overlay; there is **no page-number/
-size text on the canvas** (removed 2026-07-05 by user decision — deviation from desktop §3.3;
-`ViewSnapshot.status` still carries the string for the model layer, it is just not displayed) and
-nothing is painted on the page raster (desktop inv 32). Settings → Appearance → Font size is a **preset
+The canvas carries a **bottom-right cursor read-out** as a DOM overlay (see **Status text** below
+for the full account); nothing else is drawn on the canvas outside the page bitmap and crop
+overlays. Settings → Appearance → Font size is a **preset
 dropdown** (8, 10, 12, 15, 18, 22, 25 pt). Navigation **prefetches the adjacent pages'** work rasters
 in the background after each view prepares, so next/prev is a cache hit rather than a blank
 "Loading…" flash while a scanned-mode filter render runs on demand.
@@ -127,8 +128,8 @@ The compress dropdown includes a **Custom…** entry backed by a numeric DPI fie
 (`AppModel.custom_dpi`, default 300, clamped 50–1200); like every output-quality setting it affects
 the exported file only (§W2 row 8), never the preview.
 Exact icon set, control widths, switch/field styling, and per-control coloring (e.g. Delete must
-NOT be styled differently from other action buttons — see TODO.txt item 4) must match
-`docs/app_design_screenshots/`, which supersedes this section's prose wherever more specific.
+NOT be styled differently from other action buttons) must match `docs/app_design_screenshots/`,
+which supersedes this section's prose wherever more specific.
 
 **Detail panel** replaces the desktop's floating Settings/Help windows (§15, §16): a panel between
 the sidebar and canvas, collapsed (width 0) by default. Clicking Settings or Help opens it showing
@@ -136,9 +137,11 @@ that content and shrinks the canvas to fill the remaining space (never below 400
 same button again, or **Esc**, closes it. Pressing the other button swaps content without a
 close/reopen animation. No modal, no overlay dimming — it is part of the normal page flow.
 
-**Status text** — nothing is painted onto the page raster (desktop inv 32) and there is no
-page/size status element on the canvas (see above). The only canvas overlay text is the
-bottom-right cursor read-out (`canvas_view.ts` `_coords_el`), updated on pointer move.
+**Status text** — the canvas has no page-number/size status element (removed 2026-07-05 by user
+decision — deviation from desktop §3.3). `ViewSnapshot.status` still carries the string at the
+model layer (`core/model.ts`); nothing renders it. Nothing is painted onto the page raster either
+(desktop inv 32). The only canvas-adjacent text is the bottom-right cursor read-out, a DOM overlay
+(`canvas_view.ts`'s `_coords_el`), updated on `pointermove`.
 
 ---
 

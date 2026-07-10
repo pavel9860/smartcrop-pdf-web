@@ -1,9 +1,18 @@
 CLAUDE.md — SmartCrop PDF Web
 
 Current state (read this before anything else)
-HEAD is green: tsc --noEmit, eslint src tests, vitest run (319/319), vite build → deployable dist/,
-and playwright test (tests/e2e/ EXISTS — smoke.spec.ts, crop_split.spec.ts, committed_window.spec.ts;
-chromium + firefox). Red: vitest run --coverage (ui/ and pdf/ below threshold on some files).
+HEAD is RED, verified 2026-07-10: `tsc --noEmit` fails with 2 errors — `tests/core/split_mirror.
+test.ts` imports `mirror_x`/`mirror_y` from `@core/geometry`, neither of which exists (dead import
+from an abandoned same-size design; the shipped same-size v2 uses `edge_deltas`/`apply_edge_deltas`
+instead, see spec-web §W2 row 10 and T2). `vitest run`: 361/366 passing, 5 failures in 2 files —
+the 2 tsc-blocked cases above plus 3 in `tests/core/detect_union.test.ts` (a union-rebuild-after-
+rotate/delete regression, and a NORMAL-mode text-layer-vs-ink-path detection contradiction; both
+unresolved, see 99_FOUND_ISSUES.txt). `eslint src tests` is clean. `vite build` succeeds. playwright
+test (tests/e2e/ EXISTS — smoke.spec.ts, crop_split.spec.ts, committed_window.spec.ts; chromium +
+firefox) not re-run this pass. Red also: vitest run --coverage (ui/ and pdf/ below threshold on
+some files). Do not trust a "gate green" claim in an old commit message without re-running it —
+commit 9cf743d claimed "344 unit + 7 e2e green" while already shipping the tsc-breaking import
+above; every prior doc test-count (319/319, 349/349) inherited that false claim uncorrected.
 Do not trust any older ARCHITECTURE.md/spec-web claim not yet corrected against this —
 verify every "Implemented"/"verified" row yourself before relying on it, and correct the doc as
 part of the work, not as a followup. Dewarp specifically is NOT a stub: full two-stage ONNX
@@ -31,6 +40,11 @@ every gate-passing step — this section exists so that requirement doesn't coll
 bug again. If still on the Windows-mounted path, do not assume a write succeeded; re-view the
 file after writing, and do not attempt git add/commit — hand those back to the user with the
 exact files changed.
+`node_modules/.bin/*` (tsc, eslint) can lose their executable bit on this mount — `npx tsc`/
+`npx eslint` then fail (`Permission denied`, or eslint silently falls back to a stray global
+install missing the flat config). Verified 2026-07-10. Workaround: `node node_modules/typescript/
+bin/tsc` / `node node_modules/eslint/bin/eslint.js` (same args). Fix the bit with `chmod +x` if
+the write survives the mount; don't assume `npx <tool>` failing means the tool itself is broken.
 
 Source of truth
 docs/SmartCrop_PDF_Specification.md is the canonical, platform-agnostic behavioral contract —
@@ -85,96 +99,12 @@ See ARCHITECTURE.md for the file map, dependency graph, and state split. Target 
 src/core (pure TS), src/pdf (PDF.js + pdf-lib adapters, main thread), src/workers (export.worker.ts
 only), src/ui (DOM/canvas/panels), tests/{core,ui,e2e,fixtures}.
 
-AppModel public interface (what ui/ calls — complete list)
-// document
-async load_files(files: File[]): Promise<void>     // raises DocumentLoadError
-async reset(): Promise<void>
-page_count(): number
-get has_document(): boolean
-
-// navigation
-next_page() / prev_page(): void
-jump_to_output_page(n: number): void
-get view_total(): number
-get view_position(): number
-
-// queries
-view_snapshot(): ViewSnapshot         // side-effect-free
-get can_detect / can_apply / can_undo / can_redo(): boolean
-get auto_active(): boolean
-get offsets(): Offsets
-get dewarp_on(): boolean
-get filter_mode(): FilterMode
-get filter_strength(): number
-// + split_count, mode, pages_mode, select_pattern, current_follow, keep_ratio, ratio,
-//   same_size, compress_preset, output_colours, export_format — plain readonly properties
-
-// pages selection
-set_pages_mode(mode: PagesMode): void
-set_select_pattern(pattern: string): void
-set_current_follow(on: boolean): void
-resolve_pages(): number[]
-
-// crop / detect
-detect_content(): BatchJob              // raises EmptySelectionError; drives imaging pipeline
-apply_crop(): void                      // raises InvalidSplitError / EmptySelectionError
-set_anchor(left: boolean | null, top: boolean | null): void
-set_offset(edge: 'L'|'T'|'R'|'B', value: number): void
-commit_offsets(): void
-set_keep_ratio(on: boolean, ratio?: number): void
-set_split(n: number): void
-set_same_size(on: boolean): void
-
-// gestures (page-unit coordinates)
-begin_drag(px: number, py: number, tol: number): void
-update_drag(px: number, py: number): void
-end_drag(): void
-cancel_drag(): void
-
-// scan processing
-run_dewarp(): BatchJob
-set_filter_mode(mode: FilterMode): BatchJob
-set_filter_strength(n: number): BatchJob
-
-// rotate / delete (§5a, §13)
-rotate_pages(): void                    // raises NoDocumentError / EmptySelectionError
-delete_pages(): void                    // raises DeleteAllPagesError
-
-// history
-undo() / redo(): void
-
-// output settings (outside History — survive Undo)
-set_compress_preset(name: string): void
-set_output_colours(mode: string): void
-set_export_format(fmt: string): void
-set_undo_depth(depth: number): void
-set_output_folder(folder: string): void
-set_output_postfix(postfix: string): void
-set_dewarp_supersample(factor: number): void
-
-// export
-suggested_export_name(): [string, string]
-export(filename: string): BatchJob     // drives export.worker
-
-In Step 4+ sessions: read this block instead of all of core/model.ts.
-
-ViewSnapshot fields (what canvas_view.ts reads)
-image: ImageBitmap      // page raster or committed-crop output image
-page_w / page_h: number // coordinate space overlay/draw_rect live in
-overlay: OverlayBox[]   // empty on a committed page
-draw_rect: Box | null   // live rubber-band
-position / total: number
-status: string           // e.g. "page 3 / 12" or "page 3 / 12  (page 2 split 1/2)"
-
-BatchJob protocol (what dispatch_job / onProgress drives)
-title: string
-total: number
-done: number
-onProgress(cb): void
-is_finished(): boolean
-cancel(): void
-result(): Promise<Ok | Cancelled | Failed>
-Cancel before the first tick writes no file — no partial output (spec §22.8).
+AppModel public interface, ViewSnapshot fields, BatchJob protocol
+Full signatures live in ARCHITECTURE.md — §5 (AppModel), §5a (ViewSnapshot, incl. crop_origin/
+is_loading), §6 (BatchJob) — and are kept current there, not duplicated here: this block's own
+copy drifted stale twice (missing set_paper_size/set_custom_dpi/paper_size/custom_dpi/
+document_name; a phantom is_finished() on BatchJob that doesn't exist in src/core/batch.ts).
+In Step 4+ sessions: read ARCHITECTURE.md §5 instead of all of core/model.ts.
 
 Process
 Read CLAUDE.md + the ≤6 files actually needed for the task. Never load the whole codebase into a

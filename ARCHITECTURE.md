@@ -37,7 +37,7 @@ something changes):
 | Help panel (spec §16: Contents card + sections) | Implemented (§2, `help_view.ts`) |
 | Output Quality / Export as two cards (matches desktop `panels.py`, not the merged card an earlier draft shipped) | Implemented |
 | `confirm_overwrite` setting | **Control removed (2026-07-04)** — the browser download path cannot detect an overwrite (no File System Access write), so the inert Settings checkbox was removed rather than shown with no effect (§W2 row 6) |
-| Test suite (`tests/`) | 319 unit tests green (2026-07-05): `tests/core/` (17 files), `tests/ui/` (jsdom, every panel/view), `tests/pdf/loader.test.ts`, `tests/architecture.test.ts`. Playwright e2e committed (`tests/e2e/`: smoke, crop_split, committed_window; chromium + firefox projects). Coverage gate: 90% on `src/core/**`, 80% global lines, with `imaging.ts`/`canvas_view.ts`/`app.ts`/workers excluded as e2e-covered (vitest.config.ts) — some `ui/`/`pdf/` files still below threshold, gap open. |
+| Test suite (`tests/`) | **RED, verified 2026-07-10**: `tsc --noEmit` — 2 errors (`tests/core/split_mirror.test.ts` imports `geometry.mirror_x`/`mirror_y`, neither exists — dead import from an abandoned same-size design, superseded by the shipped `edge_deltas`/`apply_edge_deltas`). `vitest run` — 361/366 passing, 366 total across `tests/core/` (18 files incl. `split_mirror.test.ts`, `detect_union.test.ts`), `tests/ui/` (jsdom, every panel/view), `tests/pdf/loader.test.ts`, `tests/architecture.test.ts`; 5 failures in 2 files — the 2 tsc-blocked cases plus 3 in `detect_union.test.ts` (union-rebuild-after-rotate/delete regression + a NORMAL-mode text-layer-vs-ink-path detection contradiction, both unresolved — 99_FOUND_ISSUES.txt). `eslint src tests` clean. `vite build` succeeds. Playwright e2e committed (`tests/e2e/`: smoke, crop_split, committed_window; chromium + firefox projects), not re-run this pass. Prior "319/344/349 green" figures in commit messages and older doc revisions predate this check and were not actually verified — do not cite them. Coverage gate (separate, not re-run): 90% on `src/core/**`, 80% global lines, with `imaging.ts`/`canvas_view.ts`/`app.ts`/workers excluded as e2e-covered (vitest.config.ts) — some `ui/`/`pdf/` files reported below threshold as of the last coverage run, gap open. |
 
 Where this document and the running code disagree, that is a bug in the document (or a
 regression in the code) — file it as such, not as an acceptable drift.
@@ -98,6 +98,8 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               synthetic placeholder styling lives here, not ui/constants.ts,
                               because pdf/loader.ts cannot import ui/ — see §4 dependency graph),
                               DPI_PRESETS, EXPORT_FORMATS, IMAGE_LOAD_EXT,
+                              PAPER_SIZES, CUSTOM_DPI_PRESET, DEFAULT_CUSTOM_DPI,
+                              CUSTOM_DPI_MIN/MAX (paper-based export sizing, §W2 row 8),
                               FILTER_STRENGTH_MIN/MAX, UNDO_DEPTH_MIN/MAX, MAX_SPLIT,
                               CC_CONNECTIVITY, DETECT_THRESHOLD_BLOCK/C, BG_KERNEL_SIZE,
                               BW_THRESHOLD_C, BW_BLOCK_SIZE, SHARPEN_BILATERAL_D/SIGMA_COLOR/SPACE
@@ -113,7 +115,12 @@ C:/DOCS/Code/SmartCroPDF-Web/
 
       geometry.ts           Box type, hit_handle(), auto_crop_rect(), drag_resize(),
                               drag_move(), union_box(), rotate_box_cw(), clamp_to_page(),
-                              keep_ratio_normalise() — pure math, no I/O
+                              keep_ratio_normalise(), keep_ratio_anchored() (§W2 row 9),
+                              edge_deltas() / apply_edge_deltas() (same-size v2, §W2 row 10) —
+                              pure math, no I/O. NOTE: tests/core/split_mirror.test.ts imports
+                              mirror_x()/mirror_y() from this module — neither exists; dead
+                              import from an abandoned same-size design, breaks tsc (see
+                              99_FOUND_ISSUES.txt).
 
       parsing.ts            resolve_pages(pattern, total, mode) → number[]
                               All/Odd/Even + pattern: ranges, slices (1:4, ::2, 10:), mixed
@@ -396,6 +403,7 @@ class AppModel {
   async reset(): Promise<void>
   page_count(): number
   get has_document(): boolean
+  get document_name(): string         // sidebar doc-name card, spec-web §W3
 
   // navigation
   next_page(): void
@@ -416,8 +424,8 @@ class AppModel {
   get filter_mode(): FilterMode
   get filter_strength(): number
   // + split_count, mode, pages_mode, select_pattern, current_follow,
-  //   keep_ratio, ratio, same_size, compress_preset, output_colours,
-  //   export_format — all plain readonly properties
+  //   keep_ratio, ratio, same_size, compress_preset, paper_size, custom_dpi,
+  //   output_colours, export_format — all plain readonly properties
 
   // pages selection
   set_pages_mode(mode: PagesMode): void
@@ -426,7 +434,8 @@ class AppModel {
   resolve_pages(): number[]
 
   // crop / detect
-  detect_content(): BatchJob              // raises EmptySelectionError; drives imaging.worker
+  detect_content(): BatchJob              // raises EmptySelectionError; drives imaging.ts on the
+                                           // main thread, not a worker (§7a)
   apply_crop(): void                      // raises InvalidSplitError / EmptySelectionError
   set_anchor(left: boolean | null, top: boolean | null): void
   set_offset(edge: 'L'|'T'|'R'|'B', value: number): void
@@ -456,6 +465,8 @@ class AppModel {
 
   // output settings (outside History — survive Undo)
   set_compress_preset(name: string): void
+  set_paper_size(name: string): void  // PAPER_SIZES key, export sizing base, §W2 row 8
+  set_custom_dpi(dpi: number): void   // shared by sidebar Output Quality card + Settings → Output
   set_output_colours(mode: string): void
   set_export_format(fmt: string): void
   set_undo_depth(depth: number): void
@@ -743,7 +754,8 @@ ONNX model cache:
 ```ts
 // On first run_dewarp: try IndexedDB, else fetch from CDN, store in IndexedDB
 const modelBytes = await load_from_cache('docuwarp-model') ?? await fetch_and_cache(MODEL_URL)
-const session = await ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'] })
+const eps = ('gpu' in navigator) ? ['webgpu', 'wasm'] : ['wasm']   // imaging.ts, not hardcoded
+const session = await ort.InferenceSession.create(modelBytes, { executionProviders: eps })
 ```
 
 ---
@@ -915,7 +927,7 @@ Cloudflare CDN: proxy GitHub Pages origin; edge cache for JS chunks + PDF.js wor
 | Main bundle (core + ui + pdf/) | ~120 KB |
 | PDF.js chunk (pdfjs-dist) | ~280 KB |
 | pdf-lib chunk | ~100 KB |
-| OpenCV.js WASM (imaging.worker) | ~8 MB (lazy; scanned mode only) |
+| OpenCV.js WASM (`pdf/imaging.ts`, main thread — §7a) | ~8 MB (lazy; scanned mode only) |
 | ONNX Runtime Web (lazy) | ~8 MB (lazy; dewarp only) |
 | docuwarp model (lazy, IndexedDB) | ~10 MB (once per session, cached) |
 
