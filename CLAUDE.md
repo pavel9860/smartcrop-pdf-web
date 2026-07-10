@@ -1,16 +1,16 @@
 CLAUDE.md — SmartCrop PDF Web
 
 Current state (read this before anything else)
-HEAD is RED, verified 2026-07-10: `tsc --noEmit` fails with 2 errors — `tests/core/split_mirror.
-test.ts` imports `mirror_x`/`mirror_y` from `@core/geometry`, neither of which exists (dead import
-from an abandoned same-size design; the shipped same-size v2 uses `edge_deltas`/`apply_edge_deltas`
-instead, see spec-web §W2 row 10 and T2). `vitest run`: 361/366 passing, 5 failures in 2 files —
-the 2 tsc-blocked cases above plus 3 in `tests/core/detect_union.test.ts` (a union-rebuild-after-
-rotate/delete regression, and a NORMAL-mode text-layer-vs-ink-path detection contradiction; both
-unresolved, see 99_FOUND_ISSUES.txt). `eslint src tests` is clean. `vite build` succeeds. playwright
-test (tests/e2e/ EXISTS — smoke.spec.ts, crop_split.spec.ts, committed_window.spec.ts; chromium +
-firefox) not re-run this pass. Red also: vitest run --coverage (ui/ and pdf/ below threshold on
-some files). Do not trust a "gate green" claim in an old commit message without re-running it —
+HEAD is GREEN again, verified 2026-07-10 (T2 same-size v3/v2-restore pass): `tsc --noEmit` is 0
+errors — the dead `mirror_x`/`mirror_y` import that broke it (`tests/core/split_mirror.test.ts`)
+was deleted along with its duplicate `tests/core/split_symmetry.test.ts` (see 99_FOUND_ISSUES.txt
+item 1, DONE, and item 7 for the full same-size design history/reversal). `vitest run`: 364/367
+passing, 3 failures, all in `tests/core/detect_union.test.ts` (a union-rebuild-after-rotate/delete
+regression, and a NORMAL-mode text-layer-vs-ink-path detection contradiction; both unresolved, see
+99_FOUND_ISSUES.txt item 2). `eslint src tests` is clean. `vite build` succeeds. `playwright test`:
+14/14 passing (chromium + firefox; smoke/crop_split/committed_window). Red still: vitest run
+--coverage (ui/ and pdf/ below threshold on some files) — not touched this pass.
+Do not trust a "gate green" claim in an old commit message without re-running it —
 commit 9cf743d claimed "344 unit + 7 e2e green" while already shipping the tsc-breaking import
 above; every prior doc test-count (319/319, 349/349) inherited that false claim uncorrected.
 Do not trust any older ARCHITECTURE.md/spec-web claim not yet corrected against this —

@@ -371,6 +371,39 @@ describe('detect_content / apply_crop', () => {
     expect(model.ratio).toBeCloseTo(160 / 360, 5)
   })
 
+  it('set_keep_ratio(true) at split>1 prefers a manually resized window over the fresh-grid cell aspect (bug #4)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.set_split(2)
+    const r = model.document.crop_rects[0]!            // {0,0,100,300}
+    model.begin_drag(r.x1, (r.y0 + r.y1) / 2, 8)        // R handle
+    model.update_drag(180, (r.y0 + r.y1) / 2)           // manually resize BEFORE keep-ratio is pressed
+    model.end_drag()
+    expect(model.document.crop_rects[0]!.x1).toBeCloseTo(180)
+
+    model.set_keep_ratio(true)
+    // the fresh-grid cell aspect would be 100/300; the manual edit's own aspect must win instead.
+    expect(model.ratio).toBeCloseTo(180 / 300, 5)
+  })
+
+  it('set_keep_ratio(true) at split=1 prefers a manually drawn window over the page aspect (bug #4)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.begin_drag(20, 20, 5); model.update_drag(120, 70); model.end_drag()   // drawn {20,20,120,70}: 100x50
+    model.set_keep_ratio(true)
+    expect(model.ratio).toBeCloseTo(100 / 50, 5)   // not the page aspect 200/300
+  })
+
+  it('changing the split count while keep-ratio is ON re-derives the ratio fresh, not scaled from the prior value (bug #3)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.set_keep_ratio(true)                 // split=1, nothing drawn/detected yet -> page aspect
+    expect(model.ratio).toBeCloseTo(200 / 300, 5)
+    model.set_split(2)
+    // split-2's fresh grid cell is (page_w/2)/page_h = 100/300 -- exactly half the prior ratio here,
+    // but as a SIDE EFFECT of the new grid's shape, not a dedicated *0.5 rule (a custom-typed ratio
+    // does not survive the split change either — it is dropped and re-derived, by design).
+    expect(model.ratio).toBeCloseTo(100 / 300, 5)
+    expect(model.ratio).toBeCloseTo(0.5 * (200 / 300), 5)
+  })
+
   it('set_split seeds crop_rects for the requested count', async () => {
     const model = await loaded_model()
     model.set_split(4)
@@ -686,6 +719,20 @@ describe('keep-ratio live + anchored', () => {
     expect(boxes).toHaveLength(2)
     const r0 = boxes[0]!
     expect((r0.x1 - r0.x0) / (r0.y1 - r0.y0)).toBeCloseTo(1.0) // ratio held mid-drag, not on release
+  })
+
+  it('a 2-split window keeps its ratio lock past 50% page width instead of deforming (bug #3, geometry §9.7)', async () => {
+    const model = await loaded_model({ page_w: 400, page_h: 120 })
+    model.set_split(2)
+    model.set_keep_ratio(true, 2.0)                            // width:height = 2:1
+    const r0 = model.document.crop_rects[0]!                   // {0,0,200,120}
+    model.begin_drag(r0.x1, r0.y1, 10)                         // BR handle
+    model.update_drag(300, 120)                                // target width 300 = 75% of the page
+    const box = model.view_snapshot().overlay.find(o => o.kind === 'split')?.box
+    expect(box).toBeDefined()
+    expect((box!.x1 - box!.x0) / (box!.y1 - box!.y0)).toBeCloseTo(2.0)   // ratio held exactly
+    expect(box!.y1).toBeLessThanOrEqual(120)                              // clamped to the page
+    expect(box!.x1 - box!.x0).toBeCloseTo(240)   // width capped back from 300 to hold the ratio at the wall
   })
 })
 

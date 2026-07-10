@@ -22,6 +22,9 @@ should mark it DONE with the commit that fixed it, not delete the entry.
    `mirror_y` (if a genuine reflection helper is still wanted) or delete the dead
    `describe('geometry.mirror_x / mirror_y', ...)` block (lines 49-59).
    Severity: HIGH (blocks tsc gate). Owner: T2 or a standalone cleanup.
+   DONE (T2, 2026-07-10): deleted whole file — it was dead v1 leftovers plus a duplicate of the
+   (also now-deleted) `split_symmetry.test.ts`, which carried the actually-shipped v2 edge-delta
+   tests forward under spec-web row 10's numbering. tsc is green again.
 
 2. tests/core/detect_union.test.ts — 3 failing tests, TWO DISTINCT real issues, neither is the
    mirror_x/mirror_y problem above:
@@ -123,3 +126,36 @@ should mark it DONE with the commit that fixed it, not delete the entry.
    by all 7, and `delete_pages` already builds on the same guard plus one extra check
    (`pages.length >= this.page_count()`) so it would need a slightly different shape. Severity: LOW
    (pure duplication, no behavior bug). Owner: T6.
+
+7. T2 (same-size split v3 -> restored/refined v2, 2026-07-10) — DESIGN REVERSAL, flagged per
+   process rules, not silently done:
+
+   The task brief handed to this session specified v3: "each window anchored at its own corner,
+   fully independent position" (reading frozen §7.3's literal text), superseding v1 (positional
+   mirror) AND v2 (directional edge-delta mirroring, spec-web §W2 row 10 as shipped 2026-07-05). It
+   also said to REMOVE `geometry.edge_deltas`/`apply_edge_deltas` if v3 left them unused.
+   Mid-session, the user tested the v3 design's consequence (each window's position fully
+   independent of the others) and rejected it: for a 2-split, the two windows no longer shared a
+   top/bottom edge after a Y-axis resize; for a 4-split, rows/columns drifted apart (bug #5 in the
+   user's own numbering). The corrected, user-confirmed final design (see AskUserQuestion exchange
+   this session) RESTORES v2's edge-delta mirroring mechanism for RESIZE gestures only, and adds a
+   permanent, explicit exclusion: a `move` (translating a window by its interior) NEVER propagates
+   to other windows, in any state — v2 had mirrored move deltas too, which the user confirmed was
+   wrong. So `edge_deltas`/`apply_edge_deltas` were NOT removed — they are still the mechanism,
+   just gated to `handle !== 'move'` and now pre-clamped by a new `geometry.clamp_edge_deltas`
+   (bug #2: growth must stop at the tightest window's page-edge headroom instead of a partner
+   needing to jump/deform afterward). `set_same_size(true)` also now normalizes every window to
+   the first window's size immediately on toggle (not just after the next drag), and
+   `set_keep_ratio`/`set_split` share one `_default_ratio()` source (crop_rects[0]/document.drawn/
+   union/page, in that priority) instead of the old split-count-keyed formula (bug #3/#4).
+   `geometry.keep_ratio_anchored` was also fixed to hold the ratio exactly at the page wall for
+   every anchor case (previously deformed the ratio instead of preserving it — a 2-split window
+   over 50% page width lost its lock). Full detail: spec-web §W2 rows 9-10 (both rewritten this
+   session) and the T2 commit body. Flagging here per CLAUDE.md's "flag it" instruction for this
+   exact kind of reversal, and because it means `docs/SmartCrop_PDF_Specification_Web.md` §W2 row
+   10 now documents a DELIBERATE, confirmed contradiction of frozen §7.3's literal "each anchored
+   at its own corner" text for the axis a row/column shares — a genuine spec conflict, not an
+   oversight, and called out as such in that row rather than silently reinterpreted.
+   Severity: N/A (documentation/process flag, not a bug). Owner: none — resolved and shipped this
+   session; noted here only so a future session doesn't "fix" §7.3-vs-code drift back to literal
+   independence without re-reading this history first.

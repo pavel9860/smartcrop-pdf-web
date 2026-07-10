@@ -37,7 +37,7 @@ something changes):
 | Help panel (spec §16: Contents card + sections) | Implemented (§2, `help_view.ts`) |
 | Output Quality / Export as two cards (matches desktop `panels.py`, not the merged card an earlier draft shipped) | Implemented |
 | `confirm_overwrite` setting | **Control removed (2026-07-04)** — the browser download path cannot detect an overwrite (no File System Access write), so the inert Settings checkbox was removed rather than shown with no effect (§W2 row 6) |
-| Test suite (`tests/`) | **RED, verified 2026-07-10**: `tsc --noEmit` — 2 errors (`tests/core/split_mirror.test.ts` imports `geometry.mirror_x`/`mirror_y`, neither exists — dead import from an abandoned same-size design, superseded by the shipped `edge_deltas`/`apply_edge_deltas`). `vitest run` — 361/366 passing, 366 total across `tests/core/` (18 files incl. `split_mirror.test.ts`, `detect_union.test.ts`), `tests/ui/` (jsdom, every panel/view), `tests/pdf/loader.test.ts`, `tests/architecture.test.ts`; 5 failures in 2 files — the 2 tsc-blocked cases plus 3 in `detect_union.test.ts` (union-rebuild-after-rotate/delete regression + a NORMAL-mode text-layer-vs-ink-path detection contradiction, both unresolved — 99_FOUND_ISSUES.txt). `eslint src tests` clean. `vite build` succeeds. Playwright e2e committed (`tests/e2e/`: smoke, crop_split, committed_window; chromium + firefox projects), not re-run this pass. Prior "319/344/349 green" figures in commit messages and older doc revisions predate this check and were not actually verified — do not cite them. Coverage gate (separate, not re-run): 90% on `src/core/**`, 80% global lines, with `imaging.ts`/`canvas_view.ts`/`app.ts`/workers excluded as e2e-covered (vitest.config.ts) — some `ui/`/`pdf/` files reported below threshold as of the last coverage run, gap open. |
+| Test suite (`tests/`) | **GREEN again, verified 2026-07-10 (T2 pass)**: `tsc --noEmit` — 0 errors; the `tests/core/split_mirror.test.ts` dead `mirror_x`/`mirror_y` import that broke it was deleted along with its duplicate `tests/core/split_symmetry.test.ts` (99_FOUND_ISSUES.txt item 1, DONE). `vitest run` — 364/367 passing, 367 total across `tests/core/` (20 files, incl. `detect_union.test.ts`), `tests/ui/` (jsdom, every panel/view), `tests/pdf/loader.test.ts`, `tests/architecture.test.ts`; 3 failures, all in `detect_union.test.ts` (union-rebuild-after-rotate/delete regression + a NORMAL-mode text-layer-vs-ink-path detection contradiction, both unresolved — 99_FOUND_ISSUES.txt item 2). `eslint src tests` clean. `vite build` succeeds. Playwright e2e re-run this pass: 14/14 passing (chromium + firefox; smoke, crop_split, committed_window). Prior "319/344/349 green" figures in commit messages and older doc revisions predate this check and were not actually verified — do not cite them. Coverage gate (separate, not re-run): 90% on `src/core/**`, 80% global lines, with `imaging.ts`/`canvas_view.ts`/`app.ts`/workers excluded as e2e-covered (vitest.config.ts) — some `ui/`/`pdf/` files reported below threshold as of the last coverage run, gap open. |
 
 Where this document and the running code disagree, that is a bug in the document (or a
 regression in the code) — file it as such, not as an acceptable drift.
@@ -115,12 +115,12 @@ C:/DOCS/Code/SmartCroPDF-Web/
 
       geometry.ts           Box type, hit_handle(), auto_crop_rect(), drag_resize(),
                               drag_move(), union_box(), rotate_box_cw(), clamp_to_page(),
-                              keep_ratio_normalise(), keep_ratio_anchored() (§W2 row 9),
-                              edge_deltas() / apply_edge_deltas() (same-size v2, §W2 row 10) —
-                              pure math, no I/O. NOTE: tests/core/split_mirror.test.ts imports
-                              mirror_x()/mirror_y() from this module — neither exists; dead
-                              import from an abandoned same-size design, breaks tsc (see
-                              99_FOUND_ISSUES.txt).
+                              keep_ratio_normalise(), keep_ratio_anchored() (§W2 row 9, now
+                              ratio-preserving at the page wall for every anchor case),
+                              edge_deltas() / apply_edge_deltas() / clamp_edge_deltas() (same-size
+                              RESIZE, restored+refined 2026-07-10 after a same-day v3 attempt broke
+                              row/column alignment — see 99_FOUND_ISSUES.txt item 7 — gated to
+                              exclude `move`, §W2 row 10) — pure math, no I/O.
 
       parsing.ts            resolve_pages(pattern, total, mode) → number[]
                               All/Odd/Even + pattern: ranges, slices (1:4, ::2, 10:), mixed

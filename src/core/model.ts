@@ -14,7 +14,7 @@ import {
   hit_handle, point_in_box, apply_handle_drag, auto_crop_rect,
   offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
   split_rects_grid, rotate_box_cw, reindex_map, detection_union,
-  edge_deltas, apply_edge_deltas,
+  edge_deltas, apply_edge_deltas, clamp_edge_deltas,
   MIN_RECT, box_width, box_height,
 } from './geometry'
 import { LRUCache } from './lru'
@@ -500,27 +500,29 @@ export class AppModel {
     const was_off = !this._keep_ratio
     this._keep_ratio = on
     if (ratio !== undefined && ratio > 0) this._ratio = ratio
-    else if (on && was_off) {
-      // Split 2/4 active: pre-populate from the split CELL aspect — split 2 cell = (w/2)×h,
-      // split 4 = (w/2)×(h/2). The union/page sources below describe a full-page single crop;
-      // the split-2 cell is half a page wide, so those started ~2× too wide (spec-web §W2 row 9).
-      if (this._split_count > 1 && this._doc) {
-        const sz = this._current_page_size()
-        const cell_h = this._split_count === 4 ? sz.height / 2 : sz.height
-        if (cell_h > 0) this._ratio = (sz.width / 2) / cell_h
-        return
-      }
-      // Pre-populate from the detection union's aspect ratio when detection has run; otherwise
-      // default to the current PAGE's aspect ratio, not a bare 1.0 (bug E — "keep ratio set by
-      // default 1 not page w/h"). keep-ratio then locks to the content shape, or the page.
-      const u = this.document.union
-      if (u && box_height(u) > 0) {
-        this._ratio = box_width(u) / box_height(u)
-      } else if (this._doc) {
-        const sz = this._current_page_size()
-        if (sz.height > 0) this._ratio = sz.width / sz.height
-      }
+    else if (on && was_off) this._ratio = this._default_ratio()
+  }
+
+  // Ratio pre-populate source, shared by set_keep_ratio's off->on toggle and set_split() (bug #3/
+  // #4, spec-web §W2 row 9): prefer whatever crop shape is ALREADY on screen — crop_rects[0] at
+  // split 2/4, the hand-drawn window at split 1 — over a page/union-derived formula, so an edit
+  // made before Keep-ratio is pressed is not silently discarded. Falls back to the detection
+  // union, then the page aspect, only when no concrete crop shape exists yet (bug E).
+  private _default_ratio(): number {
+    if (this._split_count > 1) {
+      const r = this.document.crop_rects[0]
+      if (r && box_height(r) > 0) return box_width(r) / box_height(r)
+    } else if (this.document.drawn) {
+      const d = this.document.drawn
+      if (box_height(d) > 0) return box_width(d) / box_height(d)
     }
+    const u = this.document.union
+    if (u && box_height(u) > 0) return box_width(u) / box_height(u)
+    if (this._doc) {
+      const sz = this._current_page_size()
+      if (sz.height > 0) return sz.width / sz.height
+    }
+    return 1.0
   }
 
   set_split(n: 1 | 2 | 4): void {
@@ -536,9 +538,35 @@ export class AppModel {
       // n === 1 has no split rectangles (desktop clears crop_rects); 2/4 auto-lay the grid.
       this.document.crop_rects = n === 1 ? [] : split_rects_grid(n, sz.width, sz.height)
     }
+    // A split-count change always re-derives the ratio fresh from the newly-reseeded grid — it
+    // does not carry the previous ratio forward proportionally (bug #3; explicit user decision:
+    // "drop the previous ratio if the split changes"). Reuses the same source set_keep_ratio's
+    // off->on toggle uses, so 1->2 with keep-ratio already on lands on half the prior page-aspect
+    // ratio only as a side effect of split 2's cell being half as wide, not a dedicated rule.
+    if (this._keep_ratio) this._ratio = this._default_ratio()
   }
 
-  set_same_size(on: boolean): void { this._same_size = on }
+  // Turning Same-size ON immediately normalizes every window to the FIRST window's width/height
+  // (bug #2: "all crop windows should be the same size all the time", not just after the next
+  // drag) — capped to whatever fits every window's own, unmoved origin so nothing needs to shift
+  // position to fit (same "stop growth at the tightest headroom" principle _propagate_same_size
+  // uses live during a drag). Deliberate deviation from frozen §7.3's literal "dragging one
+  // resizes all of them" (which only describes the on-drag case) — spec-web §W2 row 10.
+  set_same_size(on: boolean): void {
+    const turning_on = on && !this._same_size
+    this._same_size = on
+    if (!turning_on) return
+    const rects = this.document.crop_rects
+    const first = rects[0]
+    if (!this._doc || !first) return
+    const sz = this._current_page_size()
+    const max_w = Math.min(...rects.map(r => sz.width - r.x0))
+    const max_h = Math.min(...rects.map(r => sz.height - r.y0))
+    const w = Math.max(MIN_RECT, Math.min(box_width(first), max_w))
+    const h = Math.max(MIN_RECT, Math.min(box_height(first), max_h))
+    this.history.push(this.document)
+    this.document.crop_rects = rects.map(r => ({ x0: r.x0, y0: r.y0, x1: r.x0 + w, y1: r.y0 + h }))
+  }
 
   // ---------------------------------------------------------------------------
   // Gestures — delegated to per-kind helpers so each is ≤30 lines
@@ -677,25 +705,31 @@ export class AppModel {
     }
     const rects = [...this.document.crop_rects]
     rects[drag.idx] = updated
-    if (this._same_size) {
-      // Same-size v2 = LIVE directional edge symmetry (spec-web §W2 row 10): partners keep their
-      // own placement; only the dragged window's per-edge deltas propagate, mirrored by grid
-      // parity (n=2 [left,right]; n=4 [TL,BL,TR,BR]: col = idx>>1, row = idx&1), each applied to
-      // the partner's drag-start rectangle. Overlap allowed; per-window page clamp only.
-      const d = edge_deltas(drag.rect0, updated)
-      const n = rects.length
-      const col = (i: number): number => (n === 2 ? i : i >> 1)
-      const row = (i: number): number => (n === 2 ? 0 : i & 1)
-      for (let i = 0; i < n; i++) {
-        if (i === drag.idx) continue
-        const base = drag.rects0[i]
-        if (base) {
-          rects[i] = apply_edge_deltas(base, d,
-            col(i) !== col(drag.idx), row(i) !== row(drag.idx), drag.page_w, drag.page_h)
-        }
-      }
-    }
+    // Same-size propagates ONLY on a resize (spec-web §W2 row 10) — `move` (dragging a window's
+    // interior to translate it) NEVER syncs partners, in any state; this is a deliberate,
+    // permanent exclusion (a prior design mirrored move deltas too, and that was wrong).
+    if (this._same_size && drag.handle !== 'move') this._propagate_same_size(drag, updated, rects)
     this.document.crop_rects = rects
+  }
+
+  // Same-size RESIZE (spec-web §W2 row 10): the dragged window's raw edge deltas mirror by grid
+  // parity onto every OTHER window's own drag-start rect — column mirror (opposite column) swaps+
+  // negates the x pair, row mirror (opposite row) the y pair; same column/row copies that axis
+  // unchanged (n=2 [left,right] shares one row always; n=4 [TL,BL,TR,BR]: col=idx>>1, row=idx&1).
+  // Deltas are capped up front to every window's own headroom (bug #2) so growth simply stops at
+  // the tightest window's page-edge limit instead of a partner needing to jump/deform afterward.
+  private _propagate_same_size(drag: SplitDrag, updated: Box, rects: Box[]): void {
+    const n = rects.length
+    const col = (i: number): number => (n === 2 ? i : i >> 1)
+    const row = (i: number): number => (n === 2 ? 0 : i & 1)
+    const mirror_cols = rects.map((_, i) => col(i) !== col(drag.idx))
+    const mirror_rows = rects.map((_, i) => row(i) !== row(drag.idx))
+    const raw = edge_deltas(drag.rect0, updated)
+    const d = clamp_edge_deltas(raw, drag.rects0, mirror_cols, mirror_rows, drag.page_w, drag.page_h)
+    for (let i = 0; i < n; i++) {
+      const base = drag.rects0[i]
+      if (base) rects[i] = apply_edge_deltas(base, d, mirror_cols[i] ?? false, mirror_rows[i] ?? false, drag.page_w, drag.page_h)
+    }
   }
 
   private _update_drawn_drag(drag: DrawnDrag, px: number, py: number): void {

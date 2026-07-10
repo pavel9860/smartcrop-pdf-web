@@ -208,6 +208,11 @@ export function keep_ratio_normalise(
 // drags, height for horizontal-edge drags; an edge drag grows the perpendicular axis symmetrically
 // about the box centre. A 'move' preserves the ratio already. Deviates from frozen §9.7's
 // on-release/top-left rule — see spec-web §W2 row 9.
+// Why one long function: 4 corners + 2 symmetric-edge pairs each need their OWN page-wall clamp
+// (frozen §9.7: "a ratio-constrained edge that would leave the page is clamped ... and the
+// opposite dimension follows"), each re-deriving a DIFFERENT one of x0/x1/y0/y1 depending which
+// point is anchored — splitting per-case would just move the same branching into smaller,
+// harder-to-compare functions.
 export function keep_ratio_anchored(
   box: Box,
   ratio: number,
@@ -220,14 +225,40 @@ export function keep_ratio_anchored(
   let { x0, y0, x1, y1 } = box
 
   switch (handle) {
-    case 'BR': y1 = y0 + w / ratio; break                       // anchor TL
-    case 'BL': y1 = y0 + w / ratio; break                       // anchor TR
-    case 'TR': y0 = y1 - w / ratio; break                       // anchor BL
-    case 'TL': y0 = y1 - w / ratio; break                       // anchor BR
+    case 'BR':                                                  // anchor TL
+      y1 = y0 + w / ratio
+      if (y1 > page_h) { y1 = page_h; x1 = x0 + (y1 - y0) * ratio }
+      break
+    case 'BL':                                                  // anchor TR
+      y1 = y0 + w / ratio
+      if (y1 > page_h) { y1 = page_h; x0 = x1 - (y1 - y0) * ratio }
+      break
+    case 'TR':                                                  // anchor BL
+      y0 = y1 - w / ratio
+      if (y0 < 0) { y0 = 0; x1 = x0 + (y1 - y0) * ratio }
+      break
+    case 'TL':                                                  // anchor BR
+      y0 = y1 - w / ratio
+      if (y0 < 0) { y0 = 0; x0 = x1 - (y1 - y0) * ratio }
+      break
     case 'L':
-    case 'R': { const nh = w / ratio, cy = (y0 + y1) / 2; y0 = cy - nh / 2; y1 = cy + nh / 2; break }
+    case 'R': {
+      const cy = (y0 + y1) / 2
+      const nh = Math.min(w / ratio, 2 * Math.min(cy, page_h - cy))   // room to grow symmetrically
+      y0 = cy - nh / 2; y1 = cy + nh / 2
+      const nw = nh * ratio                                          // width follows the (possibly
+      if (handle === 'R') x1 = x0 + nw; else x0 = x1 - nw            // clamped) height; anchor side fixed
+      break
+    }
     case 'T':
-    case 'B': { const nw = h * ratio, cx = (x0 + x1) / 2; x0 = cx - nw / 2; x1 = cx + nw / 2; break }
+    case 'B': {
+      const cx = (x0 + x1) / 2
+      const nw = Math.min(h * ratio, 2 * Math.min(cx, page_w - cx))
+      x0 = cx - nw / 2; x1 = cx + nw / 2
+      const nh = nw / ratio
+      if (handle === 'B') y1 = y0 + nh; else y0 = y1 - nh
+      break
+    }
     case 'move': break                                          // translation preserves the ratio
   }
   return clamp_box_drag({ x0, y0, x1, y1 }, page_w, page_h)
@@ -244,8 +275,9 @@ export function rotate_box_cw(box: Box, page_h: number): Box {
   }
 }
 
-// Per-edge deltas of a drag (updated − rect0) — the unit that same-size v2 propagates to the
-// partner windows (spec-web §W2 row 10).
+// Per-edge deltas of a resize (updated − rect0) — the unit that same-size RESIZE propagates to
+// the partner windows (spec-web §W2 row 10). Never used for a 'move' drag — same-size does not
+// propagate translation, only a resize's edge deltas.
 export interface EdgeDeltas { dl: number; dt: number; dr: number; db: number }
 
 export function edge_deltas(rect0: Box, updated: Box): EdgeDeltas {
@@ -255,10 +287,13 @@ export function edge_deltas(rect0: Box, updated: Box): EdgeDeltas {
   }
 }
 
-// Apply mirrored edge deltas to a partner window's own drag-start rectangle (same-size v2,
+// Apply mirrored edge deltas to a partner window's own drag-start rectangle (same-size resize,
 // spec-web §W2 row 10): a partner in the other column swaps+negates the x pair (ΔL′=−ΔR,
 // ΔR′=−ΔL), the other row the y pair (ΔT′=−ΔB, ΔB′=−ΔT); unmirrored axes copy unchanged.
-// The window keeps its own placement — only its sides move, in mirrored directions.
+// The window keeps its own placement — only its sides move, in mirrored or copied directions.
+// Deltas should already be bounded by clamp_edge_deltas() before reaching here — clamp_box_drag
+// below is a safety net, not the primary limiter (bug #2: a per-window post-hoc clamp here alone
+// could deform one partner independently of the others and break the equal-size invariant).
 export function apply_edge_deltas(
   base: Box, d: EdgeDeltas, mirror_cols: boolean, mirror_rows: boolean,
   page_w: number, page_h: number,
@@ -270,6 +305,38 @@ export function apply_edge_deltas(
   return clamp_box_drag(
     { x0: base.x0 + dl, y0: base.y0 + dt, x1: base.x1 + dr, y1: base.y1 + db },
     page_w, page_h)
+}
+
+// Bound one axis pair (lo=dl|dt, hi=dr|db) so every window's OWN edge (direct or mirrored) stays
+// on the page — used by clamp_edge_deltas below, split out because X and Y are otherwise
+// identical math applied to different fields.
+function clamp_axis_deltas(
+  lo_raw: number, hi_raw: number,
+  starts: readonly number[], ends: readonly number[], mirrored: readonly boolean[],
+  page_len: number,
+): { lo: number; hi: number } {
+  let lo = lo_raw, hi = hi_raw
+  for (let i = 0; i < starts.length; i++) {
+    const s = starts[i] ?? 0, e = ends[i] ?? 0
+    if (mirrored[i]) { hi = Math.min(hi, s); lo = Math.max(lo, e - page_len) }
+    else             { lo = Math.max(lo, -s); hi = Math.min(hi, page_len - e) }
+  }
+  return { lo, hi }
+}
+
+// Cap a same-size resize's raw edge deltas so applying them (direct or mirrored, per window) via
+// apply_edge_deltas keeps EVERY window's own drag-start rectangle on the page — growth simply
+// stops at the tightest window's headroom instead of a partner needing to be repositioned/
+// deformed afterward (bug #2). `mirror_cols`/`mirror_rows` are per-window, same indexing as
+// `rects0` (the dragged window's own entry is always unmirrored: false, false).
+export function clamp_edge_deltas(
+  d: EdgeDeltas, rects0: readonly Box[],
+  mirror_cols: readonly boolean[], mirror_rows: readonly boolean[],
+  page_w: number, page_h: number,
+): EdgeDeltas {
+  const x = clamp_axis_deltas(d.dl, d.dr, rects0.map(r => r.x0), rects0.map(r => r.x1), mirror_cols, page_w)
+  const y = clamp_axis_deltas(d.dt, d.db, rects0.map(r => r.y0), rects0.map(r => r.y1), mirror_rows, page_h)
+  return { dl: x.lo, dt: y.lo, dr: x.hi, db: y.hi }
 }
 
 // Initial split rectangles as an even grid (spec §7.3, §9.6).
