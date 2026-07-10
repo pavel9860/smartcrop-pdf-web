@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
 import type { Box } from '@core/geometry'
 import { Mode, PagesMode } from '@core/enums'
+import { EmptySelectionError } from '@core/errors'
 
 function bmp(w = 100, h = 100): ImageBitmap { return { width: w, height: h, close: (): void => {} } }
 function adapter(pc = 4, mode = Mode.NORMAL, w = 200, h = 300): RendererAdapter {
@@ -239,10 +240,9 @@ describe('draw with keep-ratio + misc', () => {
     expect(m.offsets.top).toBeCloseTo(6, 5)
   })
 
-  it('filter strength on an empty selection still completes', async () => {
+  it('set_filter_strength throws EmptySelectionError on an empty selection (M4)', async () => {
     const m = await loaded(4, Mode.SCANNED)
     m.set_select_pattern('999'); m.set_pages_mode(PagesMode.SELECT)
-    expect(() => { m.set_filter_strength(2) }).not.toThrow()
-    expect(m.filter_strength).toBe(2)
+    expect(() => { m.set_filter_strength(2) }).toThrow(EmptySelectionError)
   })
 })

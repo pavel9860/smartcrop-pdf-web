@@ -246,8 +246,8 @@ describe('detect_content / apply_crop', () => {
     // set_split() call while split_count itself stays put, producing a real mismatch.
     const model = await loaded_model({ page_w: 200, page_h: 300 })
     model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()   // history.push, crop_rects=[]
-    model.set_split(4)   // crop_rects now has 4 rects; split_count=4; not itself undoable
-    model.undo()         // restores document to the pre-draw-commit snapshot: crop_rects=[]
+    model.set_split(4)   // crop_rects now has 4 rects; split_count=4; not itself undoable; pushes (C1)
+    model.undo()         // restores document to the pre-split snapshot: crop_rects=[] either way
     expect(model.split_count).toBe(4)              // untouched by undo
     expect(() => { model.apply_crop(); }).toThrow(InvalidSplitError)
   })
@@ -340,6 +340,17 @@ describe('detect_content / apply_crop', () => {
     expect(model.view_snapshot().overlay).toHaveLength(1)   // drawn window shown
     model.cancel_drag()
     expect(model.view_snapshot().overlay).toHaveLength(0)   // dropped by Esc/right-click
+  })
+
+  it('cancel_drag on an EXISTING drawn window restores it, not drops it (H1)', async () => {
+    const model = await loaded_model()
+    model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()   // drawn={40,50,160,250}
+    const before = model.view_snapshot().overlay[0]?.box
+    model.begin_drag(40, 50, 8)      // grab the TL handle of the existing drawn window
+    model.update_drag(80, 90)        // resize it
+    expect(model.view_snapshot().overlay[0]?.box).not.toEqual(before)   // live during the drag
+    model.cancel_drag()
+    expect(model.view_snapshot().overlay[0]?.box).toEqual(before)   // cancel changes nothing (help_view §5)
   })
 
   it('starting a new draw drops the old drawn window immediately on press (bug 6)', async () => {
@@ -476,6 +487,85 @@ describe('undo / redo', () => {
     expect(model.can_redo).toBe(true)
     model.redo()
     expect(model.view_snapshot().overlay).toHaveLength(1)
+  })
+
+  it('set_split destroys committed crops but undo fully restores them (C1)', async () => {
+    const model = await loaded_model({ page_count: 2, page_w: 200, page_h: 300 })
+    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()
+    model.apply_crop()                                    // both pages committed to {10,10,150,250}
+    expect(model.document.applied.size).toBe(2)
+
+    model.set_split(2)                                    // destructive: clears document.applied
+    expect(model.document.applied.size).toBe(0)
+
+    model.undo()
+    expect(model.document.applied.size).toBe(2)
+    expect(model.document.applied.get(0)).toEqual([{ x0: 10, y0: 10, x1: 150, y1: 250 }])
+    expect(model.document.applied.get(1)).toEqual([{ x0: 10, y0: 10, x1: 150, y1: 250 }])
+  })
+
+  it('set_offset and commit_offsets each push their own checkpoint (C1)', async () => {
+    // Offsets start at the default {0,0,0,0} both before AND after detect_content (detect never
+    // touches offsets), so a single stale snapshot would coincidentally look like a correct
+    // revert — chain two distinct edits and undo once to prove each call pushed its OWN entry.
+    const model = await loaded_model({ page_w: 200, page_h: 400 })
+    await model.detect_content().result()
+    const before = model.offsets
+    model.set_offset('L', 5)
+    const after_set_offset = model.offsets
+    expect(after_set_offset).not.toEqual(before)
+    model.commit_offsets()
+    model.undo()   // should undo ONLY commit_offsets, landing back at the set_offset result
+    expect(model.offsets).toEqual(after_set_offset)
+    model.undo()   // should undo set_offset, landing back at the pre-edit default
+    expect(model.offsets).toEqual(before)
+  })
+
+  it('a completed auto-drag resize is undoable one drag at a time (C1)', async () => {
+    // Two sequential drags: a single stray undo must revert only the SECOND one, proving
+    // _begin_auto_drag pushes its own checkpoint per drag rather than relying on a stale
+    // snapshot from an earlier call (detect_content) that coincidentally has the same offsets.
+    const model = await loaded_model({ page_w: 200, page_h: 400 })
+    await model.detect_content().result()
+    const b1 = model.view_snapshot().overlay.find(o => o.kind === 'auto')?.box
+    if (!b1) throw new Error('no auto overlay')
+    model.begin_drag(b1.x0, b1.y0, 8)
+    model.update_drag(b1.x0 + 15, b1.y0 + 15)
+    model.end_drag()
+    const after_first_drag = model.offsets
+
+    const b2 = model.view_snapshot().overlay.find(o => o.kind === 'auto')?.box
+    if (!b2) throw new Error('no auto overlay')
+    model.begin_drag(b2.x1, b2.y1, 8)
+    model.update_drag(b2.x1 + 15, b2.y1 + 15)
+    model.end_drag()
+    expect(model.offsets).not.toEqual(after_first_drag)
+
+    model.undo()   // should undo ONLY the second drag
+    expect(model.offsets).toEqual(after_first_drag)
+  })
+
+  it('a completed split-drag resize is undoable (C1)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.set_split(2)
+    const before = [...model.document.crop_rects]
+    const r = model.document.crop_rects[0]
+    if (!r) throw new Error('no split rect')
+    model.begin_drag(r.x0, r.y0, 8)
+    model.update_drag(r.x0 + 15, r.y0 + 15)
+    model.end_drag()
+    expect(model.document.crop_rects).not.toEqual(before)
+    model.undo()
+    expect(model.document.crop_rects).toEqual(before)
+  })
+
+  it('anchor_left/anchor_top are deliberately non-undoable interaction settings (L5)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()   // history.push
+    model.set_anchor(false, false)
+    model.undo()
+    expect(model.anchor_left).toBe(false)   // NOT reverted — anchors sit outside DocumentState
+    expect(model.anchor_top).toBe(false)
   })
 })
 

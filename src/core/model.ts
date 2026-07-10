@@ -124,7 +124,11 @@ export class AppModel {
   private _current_page = 0    // 0-based source page
   private _view_pos = 1        // 1-based output-view position
 
-  // Interaction settings (not undoable)
+  // Interaction settings (not undoable). anchor_left/anchor_top jointly determine the crop
+  // together with document.offsets (which IS undoable) but are deliberately excluded here, same
+  // as keep_ratio/ratio/split_count below: DocumentState's undo boundary is exactly the frozen
+  // 11-field list (document_state.ts, spec §13) — anchors are a persistent interaction mode, not
+  // a per-edit value, so Undo leaves them untouched (L5; see model.test.ts for the locking test).
   private _anchor_left  = true
   private _anchor_top   = true
   private _keep_ratio   = false
@@ -452,6 +456,7 @@ export class AppModel {
   }
 
   set_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void {
+    this.history.push(this.document)
     const o = this.document.offsets
     const clamped = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, value))
     this.document.offsets = {
@@ -471,6 +476,7 @@ export class AppModel {
     const union    = this.document.union
     if (!detected || !union) return
 
+    this.history.push(this.document)
     const rect = auto_crop_rect(detected, union, this.document.offsets,
       sz.width, sz.height, this._anchor_left, this._anchor_top)
 
@@ -519,6 +525,7 @@ export class AppModel {
 
   set_split(n: 1 | 2 | 4): void {
     if (n === this._split_count) return
+    this.history.push(this.document)
     // Committed crops belong to the previous layout — drop them when the split changes
     // (desktop model.py:417-418). Prevents stale single-crop pages surviving into split mode.
     this.document.applied.clear()
@@ -576,6 +583,7 @@ export class AppModel {
       if (!rect) continue
       const h = hit_handle(rect, px, py, tol)
       if (h) {
+        this.history.push(this.document)   // snapshot BEFORE the drag mutates crop_rects live
         this._drag = {
           kind: 'split', idx: i, handle: h, rect0: rect,
           rects0: [...this.document.crop_rects],   // same-size v2 bases + §9.6 cancel restore
@@ -601,6 +609,7 @@ export class AppModel {
     const h = hit_handle(live, px, py, tol)
     if (!h) return false
 
+    this.history.push(this.document)   // snapshot BEFORE the drag mutates offsets live
     this._drag = {
       kind: 'auto', handle: h, rect0: live, start: pt,
       page_w: sz.width, page_h: sz.height,
@@ -732,23 +741,41 @@ export class AppModel {
     const drag = this._drag
     this._drag = null
     this._draw_rect = null
-    this.document.drawn = null   // Esc / right-click drops the pending drawn window (bug 5)
 
-    if (!drag) return
+    if (!drag) {
+      this.document.drawn = null   // Esc / right-click drops the pending drawn window (bug 5)
+      return
+    }
 
     if (drag.kind === 'auto') {
       this.document.offsets = drag.offsets0
-    }
-    if (drag.kind === 'split') {
+    } else if (drag.kind === 'split') {
       // §9.6: Esc/right-click during a drag leaves the windows unchanged — restore EVERY window
       // (same-size v2 moves partners live, so the dragged rect alone is not enough).
       this.document.crop_rects = [...drag.rects0]
+    } else if (drag.kind === 'drawn') {
+      // Cancelling a move/resize of an EXISTING window restores it, not drops it (help_view §5:
+      // cancel changes nothing) — distinct from the no-drag Esc above, which intentionally drops
+      // a pending window that was never being edited.
+      this.document.drawn = drag.rect0
     }
+    // 'draw': nothing to restore — _begin_draw_drag already cleared any prior drawn window at
+    // press time (bug 6), and no window was committed yet.
   }
 
   // ---------------------------------------------------------------------------
   // Scan processing
   // ---------------------------------------------------------------------------
+
+  // Shared guard for the three scan-processing toggles below: all require a document and a
+  // non-empty page selection before touching undoable state (M4 — set_filter_strength was
+  // missing this, unlike its two siblings).
+  private _require_scan_pages(): number[] {
+    if (!this.has_document) throw new NoDocumentError('No document loaded')
+    const pages = this.resolve_pages()
+    if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
+    return pages
+  }
 
   // Scan toggles: the intent flips SYNCHRONOUSLY (undoable — history pushed first), then the
   // returned BatchJob pre-computes the selection's work rasters under the §14 progress overlay,
@@ -758,9 +785,7 @@ export class AppModel {
   // time, which made scanned-mode Auto-detect and navigation pay render+OpenCV(+ONNX) per page
   // with no progress UI (spec-web §W2 row 5).
   run_dewarp(): BatchJob {
-    if (!this.has_document) throw new NoDocumentError('No document loaded')
-    const pages = this.resolve_pages()
-    if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
+    const pages = this._require_scan_pages()
     this.history.push(this.document)   // snapshot BEFORE the toggle so undo reverts it
     this.document.dewarp_on = !this.document.dewarp_on
     this._apply_scan_intents(pages)
@@ -768,9 +793,7 @@ export class AppModel {
   }
 
   set_filter_mode(mode: FilterMode): BatchJob {
-    if (!this.has_document) throw new NoDocumentError('No document loaded')
-    const pages = this.resolve_pages()
-    if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
+    const pages = this._require_scan_pages()
     this.history.push(this.document)
     // Toggle: pressing the active filter turns it off (spec §7.2)
     this.document.filter_mode = (mode === this.document.filter_mode) ? FilterMode.NONE : mode
@@ -779,8 +802,7 @@ export class AppModel {
   }
 
   set_filter_strength(n: number): BatchJob {
-    if (!this.has_document) throw new NoDocumentError('No document loaded')
-    const pages = this.resolve_pages()
+    const pages = this._require_scan_pages()
     this.history.push(this.document)
     this.document.filter_strength =
       Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n))

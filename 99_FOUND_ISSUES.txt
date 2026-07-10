@@ -91,3 +91,35 @@ should mark it DONE with the commit that fixed it, not delete the entry.
    which now lists `keep_ratio_anchored`/`edge_deltas`/`apply_edge_deltas`). Flagging in case a
    future session intended to actually add a real §5.4 subsection for split/keep-ratio mechanism
    detail rather than just fixing the pointer.
+
+6. Spotted while doing T1 (undo/history correctness, C1/H1/M4/L5) — two items not fixed there,
+   out of scope for that task's file list (model.ts/document_state.ts + tests only):
+
+   6a. `src/ui/panels/crop_panel.ts:143-152` calls `model.set_offset(edge, v); model.commit_offsets()`
+   together in ONE dispatch (on blur/Enter of an offset field) — the only real caller of either.
+   T1 added `this.history.push(this.document)` to BOTH `set_offset()` and `commit_offsets()`
+   (model.ts) per the task brief (C1), matching the "every undoable-state mutator pushes its own
+   checkpoint" pattern already used everywhere else in AppModel. Net effect: a single user edit of
+   one offset field now creates TWO undo checkpoints, not one — the first Ctrl+Z lands on the
+   post-`set_offset`/pre-`commit_offsets` intermediate state (usually numerically identical or very
+   close, since `commit_offsets` just snaps in-range values), and a second Ctrl+Z is needed to
+   reach the pre-edit state. Not a data-loss bug (strictly safer than before, when NEITHER pushed —
+   see this file's history for the prior state), but a UX granularity regression vs. one-edit/
+   one-undo. Real fix belongs in `crop_panel.ts` (out of T1's file list) or a redesign where only
+   one of the two calls owns the checkpoint — needs a decision on which, and a spec-web note if the
+   chosen behavior is a deliberate web deviation. Verified via
+   `tests/core/model.test.ts` "set_offset and commit_offsets each push their own checkpoint (C1)".
+   Severity: LOW (UX only). Owner: T3 or T6 (crop_panel.ts is out of scope for both existing specs
+   but T6 is "input robustness + refactor/cleanup").
+
+   6b. `src/core/model.ts` — the 3-line guard `if (!this.has_document) throw new NoDocumentError(...);
+   const pages = this.resolve_pages(); if (pages.length === 0) throw new EmptySelectionError(...)`
+   is now identical across 7 methods: `detect_content`, `apply_crop`, `rotate_pages`,
+   `delete_pages`, and (since T1's M4 fix) `run_dewarp`/`set_filter_mode`/`set_filter_strength` —
+   T1 extracted a private `_require_scan_pages()` helper for the LAST three only (they're the
+   named "three siblings" in the M4 task brief, and share the same "Scan processing" section), not
+   the first four, to keep the change scoped to T1's file list and avoid touching functions outside
+   C1/H1/M4/L5. A future cleanup could hoist a single shared helper (e.g. `_require_pages()`) used
+   by all 7, and `delete_pages` already builds on the same guard plus one extra check
+   (`pages.length >= this.page_count()`) so it would need a slightly different shape. Severity: LOW
+   (pure duplication, no behavior bug). Owner: T6.
