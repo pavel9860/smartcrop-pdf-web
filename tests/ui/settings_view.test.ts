@@ -59,6 +59,7 @@ describe('SettingsView', () => {
   })
 
   it('Output section has shared-state Custom DPI + Paper size (spec-web §W3)', () => {
+    view.refresh(model, UI)   // select values are only synced from the model on refresh()
     const dpi = root.querySelector<HTMLInputElement>('#sv-custom-dpi')!
     expect(dpi).toBeTruthy()
     dpi.value = '240'; dpi.dispatchEvent(new Event('change'))
@@ -67,20 +68,25 @@ describe('SettingsView', () => {
     const paper = root.querySelector<HTMLSelectElement>('#sv-paper')!
     expect(paper).toBeTruthy()
     expect(paper.value).toBe('A4')
+    expect(Array.from(paper.options).map(o => o.value)).toEqual(['A2', 'A3', 'A4', 'A5', 'A6'])
+    paper.value = 'A3'; paper.dispatchEvent(new Event('change'))
+    expect(model.paper_size).toBe('A3')
     view.refresh(model, UI)
     expect(dpi.value).toBe('240')                  // refresh reads back the shared state
   })
 
+  it('no longer shows an Output folder control (meaningless in the browser)', () => {
+    expect(root.querySelector('#sv-folder')).toBeNull()
+    expect(root.querySelector('#sv-folder-pick')).toBeNull()
+  })
+
   it('output + scan fields dispatch model setters', () => {
-    const folder = root.querySelector<HTMLInputElement>('#sv-folder')!
-    folder.value = '/out'; folder.dispatchEvent(new Event('change'))
     const postfix = root.querySelector<HTMLInputElement>('#sv-postfix')!
     postfix.value = '_crop'; postfix.dispatchEvent(new Event('change'))
     const ss = root.querySelector<HTMLInputElement>('#sv-supersample')!
     ss.value = '2'; ss.dispatchEvent(new Event('change'))
     const undo = root.querySelector<HTMLSelectElement>('#sv-undo')!
     undo.value = undo.options[0]!.value; undo.dispatchEvent(new Event('change'))
-    expect(model.output_folder).toBe('/out')
     expect(model.output_postfix).toBe('_crop')
     expect(model.dewarp_supersample).toBeCloseTo(2)
   })

@@ -18,8 +18,6 @@ export class SettingsView {
   private readonly _zoom_sel:   HTMLSelectElement
 
   // Output
-  private readonly _folder_inp:   HTMLInputElement
-  private readonly _folder_pick:  HTMLButtonElement
   private readonly _postfix_inp:  HTMLInputElement
   private readonly _custom_dpi_inp: HTMLInputElement
   private readonly _paper_sel:      HTMLSelectElement
@@ -67,13 +65,6 @@ export class SettingsView {
       <section class="settings-section">
         <h3 class="settings-section__title">Output</h3>
         <div class="settings-row">
-          <span class="settings-label">Output folder</span>
-          <div class="folder-row">
-            <input class="text-input" id="sv-folder" type="text" placeholder="same as source" />
-            <button class="btn btn-secondary" id="sv-folder-pick" title="Choose folder…">…</button>
-          </div>
-        </div>
-        <div class="settings-row">
           <span class="settings-label">Output postfix</span>
           <input class="text-input" id="sv-postfix" type="text" />
         </div>
@@ -114,8 +105,6 @@ export class SettingsView {
     this._font_sel   = requireEl(this._el, '#sv-font')
     this._zoom_sel   = requireEl(this._el, '#sv-zoom')
 
-    this._folder_inp   = requireEl(this._el, '#sv-folder')
-    this._folder_pick  = requireEl(this._el, '#sv-folder-pick')
     this._postfix_inp  = requireEl(this._el, '#sv-postfix')
     this._custom_dpi_inp = requireEl(this._el, '#sv-custom-dpi')
     this._paper_sel      = requireEl(this._el, '#sv-paper')
@@ -137,9 +126,6 @@ export class SettingsView {
     // card; this section adds two shared-state fields (spec-web §W3): Custom DPI (same
     // settings.custom_dpi as the sidebar field — editing it switches the preset to Custom)
     // and Paper size (the export sizing base, §W2 row 8).
-    this._folder_inp.addEventListener('change', () =>
-      { ctrl.dispatch(() => { model.set_output_folder(this._folder_inp.value) }) })
-    this._folder_pick.addEventListener('click', () => { void this._pick_folder(model, ctrl) })
     this._postfix_inp.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_output_postfix(this._postfix_inp.value) }) })
     this._custom_dpi_inp.addEventListener('change', () => {
@@ -174,7 +160,6 @@ export class SettingsView {
       Math.abs(b - ui.ui_scale) < Math.abs(a - ui.ui_scale) ? b : a)
     this._zoom_sel.value = String(nearest)
 
-    if (document.activeElement !== this._folder_inp) this._folder_inp.value = model.output_folder
     if (document.activeElement !== this._postfix_inp) this._postfix_inp.value = model.output_postfix
     if (document.activeElement !== this._custom_dpi_inp) {
       this._custom_dpi_inp.value = String(model.custom_dpi)
@@ -187,20 +172,6 @@ export class SettingsView {
     if (document.activeElement !== this._supersample_inp) {
       this._supersample_inp.value = model.dewarp_supersample.toFixed(1)
     }
-  }
-
-  // Best-effort directory picker (File System Access API, Chromium only). Sets the display
-  // folder; web export still downloads via the browser, so this does not change the export path.
-  private async _pick_folder(model: AppModel, ctrl: AppController): Promise<void> {
-    const picker = (window as unknown as {
-      showDirectoryPicker?: () => Promise<{ name: string }>
-    }).showDirectoryPicker
-    if (!picker) return
-    try {
-      const dir = await picker()
-      this._folder_inp.value = dir.name
-      ctrl.dispatch(() => { model.set_output_folder(dir.name) })
-    } catch { /* user cancelled the picker */ }
   }
 
   get el(): HTMLElement { return this._el }

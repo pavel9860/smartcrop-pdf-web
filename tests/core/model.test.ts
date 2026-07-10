@@ -627,10 +627,8 @@ describe('output settings', () => {
     expect(model.undo_depth).toBe(2)
   })
 
-  it('set_output_folder / set_output_postfix / set_dewarp_supersample', async () => {
+  it('set_output_postfix / set_dewarp_supersample', async () => {
     const model = await loaded_model()
-    model.set_output_folder('/tmp/out')
-    expect(model.output_folder).toBe('/tmp/out')
     model.set_output_postfix('_x')
     expect(model.output_postfix).toBe('_x')
     model.set_dewarp_supersample(3)
@@ -798,7 +796,7 @@ describe('delete_pages', () => {
 describe('export', () => {
   it('suggested_export_name derives from the first file name and current settings', async () => {
     const model = await loaded_model()
-    const [name] = model.suggested_export_name()
+    const name = model.suggested_export_name()
     expect(name).toMatch(/^a_cropped\.pdf$/)
   })
 
@@ -864,7 +862,7 @@ describe('export', () => {
     const model = new AppModel(adapter)
     await model.load_files([FILE('scan.pdf')])
     model.set_export_format('TIFF')
-    const [name] = model.suggested_export_name()
+    const name = model.suggested_export_name()
     expect(name.endsWith('.tif')).toBe(true)
   })
 

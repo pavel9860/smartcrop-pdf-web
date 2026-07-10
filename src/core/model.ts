@@ -940,7 +940,6 @@ export class AppModel {
     this.settings.undo_depth = d
     this.history.set_depth(d)
   }
-  set_output_folder(folder: string): void { this.settings.output_folder = folder }
   set_output_postfix(postfix: string): void { this.settings.output_postfix = postfix }
   set_dewarp_supersample(factor: number): void {
     this.settings.dewarp_supersample = Math.max(1.0, Math.min(4.0, factor))
@@ -959,7 +958,6 @@ export class AppModel {
     return Math.round(dpi * paper.height_in)
   }
 
-  get output_folder(): string { return this.settings.output_folder }
   get output_postfix(): string { return this.settings.output_postfix }
   get dewarp_supersample(): number { return this.settings.dewarp_supersample }
 
@@ -1046,14 +1044,14 @@ export class AppModel {
   // Export
   // ---------------------------------------------------------------------------
 
-  suggested_export_name(): [string, string] {
+  suggested_export_name(): string {
     const doc = this._doc
     const base = doc?.file_names[0]?.replace(/\.[^.]+$/, '') ?? 'document'
     const name = base + this.settings.output_postfix
     const ext  = this.settings.export_format === 'PDF' ? '.pdf'
                : this.settings.export_format === 'JPG' ? '.jpg'
                : this.settings.export_format === 'TIFF' ? '.tif' : '.png'
-    return [name + ext, this.settings.output_folder]
+    return name + ext
   }
 
   export(filename: string): BatchJob {

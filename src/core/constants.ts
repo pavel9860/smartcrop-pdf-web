@@ -96,7 +96,11 @@ export const CUSTOM_DPI_MAX = 1200
 // Output paper sizes (spec-web §W2 row 8): the export raster's long side = dpi × height_in —
 // each output page's long side is assumed to be the paper height. Settings → Output option.
 export const PAPER_SIZES = {
+  A2: { width_in: 16.54, height_in: 23.39 },
+  A3: { width_in: 11.69, height_in: 16.54 },
   A4: { width_in: 8.27, height_in: 11.69 },
+  A5: { width_in: 5.83, height_in: 8.27 },
+  A6: { width_in: 4.13, height_in: 5.83 },
 } as const
 export const DEFAULT_PAPER = 'A4'
 

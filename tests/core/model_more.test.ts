@@ -55,16 +55,16 @@ describe('suggested_export_name', () => {
   it('derives extension from the export format', async () => {
     const m = await loaded()
     m.set_export_format('JPG')
-    expect(m.suggested_export_name()[0]).toMatch(/\.jpg$/)
+    expect(m.suggested_export_name()).toMatch(/\.jpg$/)
     m.set_export_format('PNG')
-    expect(m.suggested_export_name()[0]).toMatch(/\.png$/)
+    expect(m.suggested_export_name()).toMatch(/\.png$/)
     m.set_export_format('PDF')
-    expect(m.suggested_export_name()[0]).toMatch(/\.pdf$/)
+    expect(m.suggested_export_name()).toMatch(/\.pdf$/)
   })
 
   it('falls back to "document" with no loaded file', () => {
     const m = new AppModel(adapter())
-    expect(m.suggested_export_name()[0]).toMatch(/^document/)
+    expect(m.suggested_export_name()).toMatch(/^document/)
   })
 })
 

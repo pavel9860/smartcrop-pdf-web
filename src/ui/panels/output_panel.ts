@@ -64,7 +64,7 @@ export class OutputPanel {
       ctrl.dispatch(() => { model.set_export_format(this._format_sel.value) })
     })
     this._export_btn.addEventListener('click', () => {
-      const [name] = model.suggested_export_name()
+      const name = model.suggested_export_name()
       ctrl.dispatch_job(() => model.export(name))
     })
   }

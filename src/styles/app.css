@@ -512,9 +512,6 @@ input, select { font: inherit; }
 .settings-section--info p { font-size: 0.8125rem; line-height: 1.5; color: var(--text-primary); }
 .settings-row .select,
 .settings-row .text-input { max-width: 160px; }
-.folder-row { display: flex; gap: 6px; align-items: center; max-width: 200px; }
-.folder-row .text-input { max-width: none; flex: 1; min-width: 0; }
-.folder-row .btn { flex-shrink: 0; min-width: 30px; padding: 0 8px; }
 .zoom-controls { display: flex; align-items: center; gap: 8px; }
 .zoom-controls .settings-note { margin-top: 0; min-width: 3em; text-align: right; }
 

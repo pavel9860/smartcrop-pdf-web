@@ -134,7 +134,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               (the 11 undoable fields + snapshot()), identical to Python
 
       settings.ts           Settings dataclass — compress_preset, output_colours, export_format,
-                              output_folder, output_postfix, undo_depth, dewarp_supersample
+                              output_postfix, undo_depth, dewarp_supersample
 
       history.ts            History — bounded undo/redo of DocumentState snapshots, same interface
 
@@ -272,10 +272,10 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               Theme/font-size/zoom/confirm-overwrite/remember-folder go through
                               AppController's UIConfig setters (`set_theme`, `set_font_size`,
                               `zoom`, `set_confirm_overwrite`, `set_remember_folder` — §10);
-                              compress preset, default format, output folder/postfix, undo depth
+                              compress preset, default format, output postfix, undo depth
                               and dewarp supersample are domain `Settings` (§10) and go through
                               `AppModel` setters directly (`set_compress_preset`,
-                              `set_output_folder`, `set_output_postfix`, `set_undo_depth`,
+                              `set_output_postfix`, `set_undo_depth`,
                               `set_dewarp_supersample`) — there is no single `apply_setting()`
                               dispatcher; each field has its own typed setter on the owner that
                               actually holds it (§5.2's `Settings`-vs-`UIConfig` split, unchanged
@@ -470,12 +470,11 @@ class AppModel {
   set_output_colours(mode: string): void
   set_export_format(fmt: string): void
   set_undo_depth(depth: number): void
-  set_output_folder(folder: string): void
   set_output_postfix(postfix: string): void
   set_dewarp_supersample(factor: number): void
 
   // export
-  suggested_export_name(): [string, string]
+  suggested_export_name(): string
   export(filename: string): BatchJob     // drives export.worker
 }
 ```

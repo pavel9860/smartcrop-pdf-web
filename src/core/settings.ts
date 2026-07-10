@@ -19,7 +19,6 @@ export interface Settings {
   paper_size:          string          // PAPER_SIZES key — export sizing base (spec-web §W2 row 8)
   output_colours:      string          // 'Original colors' | 'Grayscale'
   export_format:       ExportFormat
-  output_folder:       string          // '' = same as source
   output_postfix:      string          // appended before extension
   undo_depth:          number          // bounds History stack
   dewarp_supersample:  number          // quality lever for dewarp (§10.1)
@@ -32,7 +31,6 @@ export function default_settings(): Settings {
     paper_size:         DEFAULT_PAPER,
     output_colours:     DEFAULT_OUTPUT_COLOURS,
     export_format:      DEFAULT_EXPORT_FORMAT,
-    output_folder:      '',
     output_postfix:     DEFAULT_OUTPUT_POSTFIX,
     undo_depth:         DEFAULT_UNDO_DEPTH,
     dewarp_supersample: DEFAULT_DEWARP_SUPERSAMPLE,

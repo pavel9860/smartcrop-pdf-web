@@ -368,7 +368,7 @@ export class AppController {
   }
 
   private _trigger_export(): void {
-    const [name] = this._model.suggested_export_name()
+    const name = this._model.suggested_export_name()
     this.dispatch_job(() => this._model.export(name))
   }
 

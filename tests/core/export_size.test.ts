@@ -51,6 +51,17 @@ describe('A4-based export sizing', () => {
     expect(PAPER_SIZES.A4.height_in).toBeCloseTo(11.69)
   })
 
+  it('PAPER_SIZES offers A2 through A6, each the previous size halved', () => {
+    expect(Object.keys(PAPER_SIZES)).toEqual(['A2', 'A3', 'A4', 'A5', 'A6'])
+    expect(PAPER_SIZES.A2).toEqual({ width_in: 16.54, height_in: 23.39 })
+    expect(PAPER_SIZES.A3).toEqual({ width_in: 11.69, height_in: 16.54 })
+    expect(PAPER_SIZES.A5).toEqual({ width_in: 5.83, height_in: 8.27 })
+    expect(PAPER_SIZES.A6).toEqual({ width_in: 4.13, height_in: 5.83 })
+    // ISO 216: each size's width is the next size's height (halving the long side).
+    expect(PAPER_SIZES.A3.width_in).toBeCloseTo(PAPER_SIZES.A2.height_in / 2, 1)
+    expect(PAPER_SIZES.A4.width_in).toBeCloseTo(PAPER_SIZES.A3.height_in / 2, 1)
+  })
+
   it('export long side = preset DPI × paper height in inches', async () => {
     const { model, long_px } = await committed_model()
     model.set_compress_preset('High — 300 dpi')
