@@ -9,6 +9,7 @@ import {
 import { History } from './history'
 import { type Settings, default_settings } from './settings'
 import { PageIndexMap } from './page_index_map'
+import { PageRasterPipeline } from './page_raster_pipeline'
 import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type DrawnDrag } from './drag'
 import {
   type Box,
@@ -18,7 +19,6 @@ import {
   edge_deltas, apply_edge_deltas, clamp_edge_deltas,
   MIN_RECT, box_width, box_height,
 } from './geometry'
-import { LRUCache } from './lru'
 import { type BatchJob, type BatchController, PageBatchJob, Ok, Cancelled, Failed } from './batch'
 import { Mode, FilterMode, PagesMode } from './enums'
 import {
@@ -26,10 +26,10 @@ import {
   DeleteAllPagesError, ImagingError,
 } from './errors'
 import {
-  CACHE_WINDOW, SRC_DPI, NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DPI_PRESETS, EXPORT_FORMATS,
+  NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DPI_PRESETS, EXPORT_FORMATS,
   DEFAULT_UNDO_DEPTH, FULL_PAGE_FRAC, OFFSET_LIMIT,
   FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX, UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
-  MAX_SPLIT, SYNTH_W, SYNTH_H, type ExportFormat,
+  SYNTH_W, SYNTH_H, type ExportFormat,
   CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
   PAPER_SIZES, DEFAULT_PAPER, CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
 } from './constants'
@@ -191,59 +191,25 @@ export class AppModel {
   readonly history = new History(DEFAULT_UNDO_DEPTH)
   readonly settings: Settings = default_settings()
 
-  // Raster caches (source = raw page; work = after scan processing). Eviction closes the bitmap
-  // to free memory eagerly — EXCEPT the one currently on screen (_current_bitmap): closing a
-  // displayed/in-flight bitmap detaches it and the next drawImage throws InvalidStateError
-  // ("image source is detached"). This hit hardest during Auto-detect on long books, which walks
-  // every page through _get_work and would otherwise evict+close the live page (bug: site dead).
-  private _source_cache = new LRUCache<number, ImageBitmap>(CACHE_WINDOW,
-    (_, b) => { if (b !== this._current_bitmap) b.close() })
-  // Processed-raster RAM tier. WRITE-BACK to the disk tier: a raster is persisted to IndexedDB only
-  // when the RAM cache is full and it is genuinely evicted (onCapacityEvict) — NOT eagerly on every
-  // compute. Eager persist made a warm pass fire N concurrent PNG-encode+IDB-write jobs that piled
-  // up (hundreds of ms each) and contended with the next page's OpenCV work; for a document that
-  // fits in RAM (≤ CACHE_WINDOW pages) the disk tier is never even read, so that work was pure
-  // overhead. Delete/clear (intent change, reset) close without a disk write. `_work_disk_keys`
-  // carries each cached page's disk key (the intent it was computed under) so eviction persists it
-  // under the right key even if the document's current intent has since changed.
-  private _work_disk_keys = new Map<number, string>()
-  // Keys actually written to the disk tier (on capacity eviction). _get_work only reads disk for a
-  // key in this set — so a document that fits in RAM does ZERO disk reads and never touches
-  // IndexedDB on the hot path (a stray read would serialize behind the load-time clear transaction
-  // for ~300 ms; this set makes that read never happen). In-memory, cleared on load/reset.
-  private _persisted_keys = new Set<string>()
-  private _work_cache = new LRUCache<number, ImageBitmap>(CACHE_WINDOW,
-    (p, b) => { this._work_disk_keys.delete(p); if (b !== this._current_bitmap) b.close() },
-    (p, b) => {
-      const key = this._work_disk_keys.get(p)
-      // persist_work snapshots pixels synchronously (drawImage before any await), so closing right
-      // after is safe; a capacity eviction only happens deep into processing, long after any
-      // load-time clear. Record the key so _get_work knows this raster is retrievable from disk.
-      if (key && this._adapter.persist_work) { void this._adapter.persist_work(key, b); this._persisted_keys.add(key) }
-      this._work_disk_keys.delete(p)
-      if (b !== this._current_bitmap) b.close()
-    })
-
-  // Pre-rendered output bitmaps for committed pages (keyed "page:split_idx")
-  private _output_cache = new LRUCache<string, ImageBitmap>(CACHE_WINDOW * 2,
-    (_, b) => { if (b !== this._current_bitmap) b.close() })
-
-  // Currently displayed bitmap (synchronously available for view_snapshot)
-  private _current_bitmap: ImageBitmap | null = null
-  private _is_loading = false
-
-  // Monotonic document generation, bumped on every load/reset and baked into each disk-cache key.
-  // This namespaces a document's processed rasters so a disk read can never return a PREVIOUS
-  // document's raster (key collision), which means reads/persists do NOT have to wait for the
-  // load-time IndexedDB clear to finish — that wait added ~300 ms to the first pages of a scan pass.
-  // The clear still runs (fire-and-forget) to bound storage; correctness no longer depends on it.
-  private _doc_gen = 0
-
   // Logical page index -> original adapter page index (§18 PageIndexMap). Every adapter call
-  // that takes a page index must translate through it (_get_work).
+  // that takes a page index must translate through it.
   private _page_index = new PageIndexMap()
 
-  constructor(private readonly _adapter: RendererAdapter) {}
+  // Raster cache/fetch pipeline (§18 PageRasterPipeline) — source/work/output caches, disk-tier
+  // bookkeeping, and the currently-displayed bitmap. Wired with live callbacks into this
+  // AppModel's own mode/DPI/rotation/scan-intent state, so the pipeline never holds a stale copy.
+  private readonly _raster: PageRasterPipeline
+
+  constructor(private readonly _adapter: RendererAdapter) {
+    this._raster = new PageRasterPipeline(_adapter, this._page_index, {
+      mode: (): Mode => this._mode,
+      display_dpi: (): number => this._display_dpi,
+      is_synthetic: (): boolean => this._doc === null || !!this._doc.synthetic,
+      rotation: (p): number => this.document.rotation.get(p) ?? 0,
+      process_intent: (p): PageProcessIntent => this._page_process_intent(p),
+      dewarp_supersample: (): number => this.settings.dewarp_supersample,
+    })
+  }
 
   // ---------------------------------------------------------------------------
   // Document
@@ -284,16 +250,7 @@ export class AppModel {
     this._detect_cache = new Map()
     this._union = null
     this._auto_active = false
-    this._source_cache.clear()
-    this._work_cache.clear()
-    this._work_disk_keys.clear()
-    this._persisted_keys.clear()
-    this._output_cache.clear()
-    // New generation → new disk-key namespace (see _doc_gen). Drop the old generation's rasters
-    // from disk to bound storage, but fire-and-forget: correctness no longer waits on it.
-    this._doc_gen += 1
-    void this._adapter.clear_work_cache?.()
-    this._current_bitmap = null
+    this._raster.reset()
     this._page_index.reset(this._doc ? this._doc.page_count : 0)
     // Keep-ratio initialises to the first page's real w/h, not a bare 1.0, so the ratio field
     // shows a meaningful default from the moment a document opens.
@@ -441,7 +398,7 @@ export class AppModel {
           // dewarp+filter first would be pure waste (detect_content_box downscales to
           // DETECT_MAX_PX and re-binarizes anyway). This is what makes Auto-detect meet its
           // <0.1 s/page budget (spec-web §16).
-          const img = await this._get_source(p)
+          const img = await this._raster.get_source(p)
           box = await this._adapter.detect_content_box(img, size.width, size.height, this._mode)
         }
         if (box) per_page_boxes.set(p, box)
@@ -956,7 +913,7 @@ export class AppModel {
     for (const p of pages) {
       if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return }
       try {
-        await this._get_work(p)
+        await this._raster.get_work(p)
       } catch (e) {
         ctrl.complete(new Failed(new ImagingError(String(e))))
         return
@@ -981,7 +938,7 @@ export class AppModel {
     }
     for (const p of pages) {
       this.document.processed.set(p, intent)
-      this._work_cache.delete(p)
+      this._raster.drop_work(p)
       this._invalidate_output_cache(p)
     }
     this._invalidate_current_bitmap()
@@ -995,10 +952,7 @@ export class AppModel {
     const prev = this.history.undo(this.document)
     if (prev) {
       this.document = prev
-      this._source_cache.clear()
-      this._work_cache.clear()
-      this._output_cache.clear()
-      this._invalidate_current_bitmap()
+      this._raster.clear_ram()
     }
   }
 
@@ -1006,10 +960,7 @@ export class AppModel {
     const next = this.history.redo(this.document)
     if (next) {
       this.document = next
-      this._source_cache.clear()
-      this._work_cache.clear()
-      this._output_cache.clear()
-      this._invalidate_current_bitmap()
+      this._raster.clear_ram()
     }
   }
 
@@ -1094,9 +1045,7 @@ export class AppModel {
     const det = this._detect_cache.get(p)
     if (det) this._detect_cache.set(p, rotate_box_cw(det, sz.height))
 
-    this._source_cache.delete(p)
-    this._work_cache.delete(p)
-    this._invalidate_output_cache(p)
+    this._raster.delete_page(p)
 
     this.document.offsets = DEFAULT_OFFSETS
     if (this._union) {
@@ -1144,12 +1093,9 @@ export class AppModel {
       this._auto_active = false
     }
 
-    this._source_cache.clear()
-    this._work_cache.clear()
-    this._output_cache.clear()
+    this._raster.clear_ram()
     this._current_page = Math.min(this._current_page, this.page_count() - 1)
     this._view_pos = Math.min(this._view_pos, this.view_total)
-    this._invalidate_current_bitmap()
   }
 
   // ---------------------------------------------------------------------------
@@ -1259,7 +1205,7 @@ export class AppModel {
       if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }
       const sz = this._page_dims(p)
       try {
-        const src   = await this._get_work(p)
+        const src   = await this._raster.get_work(p)
         const boxes = this._export_boxes_for_page(p, sz)
         for (const box of boxes) {
           const bitmap = await this._adapter.render_output_image(
@@ -1325,7 +1271,7 @@ export class AppModel {
     if (committed && committed.length > 0) {
       const box = committed[Math.min(split_idx, committed.length - 1)] ?? committed[0]
       return {
-        image:  this._output_cache.get(`${p}:${split_idx}`) ?? null,
+        image:  this._raster.output_at(p, split_idx),
         page_w: box ? box_width(box)  : sz.width,
         page_h: box ? box_height(box) : sz.height,
         crop_origin: box ? { x: box.x0, y: box.y0 } : { x: 0, y: 0 },
@@ -1334,12 +1280,12 @@ export class AppModel {
         position:   this._view_pos,
         total:      this.view_total,
         status:     this._status_string(p, sz),
-        is_loading: this._is_loading,
+        is_loading: this._raster.is_loading,
       }
     }
 
     return {
-      image:   this._current_bitmap ?? null,
+      image:   this._raster.current,
       page_w:  sz.width,
       page_h:  sz.height,
       crop_origin: { x: 0, y: 0 },
@@ -1348,7 +1294,7 @@ export class AppModel {
       position:   this._view_pos,
       total:      this.view_total,
       status:     this._status_string(p, sz),
-      is_loading: this._is_loading,
+      is_loading: this._raster.is_loading,
     }
   }
 
@@ -1381,7 +1327,7 @@ export class AppModel {
     const resolved = Math.max(NORMAL_DPI, Math.min(NORMAL_DISPLAY_DPI_MAX, needed))
     if (resolved > this._display_dpi * 1.1) {
       this._display_dpi = resolved
-      this._source_cache.clear()
+      this._raster.clear_source()
       this._invalidate_current_bitmap()
     }
   }
@@ -1389,52 +1335,21 @@ export class AppModel {
   // Call this before reading view_snapshot() to ensure bitmaps are ready.
   async prepare_current_view(): Promise<void> {
     if (!this._doc) return
-    this._is_loading = true
+    this._raster.is_loading = true
     const p = this._current_page
 
     try {
-      const work = await this._get_work(p)
-      this._current_bitmap = work
+      const work = await this._raster.load_current(p)
       const committed = this.document.applied.get(p)
-      if (committed) await this._prerender_output_views(p, committed, work)
+      if (committed) await this._raster.prerender_output_views(p, committed, this._current_page_size(), work)
     } finally {
-      this._is_loading = false
+      this._raster.is_loading = false
     }
 
     // Warm the adjacent pages in the background so next/prev is a cache hit instead of a blank
     // "Loading…" flash while the (potentially heavy, scanned-mode) work raster renders on demand.
-    this._prefetch(p + 1)
-    this._prefetch(p - 1)
-  }
-
-  private readonly _prefetching = new Set<number>()
-
-  private _prefetch(p: number): void {
-    if (p < 0 || p >= this.page_count() || this._prefetching.has(p)) return
-    const warm = this._mode === Mode.SCANNED ? this._work_cache.has(p) : this._source_cache.has(p)
-    if (warm) return
-    this._prefetching.add(p)
-    void this._get_work(p).catch(() => { /* best-effort warm */ })
-      .finally(() => { this._prefetching.delete(p) })
-  }
-
-  // Pre-render every split view's output bitmap for a committed page (so jumping
-  // between split views via view_snapshot() never blocks on a render call).
-  private async _prerender_output_views(p: number, committed: Box[], work: ImageBitmap): Promise<void> {
-    const sz = this._current_page_size()
-    // Preview must NOT bake in output quality: compress DPI + grayscale are EXPORT-only
-    // (spec-web §W2 row 8). Rendering the working preview at the export DPI made a committed
-    // crop show at e.g. 75 dpi (395×505) and in grayscale; the editing view stays full-res and
-    // true-colour. render_output_image is still the single path — only the DPI/colour args differ.
-    for (let i = 0; i < committed.length; i++) {
-      const key = `${p}:${i}`
-      if (this._output_cache.has(key)) continue
-      const box = committed[i]
-      if (!box) continue
-      const out = await this._adapter.render_output_image(
-        work, box, sz.width, sz.height, null, false)
-      this._output_cache.set(key, out)
-    }
+    this._raster.prefetch(p + 1)
+    this._raster.prefetch(p - 1)
   }
 
   // ---------------------------------------------------------------------------
@@ -1485,84 +1400,14 @@ export class AppModel {
     return this._page_dims(this._current_page)
   }
 
-  // Raw page raster (before scan processing), rendered once per page and cached. Every consumer
-  // that needs pixels — the NORMAL view, the SCANNED work pipeline, and Auto-detect — goes through
-  // here, so the PDF is rasterized exactly once per (page, rotation), never twice (spec-web §7).
-  private async _get_source(p: number): Promise<ImageBitmap> {
-    const cached = this._source_cache.get(p)
-    if (cached) return cached
-    const doc = this._doc
-    const dpi = this._mode === Mode.SCANNED ? SRC_DPI : this._display_dpi
-    const rotation = this.document.rotation.get(p) ?? 0
-    // p is logical (post-delete); the adapter only knows original pdf.js page indices.
-    const orig = this._page_index.orig(p)
-    const b = doc && !doc.synthetic
-      ? await this._adapter.get_source_image(orig, dpi, rotation)
-      : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
-    this._source_cache.set(p, b)
-    return b
-  }
-
-  private async _get_work(p: number): Promise<ImageBitmap> {
-    const cached = this._work_cache.get(p)
-    if (cached) return cached
-
-    const src = await this._get_source(p)
-    if (this._mode !== Mode.SCANNED) {
-      // NORMAL: the work raster IS the source raster. Do NOT also store it in _work_cache — the
-      // same bitmap in two close-on-evict caches gets double-closed, detaching a bitmap the other
-      // cache still serves (root of the "image source is detached" crash). It stays in _source_cache.
-      return src
-    }
-
-    // A no-op intent (no dewarp, no filter) has no work raster distinct from the source — return
-    // src directly rather than caching a duplicate (same double-close hazard as NORMAL).
-    const intent = this._page_process_intent(p)
-    if (!intent.dewarp && !intent.filter) return src
-
-    const key = this._work_disk_key(p, intent)
-    // Only hit the disk tier for a key we actually persisted (see _persisted_keys) — a page that
-    // never left RAM was never written, so skip the IndexedDB round-trip (and its clear-serialized
-    // stall) entirely.
-    const disk = this._persisted_keys.has(key) ? await this._load_work_from_disk(key) : null
-    if (disk) { this._cache_work(p, key, disk); return disk }
-
-    const work = await this._adapter.get_work_image(src, intent, this.settings.dewarp_supersample)
-    // Write-back cache: don't persist here — the disk write happens only if/when this raster is
-    // evicted from RAM (see _work_cache's onCapacityEvict). Small documents never evict, so they
-    // never pay for a disk write they'd never read back.
-    this._cache_work(p, key, work)
-    return work
-  }
-
-  private _cache_work(p: number, key: string, work: ImageBitmap): void {
-    this._work_disk_keys.set(p, key)
-    this._work_cache.set(p, work)
-  }
-
+  // Scan intent for a page (dewarp on/off, filter mode+strength) — read by the raster pipeline's
+  // RasterContext (get_work/_work_disk_key) to know what to compute/key a page's work raster by.
   private _page_process_intent(p: number): PageProcessIntent {
     return {
       dewarp: this.document.processed.get(p)?.dewarp ?? this.document.dewarp_on,
       filter: this.document.filter_mode === FilterMode.NONE ? null
         : [this.document.filter_mode, this.document.filter_strength],
     }
-  }
-
-  // Two-tier work cache — disk (IndexedDB) tier. Key = document generation + original page index +
-  // full intent (dewarp, filter mode/strength), rotation and supersample: any change yields a
-  // different key, so a settings change never returns a stale raster (it re-processes into a new
-  // key instead) and a new document (new _doc_gen) never collides with a prior one's rasters.
-  private _work_disk_key(p: number, intent: PageProcessIntent): string {
-    const orig = this._page_index.orig(p)
-    const filt = intent.filter ? `${intent.filter[0]}-${intent.filter[1]}` : 'none'
-    const rot = this.document.rotation.get(p) ?? 0
-    return `g${this._doc_gen}|${orig}|d${intent.dewarp ? 1 : 0}|f${filt}|r${rot}|s${this.settings.dewarp_supersample}`
-  }
-
-  private _load_work_from_disk(key: string): Promise<ImageBitmap | null> {
-    // No wait on the load-time clear: _doc_gen namespaces the key, so there is no cross-document
-    // collision to guard against, and the read just misses (fast) for a never-persisted page.
-    return this._adapter.load_work?.(key) ?? Promise.resolve(null)
   }
 
   private _live_auto_crop_for(p: number): Box | null {
@@ -1617,11 +1462,9 @@ export class AppModel {
     return out
   }
 
-  private _invalidate_output_cache(p: number): void {
-    for (let i = 0; i < MAX_SPLIT; i++) this._output_cache.delete(`${p}:${i}`)
-  }
+  private _invalidate_output_cache(p: number): void { this._raster.invalidate_output(p) }
 
-  private _invalidate_current_bitmap(): void { this._current_bitmap = null }
+  private _invalidate_current_bitmap(): void { this._raster.invalidate_current() }
 
   private _status_string(p: number, sz: PageSize): string {
     return `${sz.width.toFixed(0)} × ${sz.height.toFixed(0)}  page ${p + 1} / ${this.page_count()}`
