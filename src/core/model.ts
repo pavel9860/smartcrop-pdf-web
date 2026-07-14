@@ -4,24 +4,24 @@
 
 import {
   type DocumentState, type Offsets, type PageProcessIntent,
-  default_document_state, DEFAULT_OFFSETS,
+  default_document_state,
 } from './document_state'
 import { History } from './history'
 import { type Settings, default_settings } from './settings'
 import { PageIndexMap } from './page_index_map'
 import { PageRasterPipeline } from './page_raster_pipeline'
 import { CropController } from './crop_controller'
+import { PageOpsService, type DetectionState } from './page_ops_service'
 import {
   type Box,
   auto_crop_rect, keep_ratio_normalise,
-  rotate_box_cw, reindex_map, detection_union,
+  detection_union,
   box_width, box_height,
 } from './geometry'
 import { type BatchJob, type BatchController, PageBatchJob, Ok, Cancelled, Failed } from './batch'
 import { Mode, FilterMode, PagesMode } from './enums'
 import {
-  NoDocumentError, EmptySelectionError, InvalidSplitError,
-  DeleteAllPagesError, ImagingError,
+  NoDocumentError, EmptySelectionError, InvalidSplitError, ImagingError,
 } from './errors'
 import {
   NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DPI_PRESETS, EXPORT_FORMATS,
@@ -189,6 +189,10 @@ export class AppModel {
   // it reads but does not own.
   private readonly _crop: CropController
 
+  // Rotate/delete (§18 PageOpsService). Shares the same detection-result state
+  // (detect_cache/union/auto_active) as CropController, exposed the same way — live, not captured.
+  private readonly _page_ops: PageOpsService
+
   constructor(private readonly _adapter: RendererAdapter) {
     this._raster = new PageRasterPipeline(_adapter, this._page_index, {
       mode: (): Mode => this._mode,
@@ -208,6 +212,22 @@ export class AppModel {
       auto_active: (): boolean => this._auto_active,
       drawn: (): Box | null => this._drawn,
       set_drawn: (box): void => { this._drawn = box },
+    })
+    this._page_ops = new PageOpsService(this.history, this._page_index, this._raster, {
+      document: (): DocumentState => this.document,
+      page_dims: (p): PageSize => this._page_dims(p),
+      detection: (): DetectionState =>
+        ({ cache: this._detect_cache, union: this._union, auto_active: this._auto_active }),
+      set_detection: (d): void => {
+        this._detect_cache = d.cache; this._union = d.union; this._auto_active = d.auto_active
+      },
+      recompute_union: (cache): Box | null => this._compute_detection_union(cache),
+      current_page: (): number => this._current_page,
+      set_current_page: (p): void => { this._current_page = p },
+      view_pos: (): number => this._view_pos,
+      set_view_pos: (pos): void => { this._view_pos = pos },
+      view_total: (): number => this.view_total,
+      page_count: (): number => this.page_count(),
     })
   }
 
@@ -678,77 +698,10 @@ export class AppModel {
   // Rotate / delete
   // ---------------------------------------------------------------------------
 
-  rotate_pages(): void {
-    const pages = this._require_pages()
-
-    this.history.push(this.document)
-    for (const p of pages) this._rotate_page(p)
-  }
-
-  private _rotate_page(p: number): void {
-    // Effective dims BEFORE this 90° step — box coords being carried through are still in
-    // that (pre-step) frame. Must read before mutating rotation.
-    const sz = this._page_dims(p)
-    const cur_rot = this.document.rotation.get(p) ?? 0
-    this.document.rotation.set(p, (cur_rot + 90) % 360)
-
-    const app = this.document.applied.get(p)
-    if (app) this.document.applied.set(p, app.map(b => rotate_box_cw(b, sz.height)))
-    const det = this._detect_cache.get(p)
-    if (det) this._detect_cache.set(p, rotate_box_cw(det, sz.height))
-
-    this._raster.delete_page(p)
-
-    this.document.offsets = DEFAULT_OFFSETS
-    if (this._union) {
-      // Rebuild with the SAME FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a,
-      // 99_FOUND_ISSUES): the old raw detection_union() re-admitted full-page fallback boxes after
-      // a rotate, silently inflating every crop. Judged against each page's rotated dims.
-      this._union = this._compute_detection_union(this._detect_cache)
-    }
-  }
-
-  delete_pages(): void {
-    const pages = this._require_pages()
-    if (pages.length >= this.page_count()) throw new DeleteAllPagesError('Cannot delete all pages')
-
-    const sorted = [...pages].sort((a, b) => a - b)
-    const removed = new Set(sorted)
-
-    // Delete is destructive, not undoable (clears history rather than snapshotting — spec-web §12
-    // states Rotate is "Fully undoable" in explicit contrast). It can't be made undoable here
-    // regardless: _page_index (below) lives outside DocumentState, so a restored applied/rotation
-    // map could reference original page indices the map no longer has — the same class of desync
-    // bug as the set_keep_ratio fix above, just for a field History can't reach.
-    this.history.clear()
-
-    // Reindex per-page maps (spec-web §12)
-    this.document.applied   = reindex_map(this.document.applied,   sorted)
-    this.document.rotation  = reindex_map(this.document.rotation,  sorted)
-    this.document.processed = reindex_map(this.document.processed, sorted)
-    this._detect_cache      = reindex_map(this._detect_cache,      sorted)
-
-    // Rebuild the logical->original page index map (pdf.js has no in-place page-deletion
-    // primitive, so this is a filter + reindex instead).
-    // MUST precede the union rebuild below: _compute_detection_union reads each surviving page's
-    // dimensions through _page_index, so it has to be reindexed first (bug 2a — the union was judged
-    // against a stale page map).
-    this._page_index.remove(removed)
-
-    if (this._auto_active && this._detect_cache.size > 0) {
-      // Same FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a): the old raw
-      // detection_union() re-admitted full-page fallback boxes, distorting the union after a delete.
-      this._union = this._compute_detection_union(this._detect_cache)
-      this._auto_active = this._union !== null
-    } else {
-      this._union = null
-      this._auto_active = false
-    }
-
-    this._raster.clear_ram()
-    this._current_page = Math.min(this._current_page, this.page_count() - 1)
-    this._view_pos = Math.min(this._view_pos, this.view_total)
-  }
+  // Rotate/delete (spec-web §6.10) are owned by PageOpsService (§18) — 1-line delegations so
+  // ui/ keeps calling AppModel's public surface unchanged.
+  rotate_pages(): void { this._page_ops.rotate(this._require_pages()) }
+  delete_pages(): void { this._page_ops.delete(this._require_pages()) }
 
   // ---------------------------------------------------------------------------
   // Export
