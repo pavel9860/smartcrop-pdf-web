@@ -300,7 +300,7 @@ export function rotate_box_ccw(box: Box, page_w: number): Box {
 
 // Convert a box from the CURRENT (rotation-applied) display frame back to its source's NATIVE
 // (rotation=0) frame — needed wherever an operation must address the original, unrotated content
-// directly (spec-web §W9.3: vector PDF export via pdf-lib embedPage, which clips the source page's
+// directly (spec-web §10.3: vector PDF export via pdf-lib embedPage, which clips the source page's
 // OWN coordinate system and has no notion of this app's rotation state). Applies rotate_box_ccw
 // once per 90° of current rotation, tracking width at each step (mirrors AppModel._rotate_page's
 // forward walk, in reverse). `rotation` is normalised into [0,360) before stepping.

@@ -19,8 +19,7 @@ SHARED RULES (apply to EVERY task — also repeated in each file)
   say why. While in a file, FLAG any monkeypatch / duplication / over-complication / non-senior
   solution you see and append it to 99_FOUND_ISSUES.txt (create it) — do not silently fix outside
   the task's scope.
-- Process order: update docs/SmartCrop_PDF_Specification_Web.md FIRST (NEVER edit the frozen
-  docs/SmartCrop_PDF_Specification.md; deviations live as §W rows), THEN tests (TDD: write the
+- Process order: update docs/SmartCrop_PDF_Specification_Web.md FIRST, THEN tests (TDD: write the
   failing test first, confirm it fails, then fix, confirm it passes), THEN code.
 - Edit ONLY the files the task lists. If a fix needs another file, stop and note it.
 - Ask before guessing on any ambiguity or spec conflict.

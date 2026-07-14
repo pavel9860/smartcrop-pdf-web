@@ -1,9 +1,10 @@
-// Pure geometry tests (spec §9, §13, §18). Ported from desktop tests/test_geometry.py.
+// Pure geometry tests (spec-web §6, §12, §17).
 import { describe, it, expect } from 'vitest'
 import {
   hit_handle, point_in_box, clamp_box_shift, clamp_box_drag, apply_handle_drag,
   auto_crop_rect, offsets_from_rect, detection_union, union_box, keep_ratio_normalise,
-  rotate_box_cw, split_rects_grid, reindex_map, box_width, box_height, box_area,
+  keep_ratio_anchored, rotate_box_cw, rotate_box_ccw, to_native_frame, split_rects_grid, reindex_map,
+  box_width, box_height, box_area,
   MIN_RECT, type Box,
 } from '@core/geometry'
 import type { Offsets } from '@core/document_state'
@@ -209,6 +210,32 @@ describe('union_box (standard bounding box)', () => {
     const u = union_box(boxes)
     expect(u).toEqual(box(0, 0, 100, 50))
   })
+
+  it('throws on an empty array (no meaningful union of nothing)', () => {
+    expect(() => union_box([])).toThrow(RangeError)
+  })
+})
+
+describe('keep_ratio_anchored (spec-web §W2 row 9, live resize anchored opposite the handle)', () => {
+  const b = box(40, 40, 140, 90)   // W=100, H=50 -> ratio 2
+
+  it('L and R edge drags both grow symmetrically about the centre, anchored on the fixed side', () => {
+    const r = keep_ratio_anchored(b, 2, 'R', 1000, 1000)
+    const l = keep_ratio_anchored(b, 2, 'L', 1000, 1000)
+    expect(r.x0).toBeCloseTo(b.x0)   // R drag: left edge fixed, right edge follows
+    expect(l.x1).toBeCloseTo(b.x1)   // L drag: right edge fixed, left edge follows
+  })
+
+  it('T and B edge drags both grow symmetrically about the centre, anchored on the fixed side', () => {
+    const t = keep_ratio_anchored(b, 2, 'T', 1000, 1000)
+    const bb = keep_ratio_anchored(b, 2, 'B', 1000, 1000)
+    expect(t.y1).toBeCloseTo(b.y1)   // T drag: bottom edge fixed, top edge follows
+    expect(bb.y0).toBeCloseTo(b.y0)  // B drag: top edge fixed, bottom edge follows
+  })
+
+  it('a move (no resize) is a no-op beyond page clamping', () => {
+    expect(keep_ratio_anchored(b, 2, 'move', 1000, 1000)).toEqual(b)
+  })
 })
 
 describe('auto_crop_rect (spec §9.2)', () => {
@@ -302,6 +329,75 @@ describe('rotate_box_cw (spec §13)', () => {
     expect(b.y0).toBeCloseTo(20)
     expect(b.x1).toBeCloseTo(80)
     expect(b.y1).toBeCloseTo(90)
+  })
+})
+
+describe('rotate_box_ccw (algebraic inverse of rotate_box_cw)', () => {
+  it('undoes exactly one CW step: rotate_box_ccw(rotate_box_cw(box, h), h) === box', () => {
+    const page_h = 297
+    const b = box(10, 20, 80, 90)
+    const rotated = rotate_box_cw(b, page_h)
+    // rotate_box_ccw's page_w is the CURRENT (post-CW) box's page width, which equals the
+    // original page_h passed to rotate_box_cw (per its own doc comment).
+    const back = rotate_box_ccw(rotated, page_h)
+    expect(back.x0).toBeCloseTo(b.x0)
+    expect(back.y0).toBeCloseTo(b.y0)
+    expect(back.x1).toBeCloseTo(b.x1)
+    expect(back.y1).toBeCloseTo(b.y1)
+  })
+
+  it('composes with rotate_box_cw for an arbitrary width/height page too', () => {
+    const page_h = 150
+    const b = box(5, 5, 100, 60)
+    const rotated = rotate_box_cw(b, page_h)   // rotated page is now page_h wide
+    const back = rotate_box_ccw(rotated, page_h)
+    expect(back).toEqual(b)
+  })
+})
+
+describe('to_native_frame (spec-web §10.3, vector export)', () => {
+  it('rotation=0 is the identity — box is already in the native frame', () => {
+    const b = box(10, 20, 80, 90)
+    expect(to_native_frame(b, 200, 300, 0)).toEqual(b)
+  })
+
+  it('rotation=90 undoes exactly one rotate_box_cw step', () => {
+    const page_w = 200, page_h = 300
+    const b = box(10, 20, 80, 90)
+    // The box as it would appear after the app rotated the page 90 CW once.
+    const current = rotate_box_cw(b, page_h)
+    const native = to_native_frame(current, page_h, page_w, 90)   // current page is page_h x page_w
+    expect(native.x0).toBeCloseTo(b.x0)
+    expect(native.y0).toBeCloseTo(b.y0)
+    expect(native.x1).toBeCloseTo(b.x1)
+    expect(native.y1).toBeCloseTo(b.y1)
+  })
+
+  it('rotation=180/270 walk back the corresponding number of CW steps, and 360 is a no-op', () => {
+    const page_w = 200, page_h = 300
+    const b = box(10, 20, 80, 90)
+    let current = b, w = page_w, h = page_h
+    for (let step = 1; step <= 3; step++) {
+      current = rotate_box_cw(current, h)
+      ;[w, h] = [h, w]
+      const native = to_native_frame(current, w, h, step * 90)
+      expect(native.x0).toBeCloseTo(b.x0)
+      expect(native.y0).toBeCloseTo(b.y0)
+      expect(native.x1).toBeCloseTo(b.x1)
+      expect(native.y1).toBeCloseTo(b.y1)
+    }
+    // 360 normalises to 0 — identity, regardless of page dims passed.
+    expect(to_native_frame(b, page_w, page_h, 360)).toEqual(b)
+  })
+
+  it('normalises an out-of-range rotation (e.g. negative) into [0,360) before stepping', () => {
+    const page_w = 200, page_h = 300
+    const b = box(10, 20, 80, 90)
+    // -270 normalises to 90.
+    const current = rotate_box_cw(b, page_h)
+    const native = to_native_frame(current, page_h, page_w, -270)
+    expect(native.x0).toBeCloseTo(b.x0)
+    expect(native.y0).toBeCloseTo(b.y0)
   })
 })
 

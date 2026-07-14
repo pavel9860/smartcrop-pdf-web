@@ -39,6 +39,9 @@ describe('view_to_source', () => {
   it('clamps a stale/out-of-range view position to the last page', () => {
     expect(view_to_source(999, 3, new Map())).toEqual({ src_page: 2, split_idx: 0 })
   })
+  it('throws RangeError for a zero/negative source_count (no document loaded)', () => {
+    expect(() => view_to_source(1, 0, new Map())).toThrow(RangeError)
+  })
 })
 
 describe('source_to_first_view / source_to_view_range', () => {

@@ -4,10 +4,11 @@
 import type { Box, HandleId } from './geometry'
 import type { Offsets } from './document_state'
 
-// Resizing or moving the live auto-crop rectangle
+// Resizing or moving the live auto-crop rectangle. hit_handle() itself returns 'move' for any
+// interior point (never null once a hit is confirmed), so handle is never actually null here.
 export interface AutoDrag {
   readonly kind:      'auto'
-  readonly handle:    HandleId | null    // null = draw new (only DrawDrag uses null now)
+  readonly handle:    HandleId
   readonly rect0:     Box                // rectangle at drag start
   readonly start:     readonly [number, number]
   readonly page_w:    number
@@ -41,10 +42,11 @@ export interface DrawDrag {
   readonly page_h: number
 }
 
-// Moving (handle null) or resizing the global hand-drawn window (document.drawn)
+// Moving or resizing the global hand-drawn window (document.drawn). Same as AutoDrag, hit_handle()
+// returns 'move' for any interior point, so handle is never actually null here either.
 export interface DrawnDrag {
   readonly kind:   'drawn'
-  readonly handle: HandleId | null
+  readonly handle: HandleId
   readonly rect0:  Box
   readonly start:  readonly [number, number]
   readonly page_w: number

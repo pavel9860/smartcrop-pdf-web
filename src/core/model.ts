@@ -11,7 +11,7 @@ import { type Settings, default_settings } from './settings'
 import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type DrawnDrag } from './drag'
 import {
   type Box,
-  hit_handle, point_in_box, apply_handle_drag, auto_crop_rect,
+  hit_handle, apply_handle_drag, auto_crop_rect,
   offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
   split_rects_grid, rotate_box_cw, reindex_map, detection_union,
   edge_deltas, apply_edge_deltas, clamp_edge_deltas,
@@ -243,6 +243,10 @@ export class AppModel {
   // Every adapter call that takes a page index must translate through it (_get_work).
   private _page_map: number[] = []
 
+  // p is always a valid logical index here (bounded by page_count()), so _page_map[p] is always
+  // defined; the `?? p` fallback exists only to satisfy noUncheckedIndexedAccess.
+  private _orig_page(p: number): number { return this._page_map[p] ?? p }
+
   constructor(private readonly _adapter: RendererAdapter) {}
 
   // ---------------------------------------------------------------------------
@@ -427,7 +431,7 @@ export class AppModel {
       if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }
       try {
         const size = this._page_dims(p)
-        const orig = this._page_map[p] ?? p
+        const orig = this._orig_page(p)
         let box: Box | null
         if (this._mode === Mode.NORMAL) {
           // NORMAL: text-layer box ONLY — no rasterisation, no OpenCV, ever (spec-web §5). A page
@@ -677,10 +681,11 @@ export class AppModel {
     if (this._split_count > 1) { this._begin_split_drag(pt, tol, sz); return }
     // A pending manual window (_drawn): grab a handle to resize, press INSIDE to move it,
     // press OUTSIDE to drop it and rubber-band a new one (desktop WindowDrag / DrawDrag, §9.3/§9.4).
+    // hit_handle() itself returns 'move' for any interior point, so a hit here is never null.
     const drawn = this._drawn
     if (drawn) {
       const h = hit_handle(drawn, px, py, tol)
-      if (h || point_in_box(drawn, px, py)) {
+      if (h) {
         this._drag = {
           kind: 'drawn', handle: h, rect0: drawn, start: pt,
           page_w: sz.width, page_h: sz.height,
@@ -781,7 +786,7 @@ export class AppModel {
   }
 
   private _update_auto_drag(drag: AutoDrag, px: number, py: number, sz: PageSize): void {
-    let updated = apply_handle_drag(drag.handle ?? 'move', drag.rect0,
+    let updated = apply_handle_drag(drag.handle, drag.rect0,
       drag.start, [px, py], drag.page_w, drag.page_h)
     if (this._keep_ratio) updated = keep_ratio_normalise(updated, this._ratio, sz.width, sz.height)
     const detected = this._detect_cache.get(this._current_page)
@@ -830,11 +835,11 @@ export class AppModel {
   }
 
   private _update_drawn_drag(drag: DrawnDrag, px: number, py: number): void {
-    const box = apply_handle_drag(drag.handle ?? 'move', drag.rect0,
+    const box = apply_handle_drag(drag.handle, drag.rect0,
       drag.start, [px, py], drag.page_w, drag.page_h)
     // Keep-ratio holds LIVE during a resize, anchored opposite the dragged handle so only the
-    // dragged side moves (spec-web §W2 row 9). A move (null/'move' handle) preserves the ratio.
-    this._drawn = (this._keep_ratio && drag.handle && drag.handle !== 'move')
+    // dragged side moves (spec-web §W2 row 9). A move ('move' handle) preserves the ratio.
+    this._drawn = (this._keep_ratio && drag.handle !== 'move')
       ? keep_ratio_anchored(box, this._ratio, drag.handle, drag.page_w, drag.page_h)
       : box
   }
@@ -1231,7 +1236,7 @@ export class AppModel {
       const sz = this._page_dims(p)
       const boxes = this._export_boxes_for_page(p, sz)
       pages.push({
-        orig_page: this._page_map[p] ?? p,
+        orig_page: this._orig_page(p),
         boxes,
         page_w: sz.width, page_h: sz.height,
         rotation: this.document.rotation.get(p) ?? 0,
@@ -1474,7 +1479,7 @@ export class AppModel {
   // `p` is a logical (post-delete) index — translate through _page_map to reach the
   // original-indexed page_sizes array, same boundary _get_work() crosses for the adapter.
   private _page_dims(p: number): PageSize {
-    const orig = this._page_map[p] ?? p
+    const orig = this._orig_page(p)
     const sz = this._doc?.page_sizes[orig] ?? { width: SYNTH_W, height: SYNTH_H }
     const rot = this.document.rotation.get(p) ?? 0
     return rot % 180 === 90 ? { width: sz.height, height: sz.width } : sz
@@ -1494,7 +1499,7 @@ export class AppModel {
     const dpi = this._mode === Mode.SCANNED ? SRC_DPI : this._display_dpi
     const rotation = this.document.rotation.get(p) ?? 0
     // p is logical (post-delete); the adapter only knows original pdf.js page indices.
-    const orig = this._page_map[p] ?? p
+    const orig = this._orig_page(p)
     const b = doc && !doc.synthetic
       ? await this._adapter.get_source_image(orig, dpi, rotation)
       : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
@@ -1552,7 +1557,7 @@ export class AppModel {
   // different key, so a settings change never returns a stale raster (it re-processes into a new
   // key instead) and a new document (new _doc_gen) never collides with a prior one's rasters.
   private _work_disk_key(p: number, intent: PageProcessIntent): string {
-    const orig = this._page_map[p] ?? p
+    const orig = this._orig_page(p)
     const filt = intent.filter ? `${intent.filter[0]}-${intent.filter[1]}` : 'none'
     const rot = this.document.rotation.get(p) ?? 0
     return `g${this._doc_gen}|${orig}|d${intent.dewarp ? 1 : 0}|f${filt}|r${rot}|s${this.settings.dewarp_supersample}`
