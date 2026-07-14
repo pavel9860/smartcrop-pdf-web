@@ -5,7 +5,7 @@ import type { AppModel } from '@core/model'
 import type { AppController, UIConfig } from './app'
 import {
   UNDO_DEPTH_OPTIONS, PAPER_SIZES, CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
-  CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
+  CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DETECT_OUTLIER_OPTIONS,
 } from '@core/constants'
 import { FONT_SIZE_PRESETS, ZOOM_PRESETS } from './constants'
 import { requireEl, syncCustomReveal } from './dom'
@@ -28,6 +28,7 @@ export class SettingsView {
   // Behaviour
   private readonly _remember_cb: HTMLInputElement
   private readonly _undo_sel:  HTMLSelectElement
+  private readonly _outlier_sel: HTMLSelectElement
 
   // Scan
   private readonly _supersample_inp: HTMLInputElement
@@ -38,6 +39,8 @@ export class SettingsView {
 
     const undo_opts = UNDO_DEPTH_OPTIONS.map(n =>
       `<option value="${n}">${n}</option>`).join('')
+    const outlier_opts = DETECT_OUTLIER_OPTIONS.map(n =>
+      `<option value="${n}">${n === 0 ? 'Off (use largest)' : n}</option>`).join('')
     const font_opts = FONT_SIZE_PRESETS.map(n => `<option value="${n}">${n}</option>`).join('')
     const zoom_opts = ZOOM_PRESETS.map(p =>
       `<option value="${p}">${Math.round(p * 100)}%</option>`).join('')
@@ -98,6 +101,11 @@ export class SettingsView {
           <span class="settings-label">Undo / redo depth</span>
           <select class="select" id="sv-undo">${undo_opts}</select>
         </div>
+        <div class="settings-row">
+          <span class="settings-label" title="When sizing the shared auto-crop, ignore the N pages with the largest detected content; Off = use the largest">Ignore N outlier pages</span>
+          <select class="select" id="sv-outlier"
+                  title="When sizing the shared auto-crop, ignore the N pages with the largest detected content; Off = use the largest">${outlier_opts}</select>
+        </div>
       </section>
 
       <section class="settings-section">
@@ -122,6 +130,7 @@ export class SettingsView {
 
     this._remember_cb = requireEl(this._el, '#sv-remember')
     this._undo_sel    = requireEl(this._el, '#sv-undo')
+    this._outlier_sel = requireEl(this._el, '#sv-outlier')
 
     this._supersample_inp = requireEl(this._el, '#sv-supersample')
 
@@ -159,6 +168,8 @@ export class SettingsView {
       { ctrl.set_remember_folder(this._remember_cb.checked) })
     this._undo_sel.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_undo_depth(parseInt(this._undo_sel.value, 10)) }) })
+    this._outlier_sel.addEventListener('change', () =>
+      { ctrl.dispatch(() => { model.set_detect_outlier_pages(parseInt(this._outlier_sel.value, 10)) }) })
 
     this._supersample_inp.addEventListener('change', () => {
       const v = parseFloat(this._supersample_inp.value)
@@ -185,6 +196,7 @@ export class SettingsView {
 
     this._remember_cb.checked = ui.remember_folder
     this._undo_sel.value = String(model.undo_depth)
+    this._outlier_sel.value = String(model.detect_outlier_pages)
 
     if (document.activeElement !== this._supersample_inp) {
       this._supersample_inp.value = model.dewarp_supersample.toFixed(1)

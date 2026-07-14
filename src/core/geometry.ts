@@ -151,19 +151,29 @@ export function offsets_from_rect(
   }
 }
 
-// Spec §8: aggregate detection boxes into the union frame.
-// gL=min(x0), gT=min(y0), W=max(width), H=max(height) — NOT a standard bounding box.
-export function detection_union(boxes: Box[]): Box {
+// Spec-web §5: aggregate detection boxes into the union frame.
+// gL=min(x0), gT=min(y0) — the min corner, always. W/H are the outlier-th LARGEST per-page
+// width/height (independently), not always the max: `outlier` (default 0) is how many of the
+// largest pages to ignore when sizing the shared crop, so a handful of oversized pages don't
+// inflate every page's crop. outlier=0 reproduces the plain max (every prior caller's behavior).
+// NOT a standard bounding box.
+export function detection_union(boxes: Box[], outlier = 0): Box {
   if (boxes.length === 0) throw new RangeError('detection_union: empty array')
-  let gL = Infinity, gT = Infinity, maxW = 0, maxH = 0
+  let gL = Infinity, gT = Infinity
+  const widths: number[] = [], heights: number[] = []
   for (const b of boxes) {
     if (b.x0 < gL) gL = b.x0
     if (b.y0 < gT) gT = b.y0
-    const w = b.x1 - b.x0, h = b.y1 - b.y0
-    if (w > maxW) maxW = w
-    if (h > maxH) maxH = h
+    widths.push(b.x1 - b.x0)
+    heights.push(b.y1 - b.y0)
   }
-  return { x0: gL, y0: gT, x1: gL + maxW, y1: gT + maxH }
+  widths.sort((a, b) => b - a)
+  heights.sort((a, b) => b - a)
+  const idx = Math.min(Math.max(0, outlier), boxes.length - 1)
+  // idx is always a valid index (0 <= idx <= boxes.length-1 === widths.length-1); the ?? 0
+  // fallback only satisfies noUncheckedIndexedAccess, never actually taken.
+  const W = widths[idx] ?? 0, H = heights[idx] ?? 0
+  return { x0: gL, y0: gT, x1: gL + W, y1: gT + H }
 }
 
 // Standard bounding box union (for non-detection uses)

@@ -58,7 +58,7 @@ describe('SettingsView', () => {
     expect(fc.calls.some(c => c.kind === 'set_remember_folder')).toBe(true)
   })
 
-  it('Output section has shared-state Custom DPI + Paper size (spec-web §W3)', () => {
+  it('Output section has shared-state Custom DPI + Paper size (spec-web §4.8)', () => {
     view.refresh(model, UI)   // select values are only synced from the model on refresh()
     const dpi = root.querySelector<HTMLInputElement>('#sv-custom-dpi')!
     expect(dpi).toBeTruthy()
@@ -104,5 +104,14 @@ describe('SettingsView', () => {
     undo.value = undo.options[0]!.value; undo.dispatchEvent(new Event('change'))
     expect(model.output_postfix).toBe('_crop')
     expect(model.dewarp_supersample).toBeCloseTo(2)
+  })
+
+  it('outlier-tolerance dropdown offers [0,1,2,5,10] and dispatches set_detect_outlier_pages (spec-web §5, #11)', () => {
+    const outlier = root.querySelector<HTMLSelectElement>('#sv-outlier')!
+    expect(Array.from(outlier.options).map(o => o.value)).toEqual(['0', '1', '2', '5', '10'])
+    outlier.value = '2'; outlier.dispatchEvent(new Event('change'))
+    expect(model.detect_outlier_pages).toBe(2)
+    view.refresh(model, UI)
+    expect(outlier.value).toBe('2')
   })
 })

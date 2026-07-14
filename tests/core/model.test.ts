@@ -233,6 +233,24 @@ describe('detect_content / apply_crop', () => {
     expect(snap.overlay.some(o => o.kind === 'auto')).toBe(true)
   })
 
+  it('detect_content emits progress per page, not all at the end (#5)', async () => {
+    const model = await loaded_model({ page_count: 3 })
+    const job = model.detect_content()
+    const seen: number[] = []
+    job.onProgress((done) => { seen.push(done) })
+    await job.result()
+    // one advance() per page, strictly increasing — not a single jump straight to `total`.
+    expect(seen).toEqual([1, 2, 3])
+  })
+
+  it('detect_content does not move the current page/view position (#5)', async () => {
+    const model = await loaded_model({ page_count: 3 })
+    model.next_page()
+    const before = model.view_position
+    await model.detect_content().result()
+    expect(model.view_position).toBe(before)
+  })
+
   it('apply_crop with split=1 requires an active auto-detect box (draw/detect first)', async () => {
     const model = await loaded_model()
     model.apply_crop()   // no detect run yet — silently commits nothing (spec: crop never dropped, never fabricated)

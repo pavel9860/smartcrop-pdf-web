@@ -19,6 +19,12 @@ export const BORDER_FRAC    = 0.02   // outer margin excluded from component kee
 export const MIN_COMP_FRAC  = 2.5e-4 // component area fraction threshold
 export const FULL_PAGE_FRAC = 0.97   // box >= this fraction of page → fallback, excluded from aggregate
 
+// Auto-detect outlier tolerance (spec-web §5): detection_union's W/H use the (N+1)-th largest
+// per-page dimension instead of always the max, so N oversized pages don't inflate every crop.
+// N=0 = unchanged (max). Settings dropdown preset list.
+export const DETECT_OUTLIER_OPTIONS: readonly number[] = [0, 1, 2, 5, 10]
+export const DEFAULT_DETECT_OUTLIER = 0
+
 // Deskew
 export const DESKEW_MAX_DEG = 15.0
 

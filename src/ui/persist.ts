@@ -1,5 +1,5 @@
-// localStorage persistence of output-quality settings (spec-web §W2 row 6 area / §W3): compress
-// DPI (incl. Custom), colour, and export format survive both new-document loads and browser
+// localStorage persistence of output-quality settings (spec-web §4.8): compress DPI (incl.
+// Custom), paper size, colour, and export format survive both new-document loads and browser
 // sessions. Lives in ui/ so core/ stays storage-free (ARCHITECTURE §10 — no window in core/).
 
 const KEY = 'scw.output.v1'

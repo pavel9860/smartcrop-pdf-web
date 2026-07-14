@@ -397,9 +397,9 @@ export class AppModel {
 
     const union = this._compute_detection_union(per_page_boxes)
 
-    // detect_cache/union/auto_active are non-undoable working state (§W9.2). history.push still
-    // runs here — it protects _refresh_committed_crops_after_detect's `applied` writes below,
-    // which remain undoable.
+    // detect_cache/union/auto_active are non-undoable working state (spec-web §12). history.push
+    // still runs here — it protects _refresh_committed_crops_after_detect's `applied` writes
+    // below, which remain undoable.
     this.history.push(this.document)
     for (const [p, box] of per_page_boxes) this._detect_cache.set(p, box)
     this._union = union
@@ -427,18 +427,17 @@ export class AppModel {
         const orig = this._page_map[p] ?? p
         let box: Box | null
         if (this._mode === Mode.NORMAL) {
-          // NORMAL: text-layer box ONLY (desktop detect.py normal_page_box) — no rasterisation, no
-          // OpenCV, ever (spec-web §W9.1a; previously fell back to the raster path below). A page
+          // NORMAL: text-layer box ONLY — no rasterisation, no OpenCV, ever (spec-web §5). A page
           // with no extractable text (rare: vector-art/no-text page, still classified NORMAL by
           // is_native_page's vector-op check) simply gets no detected box — every downstream
           // consumer (_compute_crop_boxes_for_page, _live_auto_crop_for, _begin_auto_drag) already
           // null-checks `detected` and degrades to "no auto-crop for this page" correctly.
           box = this._adapter.detect_text_box ? await this._adapter.detect_text_box(orig) : null
         } else {
-          // SCANNED: unchanged — raster/Sauvola on the RAW source, never the processed work image
-          // (desktop detects on the raw scan's cleaned bilevel; running dewarp+filter first was
-          // pure waste — detect_content_box downscales to DETECT_MAX_PX and re-binarizes anyway).
-          // This is what makes Auto-detect meet its <0.1 s/page budget (§W5).
+          // SCANNED: raster/Sauvola on the RAW source, never the processed work image — running
+          // dewarp+filter first would be pure waste (detect_content_box downscales to
+          // DETECT_MAX_PX and re-binarizes anyway). This is what makes Auto-detect meet its
+          // <0.1 s/page budget (spec-web §16).
           const img = await this._get_source(p)
           box = await this._adapter.detect_content_box(img, size.width, size.height, this._mode)
         }
@@ -448,11 +447,17 @@ export class AppModel {
         return null
       }
       ctrl.advance()
+      // Yield between pages so the progress overlay repaints (matches _run_warm/
+      // _render_export_pages — without this the whole detect pass can run as one
+      // paint-less burst: the bar looks frozen, then jumps to done, spec-web §11).
+      await this._yield_to_paint()
     }
     return per_page_boxes
   }
 
-  // Aggregate per-page boxes into the union frame, excluding full-page fallback boxes (spec §8)
+  // Aggregate per-page boxes into the union frame, excluding full-page fallback boxes (spec-web
+  // §5) and applying the outlier tolerance (settings.detect_outlier_pages, spec-web §5) — the
+  // ONE shared aggregation path for every caller (detect, rotate, delete rebuilds).
   private _compute_detection_union(per_page_boxes: Map<number, Box>): Box | null {
     const valid: Box[] = []
     for (const [p, box] of per_page_boxes) {
@@ -461,10 +466,10 @@ export class AppModel {
         valid.push(box)
       }
     }
-    return valid.length > 0 ? detection_union(valid) : null
+    return valid.length > 0 ? detection_union(valid, this.settings.detect_outlier_pages) : null
   }
 
-  // Re-detect refreshes committed crops without dropping them (spec §7.4)
+  // Re-detect refreshes committed crops without dropping them (spec-web §4.5)
   private _refresh_committed_crops_after_detect(pages: number[], union: Box | null): void {
     if (!union) return
     for (const p of pages) {
@@ -1030,6 +1035,9 @@ export class AppModel {
     this.settings.undo_depth = d
     this.history.set_depth(d)
   }
+  set_detect_outlier_pages(n: number): void {
+    this.settings.detect_outlier_pages = Math.max(0, Math.round(n))
+  }
   set_output_postfix(postfix: string): void { this.settings.output_postfix = postfix }
   set_dewarp_supersample(factor: number): void {
     this.settings.dewarp_supersample = Math.max(1.0, Math.min(4.0, factor))
@@ -1104,21 +1112,21 @@ export class AppModel {
     const sorted = [...pages].sort((a, b) => a - b)
     const removed = new Set(sorted)
 
-    // Delete is destructive, not undoable (model.py:596 clears history rather than snapshotting;
-    // spec §13 states Rotate is "Fully undoable" in explicit contrast). It can't be made undoable
-    // here regardless: _page_map (below) lives outside DocumentState, so a restored
-    // applied/rotation map could reference original page indices the map no longer has — the same
-    // class of desync bug as the set_keep_ratio fix above, just for a field History can't reach.
+    // Delete is destructive, not undoable (clears history rather than snapshotting — spec-web §12
+    // states Rotate is "Fully undoable" in explicit contrast). It can't be made undoable here
+    // regardless: _page_map (below) lives outside DocumentState, so a restored applied/rotation
+    // map could reference original page indices the map no longer has — the same class of desync
+    // bug as the set_keep_ratio fix above, just for a field History can't reach.
     this.history.clear()
 
-    // Reindex per-page maps (spec §13)
+    // Reindex per-page maps (spec-web §12)
     this.document.applied   = reindex_map(this.document.applied,   sorted)
     this.document.rotation  = reindex_map(this.document.rotation,  sorted)
     this.document.processed = reindex_map(this.document.processed, sorted)
     this._detect_cache      = reindex_map(this._detect_cache,      sorted)
 
-    // Rebuild the logical->original page index map (model.py:581-583's `doc.delete_pages` +
-    // page_sizes rebuild, adapted since pdf.js has no equivalent in-place deletion primitive).
+    // Rebuild the logical->original page index map (pdf.js has no in-place page-deletion
+    // primitive, so this is a filter + reindex instead).
     // MUST precede the union rebuild below: _compute_detection_union reads each surviving page's
     // dimensions through _page_map, so it has to be reindexed first (bug 2a — the union was judged
     // against a stale page map).
@@ -1434,6 +1442,7 @@ export class AppModel {
   get output_colours(): string { return this.settings.output_colours }
   get export_format(): ExportFormat { return this.settings.export_format }
   get undo_depth(): number { return this.settings.undo_depth }
+  get detect_outlier_pages(): number { return this.settings.detect_outlier_pages }
 
   // ---------------------------------------------------------------------------
   // Private helpers

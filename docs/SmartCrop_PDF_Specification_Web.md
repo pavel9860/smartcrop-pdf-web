@@ -238,12 +238,22 @@ W  = max(x1 − x0)       H  = max(y1 − y0)           # largest content width 
 union = (gL, gT, gL+W, gT+H)
 ```
 
-`W,H` is the *largest* content box found, not the bounding span of all edges. Full-page fallback
-boxes are excluded from the aggregate (any page whose detected box is ≥ `FULL_PAGE_FRAC` of the
-sheet in both axes), so one failed page can't blow `W,H` up to the sheet size. This exclusion is
+`W,H` is by default the *largest* content box found, not the bounding span of all edges. Full-page
+fallback boxes are excluded from the aggregate (any page whose detected box is ≥ `FULL_PAGE_FRAC` of
+the sheet in both axes), so one failed page can't blow `W,H` up to the sheet size. This exclusion is
 re-applied identically whenever the union is rebuilt after a rotate or a delete (§12) — one shared
 `_compute_detection_union` helper, no separate re-implementation. Per-page boxes and the union are
 cached (non-undoable AppModel state — §13).
+
+**Outlier tolerance** (opt-in, default off): Settings → Behaviour → "Ignore N outlier pages"
+(`DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]`, default 0). When N > 0, `W`/`H` are each the
+`(N+1)`-th *largest* per-page width/height — sorted independently, so the page contributing `W`
+need not be the same page contributing `H` — instead of always the maximum; `gL`/`gT` (the min
+corner) are unaffected. This lets a handful of oversized pages (e.g. a few fold-out or
+larger-trim pages in an otherwise uniform scan) get excluded from sizing the shared crop instead
+of inflating every page's crop to fit them. N=0 reproduces the plain-max behavior exactly. The
+same `settings.detect_outlier_pages` value and the same aggregation helper apply to the initial
+detect and to every union rebuild (rotate, delete) — no separate tolerance-aware code path.
 
 `content_box(bilevel)`:
 
@@ -629,6 +639,7 @@ Output
 Behaviour
   Remember last folder     [ on  ]
   Undo / redo depth        [ 2   v ]           preset dropdown, [1,2,4,8]
+  Ignore N outlier pages   [ Off v ]           preset dropdown, [0,1,2,5,10] (auto-crop sizing, §5)
 Scan
   Dewarp supersample       [ 2.0 ]             quality lever for dewarp (§7.1); 1.0 = off
 ```
@@ -720,6 +731,7 @@ DEFAULT_COMPRESS_PRESET = "Original resolution"   DEFAULT_OUTPUT_COLOURS = "Orig
 DEFAULT_EXPORT_FORMAT = "PDF"    DEFAULT_OUTPUT_POSTFIX = "_cropped"
 DEFAULT_UNDO_DEPTH = 2    UNDO_DEPTH_OPTIONS = [1,2,4,8]    UNDO_DEPTH_MIN/MAX = 1 / 50
 DEFAULT_DEWARP_SUPERSAMPLE = 2.0
+DEFAULT_DETECT_OUTLIER = 0    DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]
 # dewarp model (pstwh/docuwarp, two-stage ONNX)
 DEWARP_MODEL_W/H = 488 / 712   (fixed CNN input size, not tunable)
 ```

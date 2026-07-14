@@ -170,3 +170,59 @@ describe('union rebuild keeps FULL_PAGE_FRAC exclusion (spec §8)', () => {
     expect(model.union).toEqual({ x0: 10, y0: 10, x1: 110, y1: 210 })
   })
 })
+
+describe('settings.detect_outlier_pages routes into the union (spec-web §5, #11)', () => {
+  it('detect_content() applies the current outlier setting', async () => {
+    const sizes = Array.from({ length: 3 }, () => ({ width: 300, height: 400 }))
+    const boxes = [
+      { x0: 0,  y0: 0,  x1: 200, y1: 100 },   // w=200 h=100
+      { x0: 0,  y0: 0,  x1: 150, y1: 300 },   // w=150 h=300
+      { x0: 0,  y0: 0,  x1: 50,  y1: 60 },    // w=50  h=60
+    ]
+    const { adapter } = make_adapter(sizes, boxes)
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+
+    model.set_detect_outlier_pages(1)
+    expect(model.detect_outlier_pages).toBe(1)
+    await model.detect_content().result()
+    // widths desc 200,150,50 -> 2nd = 150; heights desc 300,100,60 -> 2nd = 100
+    expect(model.union).toEqual({ x0: 0, y0: 0, x1: 150, y1: 100 })
+  })
+
+  it('the same outlier setting applies to the rotate union rebuild (one shared aggregation path)', async () => {
+    const sizes = Array.from({ length: 3 }, () => ({ width: 300, height: 400 }))
+    const boxes = [
+      { x0: 0, y0: 0, x1: 200, y1: 100 },   // w=200 h=100
+      { x0: 0, y0: 0, x1: 150, y1: 300 },   // w=150 h=300
+      { x0: 0, y0: 0, x1: 10,  y1: 180 },   // w=10  h=180
+    ]
+    const { adapter } = make_adapter(sizes, boxes)
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    model.set_detect_outlier_pages(1)
+    await model.detect_content().result()
+    // widths desc 200,150,10 -> 2nd=150; heights desc 300,180,100 -> 2nd=180
+    expect(model.union).toEqual({ x0: 0, y0: 0, x1: 150, y1: 180 })
+
+    model.set_select_pattern('3')
+    model.set_pages_mode(PagesMode.SELECT)
+    model.rotate_pages()
+    // p3's box (w=10,h=180) rotates to (w=180,h=10) — a 90° box rotation always swaps width and
+    // height. That changes BOTH 2nd-place picks: widths desc now 200,180,150 -> 2nd=180 (p3
+    // overtakes p2); heights desc now 300,100,10 -> 2nd=100 (p1 overtakes the now-tiny p3).
+    // Recomputing this correctly after rotate (not just carrying the old picks forward) is the
+    // point of routing rotate's union rebuild through the same _compute_detection_union.
+    expect(model.union).toEqual({ x0: 0, y0: 0, x1: 180, y1: 100 })
+  })
+
+  it('set_detect_outlier_pages clamps to a non-negative integer', () => {
+    const model = new AppModel(make_adapter([{ width: 100, height: 100 }], [
+      { x0: 0, y0: 0, x1: 10, y1: 10 },
+    ]).adapter)
+    model.set_detect_outlier_pages(-5)
+    expect(model.detect_outlier_pages).toBe(0)
+    model.set_detect_outlier_pages(2.7)
+    expect(model.detect_outlier_pages).toBe(3)
+  })
+})

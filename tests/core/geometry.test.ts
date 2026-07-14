@@ -143,7 +143,7 @@ describe('apply_handle_drag', () => {
   })
 })
 
-describe('detection_union (spec §8)', () => {
+describe('detection_union (spec-web §5)', () => {
   it('size is max(width)/max(height), not the bounding span', () => {
     const boxes = [box(0, 0, 100, 40), box(10, 10, 60, 90)]
     const u = detection_union(boxes)
@@ -159,6 +159,47 @@ describe('detection_union (spec §8)', () => {
   })
   it('throws on an empty array', () => {
     expect(() => detection_union([])).toThrow()
+  })
+})
+
+describe('detection_union outlier tolerance (spec-web §5, #11)', () => {
+  // Widths 100/80/60/40/20, heights 40/90/30/10/70 — deliberately uncorrelated so W/H are
+  // picked independently across pages.
+  const boxes = [
+    box(0, 0, 100, 40),   // w=100 h=40
+    box(0, 0, 80, 90),    // w=80  h=90
+    box(0, 0, 60, 30),    // w=60  h=30
+    box(0, 0, 40, 10),    // w=40  h=10
+    box(0, 0, 20, 70),    // w=20  h=70
+  ]
+
+  it('outlier=0 reproduces the plain max (backward-compatible default)', () => {
+    const u = detection_union(boxes, 0)
+    expect(box_width(u)).toBe(100)
+    expect(box_height(u)).toBe(90)
+  })
+
+  it('outlier=1 uses the 2nd-largest width and 2nd-largest height, independently', () => {
+    const u = detection_union(boxes, 1)
+    // widths desc: 100,80,60,40,20 -> 2nd = 80. heights desc: 90,70,40,30,10 -> 2nd = 70.
+    expect(box_width(u)).toBe(80)
+    expect(box_height(u)).toBe(70)
+  })
+
+  it('outlier >= len-1 uses the smallest width/height', () => {
+    const u = detection_union(boxes, 10)   // clamped to len-1 = 4
+    expect(box_width(u)).toBe(20)
+    expect(box_height(u)).toBe(10)
+  })
+
+  it('gL/gT (the min corner) are unaffected by outlier', () => {
+    const b = [box(20, 5, 120, 55), box(5, 30, 55, 80)]
+    const u0 = detection_union(b, 0)
+    const u1 = detection_union(b, 1)
+    expect(u0.x0).toBe(5)
+    expect(u0.y0).toBe(5)
+    expect(u1.x0).toBe(5)
+    expect(u1.y0).toBe(5)
   })
 })
 
