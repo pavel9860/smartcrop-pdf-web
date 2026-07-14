@@ -8,6 +8,7 @@ import {
 } from './document_state'
 import { History } from './history'
 import { type Settings, default_settings } from './settings'
+import { PageIndexMap } from './page_index_map'
 import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type DrawnDrag } from './drag'
 import {
   type Box,
@@ -238,14 +239,9 @@ export class AppModel {
   // The clear still runs (fire-and-forget) to bound storage; correctness no longer depends on it.
   private _doc_gen = 0
 
-  // Logical page index -> original adapter page index. pdf.js has no page-deletion primitive
-  // that renumbers indices in place, so delete_pages() removes entries from this map instead.
-  // Every adapter call that takes a page index must translate through it (_get_work).
-  private _page_map: number[] = []
-
-  // p is always a valid logical index here (bounded by page_count()), so _page_map[p] is always
-  // defined; the `?? p` fallback exists only to satisfy noUncheckedIndexedAccess.
-  private _orig_page(p: number): number { return this._page_map[p] ?? p }
+  // Logical page index -> original adapter page index (§18 PageIndexMap). Every adapter call
+  // that takes a page index must translate through it (_get_work).
+  private _page_index = new PageIndexMap()
 
   constructor(private readonly _adapter: RendererAdapter) {}
 
@@ -298,7 +294,7 @@ export class AppModel {
     this._doc_gen += 1
     void this._adapter.clear_work_cache?.()
     this._current_bitmap = null
-    this._page_map = this._doc ? Array.from({ length: this._doc.page_count }, (_, i) => i) : []
+    this._page_index.reset(this._doc ? this._doc.page_count : 0)
     // Keep-ratio initialises to the first page's real w/h, not a bare 1.0, so the ratio field
     // shows a meaningful default from the moment a document opens.
     const sz0 = this._doc?.page_sizes[0]
@@ -306,7 +302,7 @@ export class AppModel {
   }
 
   get has_document(): boolean { return this._doc !== null }
-  page_count(): number { return this._page_map.length }
+  page_count(): number { return this._page_index.length }
 
   // Loaded document name for the sidebar's Document & State card. One file → its name; several →
   // "first.pdf +N more". Empty when nothing is loaded.
@@ -431,7 +427,7 @@ export class AppModel {
       if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }
       try {
         const size = this._page_dims(p)
-        const orig = this._orig_page(p)
+        const orig = this._page_index.orig(p)
         let box: Box | null
         if (this._mode === Mode.NORMAL) {
           // NORMAL: text-layer box ONLY — no rasterisation, no OpenCV, ever (spec-web §5). A page
@@ -1120,7 +1116,7 @@ export class AppModel {
 
     // Delete is destructive, not undoable (clears history rather than snapshotting — spec-web §12
     // states Rotate is "Fully undoable" in explicit contrast). It can't be made undoable here
-    // regardless: _page_map (below) lives outside DocumentState, so a restored applied/rotation
+    // regardless: _page_index (below) lives outside DocumentState, so a restored applied/rotation
     // map could reference original page indices the map no longer has — the same class of desync
     // bug as the set_keep_ratio fix above, just for a field History can't reach.
     this.history.clear()
@@ -1134,9 +1130,9 @@ export class AppModel {
     // Rebuild the logical->original page index map (pdf.js has no in-place page-deletion
     // primitive, so this is a filter + reindex instead).
     // MUST precede the union rebuild below: _compute_detection_union reads each surviving page's
-    // dimensions through _page_map, so it has to be reindexed first (bug 2a — the union was judged
+    // dimensions through _page_index, so it has to be reindexed first (bug 2a — the union was judged
     // against a stale page map).
-    this._page_map = this._page_map.filter((_, i) => !removed.has(i))
+    this._page_index.remove(removed)
 
     if (this._auto_active && this._detect_cache.size > 0) {
       // Same FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a): the old raw
@@ -1236,7 +1232,7 @@ export class AppModel {
       const sz = this._page_dims(p)
       const boxes = this._export_boxes_for_page(p, sz)
       pages.push({
-        orig_page: this._orig_page(p),
+        orig_page: this._page_index.orig(p),
         boxes,
         page_w: sz.width, page_h: sz.height,
         rotation: this.document.rotation.get(p) ?? 0,
@@ -1476,10 +1472,10 @@ export class AppModel {
 
   // Effective page size accounting for the page's current rotation (spec §13: a 90°/270°
   // rotation swaps the reported page dimensions; mirrors desktop model.py's _page_dims).
-  // `p` is a logical (post-delete) index — translate through _page_map to reach the
+  // `p` is a logical (post-delete) index — translate through _page_index to reach the
   // original-indexed page_sizes array, same boundary _get_work() crosses for the adapter.
   private _page_dims(p: number): PageSize {
-    const orig = this._orig_page(p)
+    const orig = this._page_index.orig(p)
     const sz = this._doc?.page_sizes[orig] ?? { width: SYNTH_W, height: SYNTH_H }
     const rot = this.document.rotation.get(p) ?? 0
     return rot % 180 === 90 ? { width: sz.height, height: sz.width } : sz
@@ -1499,7 +1495,7 @@ export class AppModel {
     const dpi = this._mode === Mode.SCANNED ? SRC_DPI : this._display_dpi
     const rotation = this.document.rotation.get(p) ?? 0
     // p is logical (post-delete); the adapter only knows original pdf.js page indices.
-    const orig = this._orig_page(p)
+    const orig = this._page_index.orig(p)
     const b = doc && !doc.synthetic
       ? await this._adapter.get_source_image(orig, dpi, rotation)
       : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
@@ -1557,7 +1553,7 @@ export class AppModel {
   // different key, so a settings change never returns a stale raster (it re-processes into a new
   // key instead) and a new document (new _doc_gen) never collides with a prior one's rasters.
   private _work_disk_key(p: number, intent: PageProcessIntent): string {
-    const orig = this._orig_page(p)
+    const orig = this._page_index.orig(p)
     const filt = intent.filter ? `${intent.filter[0]}-${intent.filter[1]}` : 'none'
     const rot = this.document.rotation.get(p) ?? 0
     return `g${this._doc_gen}|${orig}|d${intent.dewarp ? 1 : 0}|f${filt}|r${rot}|s${this.settings.dewarp_supersample}`
