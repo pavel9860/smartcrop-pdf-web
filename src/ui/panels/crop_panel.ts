@@ -28,24 +28,24 @@ export class CropPanel {
   private readonly _delete_btn: HTMLButtonElement
 
   constructor(container: HTMLElement, model: AppModel, ctrl: AppController) {
-    // Four separate cards (desktop panels.py: Split, Detect Text Borders, Advanced, Actions).
+    // Four separate cards: Split, Detect Text Borders, Advanced, Actions.
     const split_card = document.createElement('div')
     split_card.className = 'panel-card'
     split_card.innerHTML = `
       <div class="card-header"><span class="card-title">Split Each Page Into</span></div>
       <div class="btn-group" id="cp-split">
-        <button class="btn btn-seg active" data-n="1">1</button>
-        <button class="btn btn-seg" data-n="2">2</button>
-        <button class="btn btn-seg" data-n="4">4</button>
+        <button class="btn btn-seg active" data-n="1" title="One output page per source page">1</button>
+        <button class="btn btn-seg" data-n="2" title="Two output pages per source page">2</button>
+        <button class="btn btn-seg" data-n="4" title="Four output pages per source page">4</button>
       </div>
       <div class="split-row hidden" id="cp-same-row">
         <span class="split-row__label">Same size</span>
-        <label class="toggle-label"><input type="checkbox" id="cp-same-size" /></label>
+        <label class="toggle-label"><input type="checkbox" id="cp-same-size" title="Keep every split window the same width and height" /></label>
       </div>
       <div class="split-row">
         <span class="split-row__label">Keep ratio</span>
-        <label class="toggle-label"><input type="checkbox" id="cp-keep-ratio" /></label>
-        <input class="ratio-input" id="cp-ratio" type="number" step="0.001" min="0.1" value="1.000" />
+        <label class="toggle-label"><input type="checkbox" id="cp-keep-ratio" title="Lock crop height to width / ratio, live during every drag" /></label>
+        <input class="ratio-input" id="cp-ratio" type="number" step="0.001" min="0.1" value="1.000" title="Width / height ratio to lock to" />
       </div>`
     container.appendChild(split_card)
 
@@ -53,13 +53,13 @@ export class CropPanel {
     detect_card.className = 'panel-card'
     detect_card.innerHTML = `
       <div class="card-header"><span class="card-title">Detect Text Borders</span></div>
-      <button class="btn btn-secondary w-full" id="cp-detect">✦  Auto-detect</button>
+      <button class="btn btn-secondary w-full" id="cp-detect" title="Find each selected page's content and build one shared crop frame">✦  Auto-detect</button>
       <div class="anchor-row">
         <label class="toggle-label">
-          <input type="checkbox" id="cp-anchor-l" checked /> Anchor Left
+          <input type="checkbox" id="cp-anchor-l" checked title="Pin the left edge to this page's own content instead of the shared union" /> Anchor Left
         </label>
         <label class="toggle-label">
-          <input type="checkbox" id="cp-anchor-t" checked /> Anchor Top
+          <input type="checkbox" id="cp-anchor-t" checked title="Pin the top edge to this page's own content instead of the shared union" /> Anchor Top
         </label>
       </div>`
     container.appendChild(detect_card)
@@ -67,14 +67,14 @@ export class CropPanel {
     const adv_card = document.createElement('div')
     adv_card.className = 'panel-card'
     adv_card.innerHTML = `
-      <button class="advanced-toggle" id="cp-adv-toggle"><span class="adv-arrow">▸</span> Advanced</button>
+      <button class="advanced-toggle" id="cp-adv-toggle" title="Show per-edge crop offsets"><span class="adv-arrow">▸</span> Advanced</button>
       <div class="advanced-body hidden" id="cp-adv-body">
         <div class="offset-title">Set offsets</div>
         <div class="offset-grid">
-          <label>L <input class="offset-inp" id="cp-off-l" type="number" step="0.1" value="0" /></label>
-          <label>T <input class="offset-inp" id="cp-off-t" type="number" step="0.1" value="0" /></label>
-          <label>R <input class="offset-inp" id="cp-off-r" type="number" step="0.1" value="0" /></label>
-          <label>B <input class="offset-inp" id="cp-off-b" type="number" step="0.1" value="0" /></label>
+          <label>L <input class="offset-inp" id="cp-off-l" type="number" step="0.1" value="0" title="Left edge offset, % of page width" /></label>
+          <label>T <input class="offset-inp" id="cp-off-t" type="number" step="0.1" value="0" title="Top edge offset, % of page height" /></label>
+          <label>R <input class="offset-inp" id="cp-off-r" type="number" step="0.1" value="0" title="Right edge offset, % of page width" /></label>
+          <label>B <input class="offset-inp" id="cp-off-b" type="number" step="0.1" value="0" title="Bottom edge offset, % of page height" /></label>
         </div>
       </div>`
     container.appendChild(adv_card)
@@ -83,10 +83,10 @@ export class CropPanel {
     actions_card.className = 'panel-card'
     actions_card.innerHTML = `
       <div class="card-header"><span class="card-title">Actions</span></div>
-      <button class="btn btn-secondary w-full" id="cp-crop">✂️  Crop</button>
+      <button class="btn btn-secondary w-full" id="cp-crop" title="Commit the current crop to the selected pages (Ctrl+Enter)">✂️  Crop</button>
       <div class="btn-row">
-        <button class="btn btn-secondary flex-1" id="cp-rotate">↻  Rotate</button>
-        <button class="btn btn-secondary flex-1" id="cp-delete">🗑︎  Delete</button>
+        <button class="btn btn-secondary flex-1" id="cp-rotate" title="Rotate the selected pages 90° clockwise">↻  Rotate</button>
+        <button class="btn btn-secondary flex-1" id="cp-delete" title="Remove the selected pages (cannot be undone)">🗑︎  Delete</button>
       </div>`
     container.appendChild(actions_card)
 

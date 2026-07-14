@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { CropPanel } from '@ui/panels/crop_panel'
-import { make_model, make_ctrl, mount, type FakeController } from './harness'
+import { make_model, make_ctrl, mount, assert_all_have_tooltips, type FakeController } from './harness'
 import type { AppModel } from '@core/model'
 
 describe('CropPanel', () => {
@@ -76,5 +76,9 @@ describe('CropPanel', () => {
     panel.refresh(model, true)
     expect(root.querySelector<HTMLButtonElement>('#cp-crop')!.disabled).toBe(true)
     expect(root.querySelector<HTMLButtonElement>('#cp-rotate')!.disabled).toBe(true)
+  })
+
+  it('every control has a tooltip (T8, #19)', () => {
+    assert_all_have_tooltips(root)
   })
 })

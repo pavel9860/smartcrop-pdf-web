@@ -1,7 +1,5 @@
-// Help content rendered inside the detail panel (spec §16). A Contents card lists one button
-// per section; clicking scrolls the body to it. Section text ported verbatim from the desktop's
-// ui/help_content.py (pure data, same as there) — this is the actual app copy, not a
-// re-derivation from the spec prose.
+// Help content rendered inside the detail panel (spec-web §14). A Contents card lists one button
+// per section; clicking scrolls the body to it.
 
 const INTRO = 'Crop, straighten, and clean PDFs and scans for e-readers, phones and tablets.'
 
@@ -51,7 +49,7 @@ const SECTIONS: readonly HelpSection[] = [
       + 'It builds one shared crop frame that fits all pages the same way.\n\n'
       + 'Draw: click and drag on an empty area of the canvas to draw a new rectangle.\n\n'
       + 'Adjust manually: drag a corner to resize, a border to move one edge, '
-      + 'or the marker at the top-right corner to move the whole rectangle. '
+      + 'or drag inside the rectangle (away from any handle) to move the whole thing. '
       + 'Right-click or press Esc to cancel a drag without changing anything.',
   },
   {
@@ -62,7 +60,10 @@ const SECTIONS: readonly HelpSection[] = [
       + 'The Advanced card has four offset fields (L T R B). '
       + 'Each nudges one edge by a percentage of the page size. '
       + 'Positive values shrink the crop; negative values expand it. '
-      + 'Out-of-range values snap to the page border automatically.',
+      + 'Out-of-range values snap to the page border automatically.\n\n'
+      + "If a few pages have unusually large content (e.g. a fold-out), Settings → "
+      + '"Ignore N outlier pages" excludes that many of the largest pages when sizing the shared '
+      + 'crop, so they stop inflating the crop on every other page. Off by default.',
   },
   {
     id: 'split', title: '7. Split pages',
@@ -70,19 +71,22 @@ const SECTIONS: readonly HelpSection[] = [
       + 'Useful for scanning two book pages side by side. '
       + 'Choosing 2 or 4 draws an even grid of windows on the canvas. '
       + 'You can drag and resize each window just like a normal crop. '
-      + 'Press Apply when all windows look right — the button requires exactly N windows per page. '
-      + 'Same size keeps all windows the same dimensions.',
+      + 'Press Crop when all windows look right — the button requires exactly N windows per page.\n\n'
+      + 'Same size keeps every window the same width and height: resizing one resizes the others '
+      + 'to match, live as you drag. Moving a window (dragging its interior) never affects the '
+      + 'others — only a resize propagates.',
   },
   {
     id: 'keep-ratio', title: '8. Keep ratio',
-    body: 'When Keep ratio is on, the crop height is always locked to width / ratio. '
+    body: 'When Keep ratio is on, the crop height is always locked to width / ratio, held live '
+      + 'throughout the drag (not just snapped at the end). '
       + 'This applies to every way you can change the crop: dragging handles, '
       + 'editing offsets, drawing a new rectangle, and split windows. '
-      + 'The ratio field is editable. It defaults to the detected content width/height.',
+      + 'The ratio field is editable. It defaults to whatever crop shape is currently on screen.',
   },
   {
-    id: 'apply-crop', title: '9. Apply the crop',
-    body: 'Press Apply (or Ctrl+Enter) to commit the crop to the selected pages. '
+    id: 'apply-crop', title: '9. Crop',
+    body: 'Press Crop (or Ctrl+Enter) to commit the crop to the selected pages. '
       + 'The canvas immediately shows each page as it will be saved. '
       + 'A committed page stays cropped while you continue editing other pages. '
       + 'Only Undo or Reset returns it to the full page.',
@@ -94,22 +98,28 @@ const SECTIONS: readonly HelpSection[] = [
       + 'Both act on the Pages selector. Delete cannot be undone.',
   },
   {
-    id: 'compress-colour', title: '11. Compress and colour',
-    body: 'These apply at the very end — after the crop — in both the preview and the export.\n\n'
-      + 'Output Quality resamples each page to a target resolution. '
-      + 'Original resolution keeps the native pixels. '
-      + 'High (300 dpi), Medium (150 dpi), and Low (75 dpi) reduce file size.\n\n'
-      + 'Output colours: Grayscale desaturates every page while keeping its tonal range. '
-      + 'It is not a hard black-and-white — gradients and photos are preserved in gray.\n\n'
-      + 'These settings survive Undo — they are not part of the crop history.',
+    id: 'compress-colour', title: '11. Output Quality',
+    body: 'These settings affect the exported file only — never the on-screen preview, which '
+      + 'always stays full-resolution and true-colour so editing is never misleading.\n\n'
+      + 'Compress to resamples each output page to a target DPI. Original resolution keeps the '
+      + 'native pixels; the DPI presets (or a Custom… value) size the output as DPI × the chosen '
+      + 'Paper size (Settings → Output — A2 through A6, or a Custom height in inches).\n\n'
+      + 'Colour: Grayscale desaturates every output page while keeping its tonal range — not a '
+      + 'hard black-and-white. Original colors leaves the page untouched.\n\n'
+      + 'For a Normal (digital) document exporting to PDF, this card is hidden: that combination '
+      + 'exports losslessly as a real vector PDF with no resampling step, so none of these '
+      + 'settings apply. It reappears if you switch the export format to an image.\n\n'
+      + 'Output Quality settings are not part of crop history — Undo never touches them — and '
+      + 'they persist across documents and browser sessions.',
   },
   {
     id: 'export', title: '12. Export',
     body: 'Press Export or Ctrl+S. '
       + 'Pages with a committed crop export exactly as shown on screen. '
       + 'Pages without one export through the live auto-crop.\n\n'
-      + 'PDF writes one file. JPG and PNG write one file per output page, numbered automatically '
-      + '(TIFF is not available in the web version). Use the arrow on the Export button to switch format.\n\n'
+      + 'PDF writes one file (a real vector PDF for a Normal document, §11 above). '
+      + 'JPG, PNG and TIFF each write one .zip containing one file per output page. '
+      + 'Use the arrow on the Export button to switch format.\n\n'
       + 'A progress bar appears for multi-page jobs. Cancel stops cleanly — '
       + 'no partial file is written.',
   },
@@ -117,8 +127,22 @@ const SECTIONS: readonly HelpSection[] = [
     id: 'history', title: 'Undo, Redo, Reset',
     body: 'Undo and Redo step through crop, rotation, and scan-processing history. '
       + 'The depth (how many steps are kept) is set in Settings.\n\n'
+      + "Auto-detect and an in-progress drawn rectangle aren't part of that history on their own "
+      + "— Undo right after Auto-detect, before you press Crop, does nothing, since nothing has "
+      + 'actually been committed yet.\n\n'
       + 'Reset clears everything — crops, rotation, processing, and history — '
       + 'and reloads the document. It cannot be undone.',
+  },
+  {
+    id: 'settings', title: 'Settings',
+    body: 'Appearance: colour scheme (Dark/Light/System), font size, and UI zoom (also Ctrl +/-, '
+      + 'Ctrl 0 to reset).\n\n'
+      + 'Output: postfix appended to the exported file name; Custom DPI and Paper size — shared '
+      + 'with the sidebar Output Quality card, so either control always reflects the other.\n\n'
+      + 'Behaviour: remember the last-used folder; Undo/redo depth; Ignore N outlier pages '
+      + '(§6 above).\n\n'
+      + 'Scan: Dewarp supersample — renders a scanned page larger before straightening it, '
+      + 'trading time for a sharper result.',
   },
   {
     id: 'shortcuts', title: 'Keyboard shortcuts',
@@ -137,7 +161,8 @@ const SECTIONS: readonly HelpSection[] = [
   },
   {
     id: 'about', title: 'About',
-    body: 'SmartCrop PDF — Web Edition. All processing runs in your browser; no files are uploaded.',
+    body: 'SmartCrop PDF — Web Edition. All processing runs in your browser; no files are uploaded. '
+      + 'Installable from the browser menu; once installed or loaded once, most features work offline.',
   },
 ]
 
@@ -160,7 +185,7 @@ export class HelpView {
     this._el.className = 'help-view'
 
     const contents_items = SECTIONS.map(s =>
-      `<button class="help-toc__item" data-target="help-${s.id}">›  ${s.title}</button>`).join('')
+      `<button class="help-toc__item" data-target="help-${s.id}" title="Scroll to this section">›  ${s.title}</button>`).join('')
 
     const section_blocks = SECTIONS.map(s =>
       `<section class="help-section" id="help-${s.id}">

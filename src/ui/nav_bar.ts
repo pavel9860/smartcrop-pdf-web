@@ -20,21 +20,21 @@ export class NavBar {
     bar.className = 'nav-bar'
     bar.innerHTML = `
       <div class="nav-bar__row">
-        <button class="btn btn-secondary nav-btn" data-id="settings">⚙  Settings</button>
-        <button class="btn btn-secondary nav-btn" data-id="help">?  Help</button>
+        <button class="btn btn-secondary nav-btn" data-id="settings" title="Settings">⚙  Settings</button>
+        <button class="btn btn-secondary nav-btn" data-id="help" title="Help">?  Help</button>
       </div>
       <div class="nav-bar__row">
-        <button class="btn btn-secondary flex-1" id="nav-undo">↩  Undo</button>
-        <button class="btn btn-secondary flex-1" id="nav-redo">↪  Redo</button>
-        <button class="btn btn-secondary flex-1" id="nav-reset">↺  Reset</button>
+        <button class="btn btn-secondary flex-1" id="nav-undo" title="Undo (Ctrl+Z)">↩  Undo</button>
+        <button class="btn btn-secondary flex-1" id="nav-redo" title="Redo (Ctrl+Y)">↪  Redo</button>
+        <button class="btn btn-secondary flex-1" id="nav-reset" title="Reset the document to its just-opened state (cannot be undone)">↺  Reset</button>
       </div>
       <div class="nav-bar__row nav-bar__row--pages">
-        <button class="btn btn-secondary flex-1" id="nav-prev" aria-label="Previous page">◀ Prev</button>
+        <button class="btn btn-secondary flex-1" id="nav-prev" aria-label="Previous page" title="Previous page">◀ Prev</button>
         <div class="page-center">
-          <input  class="page-input" id="nav-page" type="number" min="1" value="1" />
+          <input  class="page-input" id="nav-page" type="number" min="1" value="1" title="Jump to output page (Enter)" />
           <span class="page-total" id="nav-total">/ 0</span>
         </div>
-        <button class="btn btn-secondary flex-1" id="nav-next" aria-label="Next page">Next ▶</button>
+        <button class="btn btn-secondary flex-1" id="nav-next" aria-label="Next page" title="Next page">Next ▶</button>
       </div>`
 
     sidebar.appendChild(bar)

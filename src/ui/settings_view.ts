@@ -50,7 +50,7 @@ export class SettingsView {
     // L3: generated from THEMES (ui/constants.ts), not three hand-duplicated buttons — adding a
     // theme only ever means updating that one array.
     const theme_btns = THEMES.map(t =>
-      `<button class="btn btn-seg" data-theme="${t}">${t.charAt(0).toUpperCase()}${t.slice(1)}</button>`)
+      `<button class="btn btn-seg" data-theme="${t}" title="${t.charAt(0).toUpperCase()}${t.slice(1)} colour scheme">${t.charAt(0).toUpperCase()}${t.slice(1)}</button>`)
       .join('')
 
     this._el.innerHTML = `
@@ -62,11 +62,11 @@ export class SettingsView {
         </div>
         <div class="settings-row">
           <span class="settings-label">Font size</span>
-          <select class="select" id="sv-font">${font_opts}</select>
+          <select class="select" id="sv-font" title="UI text size">${font_opts}</select>
         </div>
         <div class="settings-row">
           <span class="settings-label">Zoom (UI scale)</span>
-          <select class="select" id="sv-zoom">${zoom_opts}</select>
+          <select class="select" id="sv-zoom" title="Scale the whole UI (Ctrl +/-, Ctrl 0 to reset)">${zoom_opts}</select>
         </div>
       </section>
 
@@ -74,21 +74,23 @@ export class SettingsView {
         <h3 class="settings-section__title">Output</h3>
         <div class="settings-row">
           <span class="settings-label">Output postfix</span>
-          <input class="text-input" id="sv-postfix" type="text" />
+          <input class="text-input" id="sv-postfix" type="text" title="Appended to the file name before the extension on export" />
         </div>
         <div class="settings-row">
           <span class="settings-label">Custom DPI</span>
           <input class="text-input" id="sv-custom-dpi" type="number"
-                 min="${CUSTOM_DPI_MIN}" max="${CUSTOM_DPI_MAX}" step="1" />
+                 min="${CUSTOM_DPI_MIN}" max="${CUSTOM_DPI_MAX}" step="1"
+                 title="Export resolution when the compress preset is Custom — shared with the sidebar Output Quality card" />
         </div>
         <div class="settings-row">
           <span class="settings-label">Paper size</span>
-          <select class="select" id="sv-paper">${paper_opts}</select>
+          <select class="select" id="sv-paper" title="Export sizing base: output long side = DPI × this paper's height">${paper_opts}</select>
         </div>
         <div class="settings-row" id="sv-custom-paper-row" hidden>
           <span class="settings-label">Custom height (in)</span>
           <input class="text-input" id="sv-custom-paper" type="number"
-                 min="${CUSTOM_PAPER_MIN}" max="${CUSTOM_PAPER_MAX}" step="0.1" />
+                 min="${CUSTOM_PAPER_MIN}" max="${CUSTOM_PAPER_MAX}" step="0.1"
+                 title="Paper height in inches, used when Paper size is Custom" />
         </div>
       </section>
 
@@ -96,11 +98,11 @@ export class SettingsView {
         <h3 class="settings-section__title">Behaviour</h3>
         <div class="settings-row">
           <span class="settings-label">Remember last folder</span>
-          <label class="toggle-label"><input type="checkbox" id="sv-remember" /></label>
+          <label class="toggle-label"><input type="checkbox" id="sv-remember" title="Remember the last-used folder between sessions" /></label>
         </div>
         <div class="settings-row">
           <span class="settings-label">Undo / redo depth</span>
-          <select class="select" id="sv-undo">${undo_opts}</select>
+          <select class="select" id="sv-undo" title="How many steps of history are kept">${undo_opts}</select>
         </div>
         <div class="settings-row">
           <span class="settings-label" title="When sizing the shared auto-crop, ignore the N pages with the largest detected content; Off = use the largest">Ignore N outlier pages</span>
@@ -113,7 +115,8 @@ export class SettingsView {
         <h3 class="settings-section__title">Scan</h3>
         <div class="settings-row">
           <span class="settings-label">Dewarp supersample</span>
-          <input class="text-input" id="sv-supersample" type="number" step="0.5" min="1" max="4" />
+          <input class="text-input" id="sv-supersample" type="number" step="0.5" min="1" max="4"
+                 title="Renders larger before straightening, trading time for a sharper result — 1.0 = off" />
         </div>
       </section>`
 

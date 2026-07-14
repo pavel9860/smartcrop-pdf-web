@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { NavBar } from '@ui/nav_bar'
-import { make_model, make_ctrl, mount, type FakeController } from './harness'
+import { make_model, make_ctrl, mount, assert_all_have_tooltips, type FakeController } from './harness'
 import type { AppModel } from '@core/model'
 
 describe('NavBar', () => {
@@ -49,5 +49,9 @@ describe('NavBar', () => {
     bar.refresh(model, true)
     expect(root.querySelector<HTMLButtonElement>('#nav-reset')!.disabled).toBe(true)
     expect(root.querySelector<HTMLInputElement>('#nav-page')!.disabled).toBe(true)
+  })
+
+  it('every control has a tooltip (T8, #19)', () => {
+    assert_all_have_tooltips(root)
   })
 })

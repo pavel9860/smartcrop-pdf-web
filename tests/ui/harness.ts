@@ -86,3 +86,19 @@ export function mount(): HTMLElement {
   document.body.appendChild(el)
   return el
 }
+
+/** Every interactive control under `root` must expose a non-empty `title` tooltip (T8, #19).
+ * A hidden `<input type="file">` is excluded — it's triggered programmatically by a labelled
+ * button, never hovered directly. Elements matching `exclude` (e.g. a live-computed tooltip like
+ * the doc-name card, or a control checked by its own more specific test) are skipped too. */
+export function assert_all_have_tooltips(root: ParentNode, exclude: string[] = []): void {
+  const controls = Array.from(
+    root.querySelectorAll<HTMLElement>('button, select, input:not([type="file"]), textarea'),
+  ).filter(el => !exclude.some(sel => el.matches(sel)))
+  const missing = controls.filter(el => !(el.getAttribute('title') ?? '').trim())
+  if (missing.length > 0) {
+    const desc = missing.map(el =>
+      `<${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${el.className ? `.${el.className.split(' ').join('.')}` : ''}>`)
+    throw new Error(`Missing tooltip on: ${desc.join(', ')}`)
+  }
+}

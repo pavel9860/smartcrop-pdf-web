@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { OutputPanel } from '@ui/panels/output_panel'
-import { make_model, make_ctrl, mount, type FakeController } from './harness'
+import { make_model, make_ctrl, mount, assert_all_have_tooltips, type FakeController } from './harness'
 import type { AppModel } from '@core/model'
 
 describe('OutputPanel', () => {
@@ -61,5 +61,9 @@ describe('OutputPanel', () => {
     dpi.value = '300'
     dpi.dispatchEvent(new Event('change'))
     expect(model.custom_dpi).toBe(300)
+  })
+
+  it('every control has a tooltip (T8, #19)', () => {
+    assert_all_have_tooltips(root)
   })
 })

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { PagesPanel } from '@ui/panels/pages_panel'
 import { PagesMode, Mode } from '@core/enums'
-import { make_model, make_ctrl, mount, type FakeController } from './harness'
+import { make_model, make_ctrl, mount, assert_all_have_tooltips, type FakeController } from './harness'
 import type { AppModel } from '@core/model'
 
 describe('PagesPanel', () => {
@@ -61,5 +61,13 @@ describe('PagesPanel', () => {
   it('busy disables the load button', () => {
     panel.refresh(model, true)
     expect(root.querySelector<HTMLButtonElement>('#pp-load')!.disabled).toBe(true)
+  })
+
+  it('every control has a tooltip (T8, #19)', () => {
+    // #pp-pattern already carries a static placeholder-pattern tooltip regardless of mode; reveal
+    // the Selected-only pattern row first so it's actually checked rather than skipped by absence.
+    model.set_pages_mode(PagesMode.SELECT)
+    panel.refresh(model, false)
+    assert_all_have_tooltips(root)
   })
 })

@@ -143,7 +143,9 @@ export class CanvasView {
     const b = document.createElement('button')
     b.className = `canvas-nav ${side}`
     b.textContent = label
-    b.setAttribute('aria-label', label === '◀' ? 'Previous page' : 'Next page')
+    const text = label === '◀' ? 'Previous page' : 'Next page'
+    b.setAttribute('aria-label', text)
+    b.title = text
     b.addEventListener('click', on_click)
     return b
   }

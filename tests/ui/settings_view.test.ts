@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { SettingsView } from '@ui/settings_view'
-import { make_model, make_ctrl, mount, type FakeController } from './harness'
+import { make_model, make_ctrl, mount, assert_all_have_tooltips, type FakeController } from './harness'
 import type { AppModel } from '@core/model'
 import type { UIConfig } from '@ui/app'
 
@@ -116,5 +116,9 @@ describe('SettingsView', () => {
     expect(model.detect_outlier_pages).toBe(2)
     view.refresh(model, UI)
     expect(outlier.value).toBe('2')
+  })
+
+  it('every control has a tooltip (T8, #19)', () => {
+    assert_all_have_tooltips(root)
   })
 })

@@ -28,11 +28,11 @@ export class OutputPanel {
     compress_el.className = 'panel-card'
     compress_el.innerHTML = `
       <div class="card-header"><span class="card-title">Output Quality</span></div>
-      <select class="select w-full" id="op-compress">${compress_opts}</select>
+      <select class="select w-full" id="op-compress" title="Export resolution — applies to the exported file only, never the preview">${compress_opts}</select>
       <input class="text-input w-full mt-1" id="op-custom-dpi" type="number"
              min="${CUSTOM_DPI_MIN}" max="${CUSTOM_DPI_MAX}" step="10"
              title="Custom export resolution (DPI)" hidden />
-      <select class="select w-full mt-1" id="op-colours">
+      <select class="select w-full mt-1" id="op-colours" title="Colour mode for the exported file only">
         <option>Original colors</option>
         <option>Grayscale</option>
       </select>`
@@ -43,8 +43,8 @@ export class OutputPanel {
     export_el.innerHTML = `
       <div class="card-header"><span class="card-title">Export</span></div>
       <div class="export-row">
-        <button class="btn btn-secondary flex-1" id="op-export">💾︎  Export PDF</button>
-        <select class="select export-fmt" id="op-format">${format_opts}</select>
+        <button class="btn btn-secondary flex-1" id="op-export" title="Export the document (Ctrl+S)">💾︎  Export PDF</button>
+        <select class="select export-fmt" id="op-format" title="Output file format">${format_opts}</select>
       </div>`
     container.appendChild(export_el)
 

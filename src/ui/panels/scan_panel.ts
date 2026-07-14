@@ -17,19 +17,19 @@ export class ScanPanel {
     this._el.className = 'panel-card hidden'
     this._el.innerHTML = `
       <div class="card-header"><span class="card-title">Scan Processing</span></div>
-      <button class="btn btn-toggle w-full" id="sp-dewarp">Dewarp &amp; Deskew</button>
+      <button class="btn btn-toggle w-full" id="sp-dewarp" title="Straighten curved or tilted pages">Dewarp &amp; Deskew</button>
       <div class="filter-group">
         <div class="filter-group__title">Filter</div>
         <div class="btn-group">
-          <button class="btn btn-seg" id="sp-bw">B/W</button>
-          <button class="btn btn-seg" id="sp-sharpen">Sharpen</button>
+          <button class="btn btn-seg" id="sp-bw" title="Convert to pure black and white — best for text-only scans">B/W</button>
+          <button class="btn btn-seg" id="sp-sharpen" title="Flatten uneven lighting and sharpen, keeping gray tones — best for photos or mixed content">Sharpen</button>
         </div>
         <div class="strength-row">
           <span class="label">Strength</span>
           <div class="btn-group">
-            <button class="btn btn-seg" data-str="1">1</button>
-            <button class="btn btn-seg" data-str="2">2</button>
-            <button class="btn btn-seg" data-str="3">3</button>
+            <button class="btn btn-seg" data-str="1" title="Cautious">1</button>
+            <button class="btn btn-seg" data-str="2" title="Normal (default)">2</button>
+            <button class="btn btn-seg" data-str="3" title="Aggressive">3</button>
           </div>
         </div>
       </div>`

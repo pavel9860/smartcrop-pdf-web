@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { ScanPanel } from '@ui/panels/scan_panel'
 import { Mode, FilterMode } from '@core/enums'
-import { make_model, make_ctrl, mount, type FakeController } from './harness'
+import { make_model, make_ctrl, mount, assert_all_have_tooltips, type FakeController } from './harness'
 import type { AppModel } from '@core/model'
 
 describe('ScanPanel', () => {
@@ -48,5 +48,9 @@ describe('ScanPanel', () => {
   it('busy disables controls', () => {
     panel.refresh(model, true)
     expect(root.querySelector<HTMLButtonElement>('#sp-dewarp')!.disabled).toBe(true)
+  })
+
+  it('every control has a tooltip (T8, #19)', () => {
+    assert_all_have_tooltips(root)
   })
 })

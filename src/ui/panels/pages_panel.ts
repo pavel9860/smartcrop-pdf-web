@@ -25,15 +25,15 @@ export class PagesPanel {
     name_card.innerHTML = `<div class="doc-name" id="pp-docname" title=""></div>`
     container.appendChild(name_card)
 
-    // Two separate cards (desktop panels.py: Document & State, then Pages to Process).
+    // Two separate cards: Document & State, then Pages to Process.
     const doc_card = document.createElement('div')
     doc_card.className = 'panel-card'
     doc_card.innerHTML = `
       <div class="card-header">
         <span class="card-title">Document &amp; State</span>
-        <span class="mode-badge" id="pp-badge">NORMAL</span>
+        <span class="mode-badge" id="pp-badge" title="Set automatically from the loaded document — Normal has real text/vector content, Scanned is image-only">NORMAL</span>
       </div>
-      <button class="btn btn-secondary w-full" id="pp-load">📂︎  Load PDF/Image Files</button>
+      <button class="btn btn-secondary w-full" id="pp-load" title="Open PDF and/or image files (Ctrl+O)">📂︎  Load PDF/Image Files</button>
       <input type="file" id="pp-file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" hidden />`
     container.appendChild(doc_card)
 
@@ -42,10 +42,10 @@ export class PagesPanel {
     pages_card.innerHTML = `
       <div class="card-header"><span class="card-title">Pages to Process</span></div>
       <div class="btn-group" id="pp-modes">
-        <button class="btn btn-seg" data-mode="${PagesMode.ALL}">All</button>
-        <button class="btn btn-seg" data-mode="${PagesMode.ODD}">Odd</button>
-        <button class="btn btn-seg" data-mode="${PagesMode.EVEN}">Even</button>
-        <button class="btn btn-seg" data-mode="${PagesMode.SELECT}">Selected</button>
+        <button class="btn btn-seg" data-mode="${PagesMode.ALL}" title="Every page">All</button>
+        <button class="btn btn-seg" data-mode="${PagesMode.ODD}" title="Odd pages (1, 3, 5, …)">Odd</button>
+        <button class="btn btn-seg" data-mode="${PagesMode.EVEN}" title="Even pages (2, 4, 6, …)">Even</button>
+        <button class="btn btn-seg" data-mode="${PagesMode.SELECT}" title="A custom pattern of pages">Selected</button>
       </div>
       <div class="pattern-row hidden" id="pp-pat-row">
         <input class="text-input flex-1" id="pp-pattern" type="text"
