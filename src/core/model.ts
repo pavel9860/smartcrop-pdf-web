@@ -10,14 +10,12 @@ import { History } from './history'
 import { type Settings, default_settings } from './settings'
 import { PageIndexMap } from './page_index_map'
 import { PageRasterPipeline } from './page_raster_pipeline'
-import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type DrawnDrag } from './drag'
+import { CropController } from './crop_controller'
 import {
   type Box,
-  hit_handle, apply_handle_drag, auto_crop_rect,
-  offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
-  split_rects_grid, rotate_box_cw, reindex_map, detection_union,
-  edge_deltas, apply_edge_deltas, clamp_edge_deltas,
-  MIN_RECT, box_width, box_height,
+  auto_crop_rect, keep_ratio_normalise,
+  rotate_box_cw, reindex_map, detection_union,
+  box_width, box_height,
 } from './geometry'
 import { type BatchJob, type BatchController, PageBatchJob, Ok, Cancelled, Failed } from './batch'
 import { Mode, FilterMode, PagesMode } from './enums'
@@ -27,7 +25,7 @@ import {
 } from './errors'
 import {
   NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DPI_PRESETS, EXPORT_FORMATS,
-  DEFAULT_UNDO_DEPTH, FULL_PAGE_FRAC, OFFSET_LIMIT,
+  DEFAULT_UNDO_DEPTH, FULL_PAGE_FRAC,
   FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX, UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
   SYNTH_W, SYNTH_H, type ExportFormat,
   CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
@@ -151,27 +149,17 @@ export class AppModel {
   private _current_page = 0    // 0-based source page
   private _view_pos = 1        // 1-based output-view position
 
-  // Interaction settings (not undoable). anchor_left/anchor_top jointly determine the crop
-  // together with document.offsets (which IS undoable) but are deliberately excluded here, same
-  // as keep_ratio/ratio/split_count below: DocumentState's undo boundary is exactly the frozen
-  // 8-field list (document_state.ts, spec §13/§W9.2) — anchors are a persistent interaction mode,
-  // not a per-edit value, so Undo leaves them untouched (L5; see model.test.ts for the locking test).
-  private _anchor_left  = true
-  private _anchor_top   = true
-  private _keep_ratio   = false
-  private _ratio        = 1.0
-  private _split_count: 1 | 2 | 4 = 1
-  private _same_size    = false
   private _pages_mode   = PagesMode.ALL
   private _select_pattern = ''
   private _current_follow = false
 
-  // Detection/drawn-window working state (not undoable — spec-web §12, moved out of
-  // DocumentState). These are scaffolding used to ARRIVE at a committed operation
-  // (applied/rotation), not an operation themselves, so Undo does not revert them: pressing Undo
-  // right after Auto-detect, before anything is committed via Crop, is now a no-op. Same lifecycle
-  // both modes; SCANNED's committed crop/rotate/filter/dewarp are unaffected (those stay in
-  // DocumentState). Reset on _reset_state/_run_detect/rotate/delete exactly as document.* used to be.
+  // Detection working state (not undoable — spec-web §12, moved out of DocumentState). Scaffolding
+  // used to ARRIVE at a committed operation (applied/rotation), not an operation itself, so Undo
+  // does not revert it: pressing Undo right after Auto-detect, before anything is committed via
+  // Crop, is now a no-op. Reset on _reset_state/_run_detect/rotate/delete exactly as document.*
+  // used to be. `_drawn` (the pending hand-drawn window) lives here rather than in CropController
+  // because apply_crop/_compute_crop_boxes_for_page/_build_overlay all read it too, outside any
+  // drag — CropController reaches it live through CropContext.
   private _drawn:        Box | null = null   // global hand-drawn window, page coords (§6.4)
   private _detect_cache = new Map<number, Box>()   // per-page content box from last detect
   private _union:        Box | null = null   // aggregate detection union (§5)
@@ -182,10 +170,6 @@ export class AppModel {
   // a display/viewport concern: SCANNED's SRC_DPI is untouched, and no crop/geometry math reads
   // this (page units for NORMAL are PDF points, independent of render resolution).
   private _display_dpi = NORMAL_DPI
-
-  // Transient drag state (not snapshotted)
-  private _drag:         DragState | null = null
-  private _draw_rect:    Box | null = null
 
   // History and settings
   readonly history = new History(DEFAULT_UNDO_DEPTH)
@@ -200,6 +184,11 @@ export class AppModel {
   // AppModel's own mode/DPI/rotation/scan-intent state, so the pipeline never holds a stale copy.
   private readonly _raster: PageRasterPipeline
 
+  // Anchors/offsets/keep-ratio/split/same-size + the drag gesture state machine (§18
+  // CropController). Wired with live callbacks for the detection/drawn-window state above, which
+  // it reads but does not own.
+  private readonly _crop: CropController
+
   constructor(private readonly _adapter: RendererAdapter) {
     this._raster = new PageRasterPipeline(_adapter, this._page_index, {
       mode: (): Mode => this._mode,
@@ -208,6 +197,17 @@ export class AppModel {
       rotation: (p): number => this.document.rotation.get(p) ?? 0,
       process_intent: (p): PageProcessIntent => this._page_process_intent(p),
       dewarp_supersample: (): number => this.settings.dewarp_supersample,
+    })
+    this._crop = new CropController(this.history, {
+      document: (): DocumentState => this.document,
+      has_document: (): boolean => this._doc !== null,
+      current_page: (): number => this._current_page,
+      page_dims: (p): PageSize => this._page_dims(p),
+      detected: (p): Box | null => this._detect_cache.get(p) ?? null,
+      union: (): Box | null => this._union,
+      auto_active: (): boolean => this._auto_active,
+      drawn: (): Box | null => this._drawn,
+      set_drawn: (box): void => { this._drawn = box },
     })
   }
 
@@ -235,17 +235,9 @@ export class AppModel {
     this.history.clear()
     this._current_page = 0
     this._view_pos = 1
-    this._split_count = 1
-    this._anchor_left = true
-    this._anchor_top = true
-    this._keep_ratio = false
-    this._ratio = 1.0        // replaced below with the first page's aspect ratio once _doc is set
-    this._same_size = false
     this._pages_mode = PagesMode.ALL
     this._select_pattern = ''
     this._current_follow = false
-    this._drag = null
-    this._draw_rect = null
     this._drawn = null
     this._detect_cache = new Map()
     this._union = null
@@ -255,7 +247,7 @@ export class AppModel {
     // Keep-ratio initialises to the first page's real w/h, not a bare 1.0, so the ratio field
     // shows a meaningful default from the moment a document opens.
     const sz0 = this._doc?.page_sizes[0]
-    if (sz0 && sz0.height > 0) this._ratio = sz0.width / sz0.height
+    this._crop.reset(sz0 && sz0.height > 0 ? sz0.width / sz0.height : 1.0)
   }
 
   get has_document(): boolean { return this._doc !== null }
@@ -329,14 +321,14 @@ export class AppModel {
   // ---------------------------------------------------------------------------
 
   get can_detect(): boolean {
-    return this.has_document && this._split_count === 1
-      && (this._anchor_left || this._anchor_top)
+    return this.has_document && this._crop.split_count === 1
+      && (this._crop.anchor_left || this._crop.anchor_top)
   }
 
   get can_apply(): boolean {
     if (!this.has_document) return false
-    if (this._split_count === 1) return true
-    return this.document.crop_rects.length === this._split_count
+    if (this._crop.split_count === 1) return true
+    return this.document.crop_rects.length === this._crop.split_count
   }
 
   detect_content(): BatchJob {
@@ -369,8 +361,8 @@ export class AppModel {
     // Ratio source is the detection UNION's aspect ratio, not the page's (model.py:375-376
     // _finish_detect) — keep-ratio locks the crop to the shape of the detected content, not
     // the whole page. A prior version of this port used _page_dims() here, which is wrong.
-    if (!this._keep_ratio && union && box_height(union) > 0) {
-      this._ratio = box_width(union) / box_height(union)
+    if (!this._crop.keep_ratio && union && box_height(union) > 0) {
+      this._crop.set_ratio(box_width(union) / box_height(union))
     }
 
     ctrl.complete(new Ok())
@@ -435,10 +427,10 @@ export class AppModel {
     for (const p of pages) {
       if (!this.document.applied.has(p)) continue
       const detected = this._detect_cache.get(p)
-      if (!detected || !(this._anchor_left || this._anchor_top)) continue
+      if (!detected || !(this._crop.anchor_left || this._crop.anchor_top)) continue
       const sz = this._page_dims(p)
       const rect = auto_crop_rect(detected, union, this.document.offsets,
-        sz.width, sz.height, this._anchor_left, this._anchor_top)
+        sz.width, sz.height, this._crop.anchor_left, this._crop.anchor_top)
       this.document.applied.set(p, [rect])
       this._invalidate_output_cache(p)
     }
@@ -447,16 +439,16 @@ export class AppModel {
   apply_crop(): void {
     const pages = this._require_pages()
 
-    if (this._split_count > 1 && this.document.crop_rects.length !== this._split_count) {
+    if (this._crop.split_count > 1 && this.document.crop_rects.length !== this._crop.split_count) {
       throw new InvalidSplitError(
-        `Need exactly ${this._split_count} split rectangles; have ${this.document.crop_rects.length}`)
+        `Need exactly ${this._crop.split_count} split rectangles; have ${this.document.crop_rects.length}`)
     }
 
     this.history.push(this.document)
 
     // Export also commits live auto-crop for uncommitted pages (spec-web §10.6)
     for (const p of pages) {
-      if (this._split_count === 1) {
+      if (this._crop.split_count === 1) {
         const boxes = this._compute_crop_boxes_for_page(p)
         if (boxes) {
           this.document.applied.set(p, boxes)
@@ -490,368 +482,28 @@ export class AppModel {
     const union     = this._union
 
     if (detected && union && this._auto_active
-        && (this._anchor_left || this._anchor_top)) {
+        && (this._crop.anchor_left || this._crop.anchor_top)) {
       let rect = auto_crop_rect(detected, union, this.document.offsets,
-        sz.width, sz.height, this._anchor_left, this._anchor_top)
-      if (this._keep_ratio) rect = keep_ratio_normalise(rect, this._ratio, sz.width, sz.height)
+        sz.width, sz.height, this._crop.anchor_left, this._crop.anchor_top)
+      if (this._crop.keep_ratio) rect = keep_ratio_normalise(rect, this._crop.ratio, sz.width, sz.height)
       return [rect]
     }
     return null
   }
 
-  set_anchor(left: boolean | null, top: boolean | null): void {
-    if (left !== null) this._anchor_left = left
-    if (top  !== null) this._anchor_top  = top
-  }
-
-  set_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void {
-    this.history.push(this.document)
-    const o = this.document.offsets
-    const clamped = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, value))
-    this.document.offsets = {
-      left:   edge === 'L' ? clamped : o.left,
-      top:    edge === 'T' ? clamped : o.top,
-      right:  edge === 'R' ? clamped : o.right,
-      bottom: edge === 'B' ? clamped : o.bottom,
-    }
-  }
-
-  // Snap out-of-range offsets to page-limit (spec-web §4.6). Does NOT push its own history
-  // checkpoint (99_FOUND_ISSUES 6a): its one real caller, crop_panel's offset-field blur/Enter
-  // handler, always calls set_offset() first in the same dispatch, which already pushed the
-  // pre-edit checkpoint — this adjustment folds into that same undo step instead of forcing a
-  // second Ctrl+Z to reach the state before the field was edited. If a future caller ever needs
-  // to call commit_offsets() on its own (no preceding set_offset in the same dispatch), it must
-  // push its own checkpoint first.
-  commit_offsets(): void {
-    const doc = this._doc
-    if (!doc) return
-    const sz = this._page_dims(this._current_page)
-    const detected = this._detect_cache.get(this._current_page)
-    const union    = this._union
-    if (!detected || !union) return
-
-    const rect = auto_crop_rect(detected, union, this.document.offsets,
-      sz.width, sz.height, this._anchor_left, this._anchor_top)
-
-    const base_left = this._anchor_left ? detected.x0 : union.x0
-    const base_top  = this._anchor_top  ? detected.y0 : union.y0
-    const W = box_width(union), H = box_height(union)
-    this.document.offsets = {
-      left:   (base_left - rect.x0) / sz.width  * 100,
-      top:    (base_top  - rect.y0) / sz.height * 100,
-      right:  (rect.x1 - (base_left + W)) / sz.width  * 100,
-      bottom: (rect.y1 - (base_top  + H)) / sz.height * 100,
-    }
-  }
-
-  set_keep_ratio(on: boolean, ratio?: number): void {
-    // Capture BEFORE mutating _keep_ratio below — `on && !this._keep_ratio` checked against
-    // the just-assigned value always evaluated false when turning ratio on, so the
-    // pre-populate branch below was dead code (confirmed via test; real regression, not a
-    // hypothetical). Mirrors model.py:435-438's off->on edge, adapted for the fact this port
-    // has no "unset" sentinel for _ratio (always a float, default 1.0).
-    const was_off = !this._keep_ratio
-    this._keep_ratio = on
-    if (ratio !== undefined && ratio > 0) this._ratio = ratio
-    else if (on && was_off) this._ratio = this._default_ratio()
-  }
-
-  // Ratio pre-populate source, shared by set_keep_ratio's off->on toggle and set_split() (bug #3/
-  // #4, spec-web §W2 row 9): prefer whatever crop shape is ALREADY on screen — crop_rects[0] at
-  // split 2/4, the hand-drawn window at split 1 — over a page/union-derived formula, so an edit
-  // made before Keep-ratio is pressed is not silently discarded. Falls back to the detection
-  // union, then the page aspect, only when no concrete crop shape exists yet (bug E).
-  private _default_ratio(): number {
-    if (this._split_count > 1) {
-      const r = this.document.crop_rects[0]
-      if (r && box_height(r) > 0) return box_width(r) / box_height(r)
-    } else if (this._drawn) {
-      const d = this._drawn
-      if (box_height(d) > 0) return box_width(d) / box_height(d)
-    }
-    const u = this._union
-    if (u && box_height(u) > 0) return box_width(u) / box_height(u)
-    if (this._doc) {
-      const sz = this._current_page_size()
-      if (sz.height > 0) return sz.width / sz.height
-    }
-    return 1.0
-  }
-
-  set_split(n: 1 | 2 | 4): void {
-    if (n === this._split_count) return
-    this.history.push(this.document)
-    // Committed crops belong to the previous layout — drop them when the split changes
-    // (desktop model.py:417-418). Prevents stale single-crop pages surviving into split mode.
-    this.document.applied.clear()
-    this._drawn = null
-    this._split_count = n
-    if (this._doc) {
-      const sz = this._page_dims(this._current_page)
-      // n === 1 has no split rectangles (desktop clears crop_rects); 2/4 auto-lay the grid.
-      this.document.crop_rects = n === 1 ? [] : split_rects_grid(n, sz.width, sz.height)
-    }
-    // A split-count change always re-derives the ratio fresh from the newly-reseeded grid — it
-    // does not carry the previous ratio forward proportionally (bug #3; explicit user decision:
-    // "drop the previous ratio if the split changes"). Reuses the same source set_keep_ratio's
-    // off->on toggle uses, so 1->2 with keep-ratio already on lands on half the prior page-aspect
-    // ratio only as a side effect of split 2's cell being half as wide, not a dedicated rule.
-    if (this._keep_ratio) this._ratio = this._default_ratio()
-  }
-
-  // Turning Same-size ON immediately normalizes every window to the FIRST window's width/height
-  // (bug #2: "all crop windows should be the same size all the time", not just after the next
-  // drag) — capped to whatever fits every window's own, unmoved origin so nothing needs to shift
-  // position to fit (same "stop growth at the tightest headroom" principle _propagate_same_size
-  // uses live during a drag). Deliberate deviation from frozen §7.3's literal "dragging one
-  // resizes all of them" (which only describes the on-drag case) — spec-web §W2 row 10.
-  set_same_size(on: boolean): void {
-    const turning_on = on && !this._same_size
-    this._same_size = on
-    if (!turning_on) return
-    const rects = this.document.crop_rects
-    const first = rects[0]
-    if (!this._doc || !first) return
-    const sz = this._current_page_size()
-    const max_w = Math.min(...rects.map(r => sz.width - r.x0))
-    const max_h = Math.min(...rects.map(r => sz.height - r.y0))
-    const w = Math.max(MIN_RECT, Math.min(box_width(first), max_w))
-    const h = Math.max(MIN_RECT, Math.min(box_height(first), max_h))
-    this.history.push(this.document)
-    this.document.crop_rects = rects.map(r => ({ x0: r.x0, y0: r.y0, x1: r.x0 + w, y1: r.y0 + h }))
-  }
-
-  // ---------------------------------------------------------------------------
-  // Gestures — delegated to per-kind helpers so each is ≤30 lines
-  // ---------------------------------------------------------------------------
-
-  begin_drag(px: number, py: number, tol: number): void {
-    if (!this._doc) return
-    const sz = this._current_page_size()
-    const pt: readonly [number, number] = [px, py]
-
-    if (this._split_count > 1) { this._begin_split_drag(pt, tol, sz); return }
-    // A pending manual window (_drawn): grab a handle to resize, press INSIDE to move it,
-    // press OUTSIDE to drop it and rubber-band a new one (desktop WindowDrag / DrawDrag, §9.3/§9.4).
-    // hit_handle() itself returns 'move' for any interior point, so a hit here is never null.
-    const drawn = this._drawn
-    if (drawn) {
-      const h = hit_handle(drawn, px, py, tol)
-      if (h) {
-        this._drag = {
-          kind: 'drawn', handle: h, rect0: drawn, start: pt,
-          page_w: sz.width, page_h: sz.height,
-        } satisfies DrawnDrag
-        return
-      }
-      this._begin_draw_drag(pt, sz)   // outside the window → drop it, start a fresh draw
-      return
-    }
-    // A committed page (split = 1) is not itself a drag target — the crop is fixed until Undo or
-    // a new Crop. Any drag rubber-bands a NEW window over the cropped view (frozen spec §9.3),
-    // which commits only via the Crop button. So skip auto/crop-edit and draw directly.
-    const committed = this.document.applied.get(this._current_page)
-    if (committed && committed.length > 0) { this._begin_draw_drag(pt, sz); return }
-    if (this._begin_auto_drag(pt, tol, sz)) return
-    this._begin_draw_drag(pt, sz)
-  }
-
-  private _begin_split_drag(
-    pt: readonly [number, number], tol: number, sz: PageSize,
-  ): void {
-    const [px, py] = pt
-    for (let i = 0; i < this.document.crop_rects.length; i++) {
-      const rect = this.document.crop_rects[i]
-      if (!rect) continue
-      const h = hit_handle(rect, px, py, tol)
-      if (h) {
-        this.history.push(this.document)   // snapshot BEFORE the drag mutates crop_rects live
-        this._drag = {
-          kind: 'split', idx: i, handle: h, rect0: rect,
-          rects0: [...this.document.crop_rects],   // same-size v2 bases + §9.6 cancel restore
-          start: pt, page_w: sz.width, page_h: sz.height,
-        } satisfies SplitDrag
-        return
-      }
-    }
-  }
-
-  private _begin_auto_drag(
-    pt: readonly [number, number], tol: number, sz: PageSize,
-  ): boolean {
-    const [px, py] = pt
-    const detected = this._detect_cache.get(this._current_page)
-    const union    = this._union
-    if (!this._auto_active || !detected || !union
-        || !(this._anchor_left || this._anchor_top)) return false
-
-    let live = auto_crop_rect(detected, union, this.document.offsets,
-      sz.width, sz.height, this._anchor_left, this._anchor_top)
-    if (this._keep_ratio) live = keep_ratio_normalise(live, this._ratio, sz.width, sz.height)
-    const h = hit_handle(live, px, py, tol)
-    if (!h) return false
-
-    this.history.push(this.document)   // snapshot BEFORE the drag mutates offsets live
-    this._drag = {
-      kind: 'auto', handle: h, rect0: live, start: pt,
-      page_w: sz.width, page_h: sz.height,
-      offsets0: this.document.offsets,
-      left_base: this._anchor_left ? detected.x0 : union.x0,
-      top_base:  this._anchor_top  ? detected.y0 : union.y0,
-    } satisfies AutoDrag
-    return true
-  }
-
-  private _begin_draw_drag(pt: readonly [number, number], sz: PageSize): void {
-    this._drawn = null   // a fresh press drops the previous drawn window at once (bug 6)
-    this._drag = { kind: 'draw', start: pt, page_w: sz.width, page_h: sz.height } satisfies DrawDrag
-    this._draw_rect = null
-  }
-
-  update_drag(px: number, py: number): void {
-    const drag = this._drag
-    if (!drag) return
-    const sz = this._current_page_size()
-
-    if (drag.kind === 'draw')      { this._update_draw_drag(drag, px, py, sz); return }
-    if (drag.kind === 'auto')      { this._update_auto_drag(drag, px, py, sz); return }
-    if (drag.kind === 'split')     { this._update_split_drag(drag, px, py); return }
-    this._update_drawn_drag(drag, px, py)
-  }
-
-  private _update_draw_drag(drag: DrawDrag, px: number, py: number, sz: PageSize): void {
-    const [sx, sy] = drag.start
-    let rect = clamp_box_drag({
-      x0: Math.min(sx, px), y0: Math.min(sy, py),
-      x1: Math.max(sx, px), y1: Math.max(sy, py),
-    }, sz.width, sz.height)
-    // On a committed page the rubber-band lives in the cropped view's coordinates: keep it inside
-    // the committed box so a new window can only tighten, never spill past the crop (§9.3).
-    const committed = this.document.applied.get(this._current_page)?.[0]
-    if (committed) {
-      rect = {
-        x0: Math.max(rect.x0, committed.x0), y0: Math.max(rect.y0, committed.y0),
-        x1: Math.min(rect.x1, committed.x1), y1: Math.min(rect.y1, committed.y1),
-      }
-    }
-    this._draw_rect = rect
-  }
-
-  private _update_auto_drag(drag: AutoDrag, px: number, py: number, sz: PageSize): void {
-    let updated = apply_handle_drag(drag.handle, drag.rect0,
-      drag.start, [px, py], drag.page_w, drag.page_h)
-    if (this._keep_ratio) updated = keep_ratio_normalise(updated, this._ratio, sz.width, sz.height)
-    const detected = this._detect_cache.get(this._current_page)
-    const union    = this._union
-    if (detected && union) {
-      this.document.offsets = offsets_from_rect(updated, detected, union,
-        sz.width, sz.height, this._anchor_left, this._anchor_top)
-    }
-  }
-
-  private _update_split_drag(drag: SplitDrag, px: number, py: number): void {
-    let updated = apply_handle_drag(drag.handle, drag.rect0,
-      drag.start, [px, py], drag.page_w, drag.page_h)
-    // Keep-ratio holds LIVE during a split resize (spec-web §W2 row 9), anchored opposite the
-    // dragged handle so the window never deforms then jumps on release. A 'move' preserves it.
-    if (this._keep_ratio && drag.handle !== 'move') {
-      updated = keep_ratio_anchored(updated, this._ratio, drag.handle, drag.page_w, drag.page_h)
-    }
-    const rects = [...this.document.crop_rects]
-    rects[drag.idx] = updated
-    // Same-size propagates ONLY on a resize (spec-web §W2 row 10) — `move` (dragging a window's
-    // interior to translate it) NEVER syncs partners, in any state; this is a deliberate,
-    // permanent exclusion (a prior design mirrored move deltas too, and that was wrong).
-    if (this._same_size && drag.handle !== 'move') this._propagate_same_size(drag, updated, rects)
-    this.document.crop_rects = rects
-  }
-
-  // Same-size RESIZE (spec-web §W2 row 10): the dragged window's raw edge deltas mirror by grid
-  // parity onto every OTHER window's own drag-start rect — column mirror (opposite column) swaps+
-  // negates the x pair, row mirror (opposite row) the y pair; same column/row copies that axis
-  // unchanged (n=2 [left,right] shares one row always; n=4 [TL,BL,TR,BR]: col=idx>>1, row=idx&1).
-  // Deltas are capped up front to every window's own headroom (bug #2) so growth simply stops at
-  // the tightest window's page-edge limit instead of a partner needing to jump/deform afterward.
-  private _propagate_same_size(drag: SplitDrag, updated: Box, rects: Box[]): void {
-    const n = rects.length
-    const col = (i: number): number => (n === 2 ? i : i >> 1)
-    const row = (i: number): number => (n === 2 ? 0 : i & 1)
-    const mirror_cols = rects.map((_, i) => col(i) !== col(drag.idx))
-    const mirror_rows = rects.map((_, i) => row(i) !== row(drag.idx))
-    const raw = edge_deltas(drag.rect0, updated)
-    const d = clamp_edge_deltas(raw, drag.rects0, mirror_cols, mirror_rows, drag.page_w, drag.page_h)
-    for (let i = 0; i < n; i++) {
-      const base = drag.rects0[i]
-      if (base) rects[i] = apply_edge_deltas(base, d, mirror_cols[i] ?? false, mirror_rows[i] ?? false, drag.page_w, drag.page_h)
-    }
-  }
-
-  private _update_drawn_drag(drag: DrawnDrag, px: number, py: number): void {
-    const box = apply_handle_drag(drag.handle, drag.rect0,
-      drag.start, [px, py], drag.page_w, drag.page_h)
-    // Keep-ratio holds LIVE during a resize, anchored opposite the dragged handle so only the
-    // dragged side moves (spec-web §W2 row 9). A move ('move' handle) preserves the ratio.
-    this._drawn = (this._keep_ratio && drag.handle !== 'move')
-      ? keep_ratio_anchored(box, this._ratio, drag.handle, drag.page_w, drag.page_h)
-      : box
-  }
-
-  end_drag(): void {
-    const drag = this._drag
-    this._drag = null
-
-    if (!drag) return
-
-    if (drag.kind === 'draw') {
-      const rect = this._draw_rect
-      this._draw_rect = null
-      if (!rect || box_width(rect) < 2 * MIN_RECT || box_height(rect) < 2 * MIN_RECT) return
-      let drawn = rect
-      if (this._keep_ratio) {
-        const sz = this._current_page_size()
-        drawn = keep_ratio_normalise(rect, this._ratio, sz.width, sz.height)
-      }
-      // The drawn window is a GLOBAL pending crop shown as an outline on every page — it is NOT
-      // committed here. Clicking Crop maps it onto each selected page then clears it, so a hand-
-      // drawn window crops ALL pages (desktop §9.3/§12.2), and the page never zooms to the crop
-      // on mouse-up (was the "magnification" bug). _drawn is non-undoable working state (§W9.2) —
-      // no history.push here (removed): finishing a rubber-band draw must not clear the redo
-      // stack, since nothing undo-tracked changes until Crop commits it into `applied`.
-      this._drawn = drawn
-      return
-    }
-
-    // split & drawn: keep-ratio is now held LIVE during the drag (spec-web §W2 row 9), so there is
-    // no release-time re-snap — that used a top-left anchor and would shift the window on mouse-up.
-    // auto: already committed live during update_drag.
-  }
-
-  cancel_drag(): void {
-    const drag = this._drag
-    this._drag = null
-    this._draw_rect = null
-
-    if (!drag) {
-      this._drawn = null   // Esc / right-click drops the pending drawn window (bug 5)
-      return
-    }
-
-    if (drag.kind === 'auto') {
-      this.document.offsets = drag.offsets0
-    } else if (drag.kind === 'split') {
-      // §9.6: Esc/right-click during a drag leaves the windows unchanged — restore EVERY window
-      // (same-size v2 moves partners live, so the dragged rect alone is not enough).
-      this.document.crop_rects = [...drag.rects0]
-    } else if (drag.kind === 'drawn') {
-      // Cancelling a move/resize of an EXISTING window restores it, not drops it (help_view §5:
-      // cancel changes nothing) — distinct from the no-drag Esc above, which intentionally drops
-      // a pending window that was never being edited.
-      this._drawn = drag.rect0
-    }
-    // 'draw': nothing to restore — _begin_draw_drag already cleared any prior drawn window at
-    // press time (bug 6), and no window was committed yet.
-  }
+  // Anchors/offsets/keep-ratio/split/same-size, and the full drag gesture state machine
+  // (spec-web §6.5/§6.6), are owned by CropController (§18) — these are 1-line delegations so
+  // ui/ keeps calling AppModel's public surface unchanged.
+  set_anchor(left: boolean | null, top: boolean | null): void { this._crop.set_anchor(left, top) }
+  set_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_offset(edge, value) }
+  commit_offsets(): void { this._crop.commit_offsets() }
+  set_keep_ratio(on: boolean, ratio?: number): void { this._crop.set_keep_ratio(on, ratio) }
+  set_split(n: 1 | 2 | 4): void { this._crop.set_split(n) }
+  set_same_size(on: boolean): void { this._crop.set_same_size(on) }
+  begin_drag(px: number, py: number, tol: number): void { this._crop.begin_drag(px, py, tol) }
+  update_drag(px: number, py: number): void { this._crop.update_drag(px, py) }
+  end_drag(): void { this._crop.end_drag() }
+  cancel_drag(): void { this._crop.cancel_drag() }
 
   // ---------------------------------------------------------------------------
   // Scan processing
@@ -1276,7 +928,7 @@ export class AppModel {
         page_h: box ? box_height(box) : sz.height,
         crop_origin: box ? { x: box.x0, y: box.y0 } : { x: 0, y: 0 },
         overlay: this._committed_overlay(box),
-        draw_rect:  this._draw_rect,
+        draw_rect:  this._crop.draw_rect,
         position:   this._view_pos,
         total:      this.view_total,
         status:     this._status_string(p, sz),
@@ -1290,7 +942,7 @@ export class AppModel {
       page_h:  sz.height,
       crop_origin: { x: 0, y: 0 },
       overlay: this._build_overlay(p),
-      draw_rect:  this._draw_rect,
+      draw_rect:  this._crop.draw_rect,
       position:   this._view_pos,
       total:      this.view_total,
       status:     this._status_string(p, sz),
@@ -1363,12 +1015,12 @@ export class AppModel {
   get dewarp_on(): boolean { return this.document.dewarp_on }
   get filter_mode(): FilterMode { return this.document.filter_mode }
   get filter_strength(): number { return this.document.filter_strength }
-  get split_count(): 1 | 2 | 4 { return this._split_count }
-  get same_size(): boolean { return this._same_size }
-  get anchor_left(): boolean { return this._anchor_left }
-  get anchor_top(): boolean { return this._anchor_top }
-  get keep_ratio(): boolean { return this._keep_ratio }
-  get ratio(): number { return this._ratio }
+  get split_count(): 1 | 2 | 4 { return this._crop.split_count }
+  get same_size(): boolean { return this._crop.same_size }
+  get anchor_left(): boolean { return this._crop.anchor_left }
+  get anchor_top(): boolean { return this._crop.anchor_top }
+  get keep_ratio(): boolean { return this._crop.keep_ratio }
+  get ratio(): number { return this._crop.ratio }
   get pages_mode(): PagesMode { return this._pages_mode }
   get select_pattern(): string { return this._select_pattern }
   get current_follow(): boolean { return this._current_follow }
@@ -1414,18 +1066,18 @@ export class AppModel {
     const detected = this._detect_cache.get(p)
     const union    = this._union
     if (!detected || !union || !this._auto_active
-        || !(this._anchor_left || this._anchor_top)) return null
+        || !(this._crop.anchor_left || this._crop.anchor_top)) return null
     const sz = this._page_dims(p)
     let rect = auto_crop_rect(detected, union, this.document.offsets,
-      sz.width, sz.height, this._anchor_left, this._anchor_top)
-    if (this._keep_ratio) rect = keep_ratio_normalise(rect, this._ratio, sz.width, sz.height)
+      sz.width, sz.height, this._crop.anchor_left, this._crop.anchor_top)
+    if (this._crop.keep_ratio) rect = keep_ratio_normalise(rect, this._crop.ratio, sz.width, sz.height)
     return rect
   }
 
   private _build_overlay(p: number): OverlayBox[] {
     const out: OverlayBox[] = []
 
-    if (this._split_count > 1) {
+    if (this._crop.split_count > 1) {
       for (let i = 0; i < this.document.crop_rects.length; i++) {
         const box = this.document.crop_rects[i]
         if (box) out.push({ kind: 'split', box, idx: i + 1 })
