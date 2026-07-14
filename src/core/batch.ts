@@ -34,7 +34,8 @@ export interface BatchController {
 export class PageBatchJob implements BatchJob {
   readonly title: string
   readonly total: number
-  done = 0
+  get done(): number { return this._done }
+  private _done = 0
 
   private _cancelled = false
   private _cbs: ProgressCallback[] = []
@@ -57,16 +58,16 @@ export class PageBatchJob implements BatchJob {
 
   result(): Promise<BatchResult> { return this._promise }
 
-  // Called by the async executor driving the job
-  get controller(): BatchController {
-    return {
-      get is_cancelled() { return this._outer._cancelled },
-      advance: (n = 1) => {
-        this.done += n
-        for (const cb of this._cbs) cb(this.done, this.total)
-      },
-      complete: (r) => { this._resolve(r) },
-      _outer: this,
-    } as BatchController & { _outer: PageBatchJob }
+  // PageBatchJob IS its own controller — is_cancelled/advance/complete satisfy BatchController
+  // structurally (advance/complete are arrow-function properties, so they're bound to the
+  // instance even when handed to an executor as a detached `job.controller`; no `this`-aliasing
+  // trick or unsafe cast needed, unlike the previous object-literal-with-a-nested-getter version).
+  get is_cancelled(): boolean { return this._cancelled }
+  advance = (n = 1): void => {
+    this._done += n
+    for (const cb of this._cbs) cb(this._done, this.total)
   }
+  complete = (r: BatchResult): void => { this._resolve(r) }
+
+  get controller(): BatchController { return this }
 }

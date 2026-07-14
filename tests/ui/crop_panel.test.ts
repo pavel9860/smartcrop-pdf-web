@@ -54,20 +54,22 @@ describe('CropPanel', () => {
     expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBeGreaterThanOrEqual(3)
   })
 
-  it('crop / rotate dispatch; delete asks for confirmation first', () => {
-    const confirm = vi.spyOn(globalThis, 'confirm').mockReturnValue(true)
+  it('crop / rotate dispatch; delete asks for confirmation first (L1: themed dialog, not window.confirm)', async () => {
+    fc.set_confirm_result(true)
     root.querySelector<HTMLButtonElement>('#cp-crop')!.click()
     root.querySelector<HTMLButtonElement>('#cp-rotate')!.click()
     root.querySelector<HTMLButtonElement>('#cp-delete')!.click()
-    expect(confirm).toHaveBeenCalledOnce()
+    expect(fc.calls.filter(c => c.kind === 'confirm')).toHaveLength(1)
+    await Promise.resolve()   // ctrl.confirm() resolves via a microtask before delete_pages dispatches
     expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBeGreaterThanOrEqual(3)
   })
 
-  it('declining the delete confirm does not dispatch', () => {
-    vi.spyOn(globalThis, 'confirm').mockReturnValue(false)
-    const before = fc.calls.length
+  it('declining the delete confirm does not dispatch', async () => {
+    fc.set_confirm_result(false)
+    const before = fc.calls.filter(c => c.kind === 'dispatch').length
     root.querySelector<HTMLButtonElement>('#cp-delete')!.click()
-    expect(fc.calls.length).toBe(before)
+    await Promise.resolve()
+    expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBe(before)
   })
 
   it('busy disables the action buttons', () => {

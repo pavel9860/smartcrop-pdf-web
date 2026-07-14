@@ -1,18 +1,18 @@
 // UI-only tunables — presentation layer only; no domain computation reads these.
+// Sidebar/detail-panel widths and the canvas' minimum width are pure CSS layout concerns and
+// live in app.css (--sidebar-w, --detail-w, .canvas-area min-width) — not duplicated here, since
+// nothing in TS ever reads them (M7: PANEL_WIDTH/DETAIL_PANEL_WIDTH/CANVAS_MIN_WIDTH were unused
+// and PANEL_WIDTH had drifted from the real CSS value).
 
-export const PANEL_WIDTH        = 320    // px — left sidebar
-export const DETAIL_PANEL_WIDTH = 380    // px — settings/help panel
-export const CANVAS_MIN_WIDTH   = 400    // px — canvas never shrinks below this
-export const STATUS_IDLE_MS     = 2400   // ms — status text auto-clear delay
-export const SCALE_THROTTLE_MS  = 80     // ms — canvas resize debounce
+export const SCALE_THROTTLE_MS  = 80     // ms — canvas resize debounce (canvas_view.ts._resize)
 export const FONT_SIZE_MIN      = 8
 export const FONT_SIZE_MAX      = 25
 export const FONT_SIZE_DEFAULT  = 15
-// Discrete font-size choices offered in Settings (desktop ui_build.py font_presets)
+// Discrete font-size choices offered in Settings
 export const FONT_SIZE_PRESETS: readonly number[] = [8, 10, 12, 15, 18, 22, 25]
 export const UI_SCALE_MIN       = 0.7
 export const UI_SCALE_MAX       = 2.0
-// UI-scale dropdown presets (desktop ui_build.py scale_presets)
+// UI-scale dropdown presets
 export const ZOOM_PRESETS: readonly number[] = [0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 2.0]
 
 // Canvas overlay drawing (canvas_view.ts) — spec §6, §19

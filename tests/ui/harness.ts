@@ -46,11 +46,14 @@ export interface CtrlCall { kind: string; arg?: unknown }
 export interface FakeController {
   ctrl: AppController
   calls: CtrlCall[]
+  /** Controls what ctrl.confirm() resolves to (default true) — set before triggering the action. */
+  set_confirm_result: (v: boolean) => void
 }
 
 /** Duck-typed AppController: runs commands synchronously, records every call. */
 export function make_ctrl(): FakeController {
   const calls: CtrlCall[] = []
+  let confirm_result = true
   const rec = (kind: string, arg?: unknown): void => { calls.push({ kind, arg }) }
   const obj = {
     dispatch(cmd: () => void): void { rec('dispatch'); try { cmd() } catch { /* surfaced elsewhere */ } },
@@ -58,6 +61,10 @@ export function make_ctrl(): FakeController {
       rec('dispatch_async'); void cmd().catch(() => { /* swallow in tests */ })
     },
     dispatch_job(make: () => unknown): void { rec('dispatch_job'); try { make() } catch { /* ignore */ } },
+    confirm(message: unknown): Promise<boolean> {
+      rec('confirm', message)
+      return Promise.resolve(confirm_result)
+    },
     toggle_detail(panel: unknown): void { rec('toggle_detail', panel) },
     set_theme(t: unknown): void { rec('set_theme', t) },
     set_font_size(n: unknown): void { rec('set_font_size', n) },
@@ -66,7 +73,7 @@ export function make_ctrl(): FakeController {
     set_ui_scale(s: unknown): void { rec('set_ui_scale', s) },
     get busy(): boolean { return false },
   }
-  return { ctrl: obj as unknown as AppController, calls }
+  return { ctrl: obj as unknown as AppController, calls, set_confirm_result: (v: boolean) => { confirm_result = v } }
 }
 
 /** A fresh container attached to a cleared document.body. Clearing first keeps element IDs

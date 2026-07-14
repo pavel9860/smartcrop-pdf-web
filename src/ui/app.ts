@@ -7,6 +7,7 @@ import { Failed } from '@core/batch'
 import { PdfRendererAdapter } from '@pdf/loader'
 import { CanvasView } from './canvas_view'
 import { ProgressOverlay } from './overlay'
+import { confirm_dialog } from './confirm'
 import { PagesPanel } from './panels/pages_panel'
 import { CropPanel } from './panels/crop_panel'
 import { ScanPanel } from './panels/scan_panel'
@@ -15,7 +16,7 @@ import { NavBar } from './nav_bar'
 import { DetailPanel } from './detail_panel'
 import { apply_theme } from './theme'
 import type { DetailPanel as DetailPanelType } from './constants'
-import { FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX } from './constants'
+import { FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX, ZOOM_PRESETS } from './constants'
 import { requireEl } from './dom'
 import { load_output_prefs, save_output_prefs } from './persist'
 
@@ -62,14 +63,16 @@ export class AppController {
       (bytes, base) => { this._download_blob(new Blob([bytes as BlobPart], { type: 'application/zip' }), `${base}.zip`) },
     )
 
-    // Build layout
+    // Build layout. detail-col starts as a bare marker class — DetailPanel's constructor below
+    // overwrites this element's className to 'detail-panel' once it takes ownership, but the
+    // reference is already captured by then (L2: was root.children[1], a positional cast).
     root.innerHTML = `
       <div class="sidebar"></div>
-      <div></div>
+      <div class="detail-col"></div>
       <div class="canvas-area"></div>`
 
     this._sidebar    = requireEl(root, '.sidebar')
-    this._detail_col = root.children[1] as HTMLElement
+    this._detail_col = requireEl(root, '.detail-col')
     this._canvas_col = requireEl(root, '.canvas-area')
 
     // Canvas + overlay
@@ -169,6 +172,13 @@ export class AppController {
 
   get busy(): boolean { return this._current_job !== null }
 
+  // Themed yes/no confirmation over the canvas (L1) — replaces window.confirm(), which can't be
+  // themed and doesn't play well with headless/e2e drivers. Panels call this instead of the
+  // native dialog for any destructive action.
+  confirm(message: string, confirm_label?: string): Promise<boolean> {
+    return confirm_dialog(this._canvas_col, message, confirm_label)
+  }
+
   // ---------------------------------------------------------------------------
   // Detail panel toggle (settings / help)
   // ---------------------------------------------------------------------------
@@ -254,35 +264,58 @@ export class AppController {
 
   get ui_config(): Readonly<UIConfig> { return this._ui_config }
 
+  // Every UIConfig setter below refreshes explicitly (mirroring dispatch()'s always-refresh-after
+  // rule for domain commands) — panels call these directly, not through dispatch(), and unlike a
+  // domain mutation there's no other repaint trigger downstream. This was missing until now; a
+  // click on the Settings dropdown itself happened to look fine regardless (the select's own DOM
+  // value already reflects what was just picked), but the Ctrl+/- keyboard shortcut left the
+  // Settings zoom dropdown showing a stale value with no repaint to correct it (surfaced while
+  // testing M1).
   set_theme(t: 'dark' | 'light' | 'system'): void {
     this._ui_config.theme = t
     apply_theme(t)
+    void this._refresh_async()
   }
 
   set_font_size(n: number): void {
     this._ui_config.font_size = Math.max(FONT_SIZE_MIN, Math.min(FONT_SIZE_MAX, n))
     this._apply_scale()
+    void this._refresh_async()
   }
 
-  set_remember_folder(on: boolean): void { this._ui_config.remember_folder = on }
+  set_remember_folder(on: boolean): void {
+    this._ui_config.remember_folder = on
+    void this._refresh_async()
+  }
 
-  // Ctrl +/- (spec §21): scales the whole UI on top of font_size, does not change font_size
-  // itself — the two are separate settings (spec §15).
+  // Ctrl +/- (spec-web §20): scales the whole UI on top of font_size, does not change font_size
+  // itself — the two are separate settings (spec-web §13).
+  // Steps through ZOOM_PRESETS by index rather than a free-form +-0.1 (the presets are unevenly
+  // spaced — 0.1 wouldn't land on any of them) — guarantees the Settings dropdown, which only
+  // offers presets, always matches the live scale exactly instead of showing the "nearest" one
+  // (M1).
   zoom(dir: number): void {
     if (dir === 0) {
       this._ui_config.ui_scale = 1.0
     } else {
-      const step = 0.1
-      this._ui_config.ui_scale = Math.max(UI_SCALE_MIN,
-        Math.min(UI_SCALE_MAX, this._ui_config.ui_scale + dir * step))
+      const current = this._ui_config.ui_scale
+      let idx = 0, best = Infinity
+      for (const [i, preset] of ZOOM_PRESETS.entries()) {
+        const d = Math.abs(preset - current)
+        if (d < best) { best = d; idx = i }
+      }
+      idx = Math.max(0, Math.min(ZOOM_PRESETS.length - 1, idx + dir))
+      this._ui_config.ui_scale = ZOOM_PRESETS[idx] ?? 1.0
     }
     this._apply_scale()
+    void this._refresh_async()
   }
 
   // Set the UI scale directly (Settings dropdown). Ctrl +/- still uses zoom() for stepping.
   set_ui_scale(scale: number): void {
     this._ui_config.ui_scale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, scale))
     this._apply_scale()
+    void this._refresh_async()
   }
 
   private _apply_scale(): void {
@@ -318,11 +351,11 @@ export class AppController {
   // ---------------------------------------------------------------------------
 
   private _show_error(e: unknown): void {
-    // DocumentLoadError (and similar) carry the underlying worker/library error on
-    // cause_error (core/errors.ts) but Error.message alone doesn't include it — surface it
-    // here so failures are diagnosable from the toast/console instead of a bare wrapper
-    // message like "Failed to load x.pdf" with no indication of why.
-    const cause = e instanceof Error ? (e as { cause_error?: unknown }).cause_error : undefined
+    // DocumentLoadError (and similar) carry the underlying worker/library error on the standard
+    // Error.cause (core/errors.ts) but Error.message alone doesn't include it — surface it here
+    // so failures are diagnosable from the toast/console instead of a bare wrapper message like
+    // "Failed to load x.pdf" with no indication of why.
+    const cause = e instanceof Error ? e.cause : undefined
     const base  = e instanceof Error ? e.message : String(e)
     const msg   = cause !== undefined ? `${base} — ${stringify_cause(cause)}` : base
     const toast = document.createElement('div')
@@ -347,13 +380,12 @@ export class AppController {
   }
 
   // ---------------------------------------------------------------------------
-  // Keyboard shortcuts (spec §21)
+  // Keyboard shortcuts (spec-web §20)
   // ---------------------------------------------------------------------------
 
   private _on_shortcut = (ev: KeyboardEvent): void => {
-    // Esc closes the detail panel (spec-web §W4; no desktop equivalent — no floating window).
-    // Handled before the Ctrl gate since Esc carries no modifier. Drag-cancel Esc is handled
-    // separately in canvas_view against the canvas element.
+    // Esc closes the detail panel (spec-web §20). Handled before the Ctrl gate since Esc carries
+    // no modifier. Drag-cancel Esc is handled separately in canvas_view against the canvas element.
     if (ev.key === 'Escape') { this._close_detail(); return }
     const ctrl = ev.ctrlKey || ev.metaKey
     if (!ctrl) return

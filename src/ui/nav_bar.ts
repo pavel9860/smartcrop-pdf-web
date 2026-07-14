@@ -19,7 +19,7 @@ export class NavBar {
     const bar = document.createElement('div')
     bar.className = 'nav-bar'
     bar.innerHTML = `
-      <div class="nav-bar__row nav-bar__row--top">
+      <div class="nav-bar__row">
         <button class="btn btn-secondary nav-btn" data-id="settings">⚙  Settings</button>
         <button class="btn btn-secondary nav-btn" data-id="help">?  Help</button>
       </div>
@@ -75,7 +75,9 @@ export class NavBar {
     this._reset_btn.disabled = busy || !model.has_document
     this._prev_btn.disabled  = busy || model.view_position <= 1
     this._next_btn.disabled  = busy || model.view_position >= model.view_total
-    this._page_inp.value     = String(model.view_position)
+    if (document.activeElement !== this._page_inp) {
+      this._page_inp.value = String(model.view_position)
+    }
     this._page_inp.max       = String(model.view_total)
     this._page_inp.disabled  = busy || !model.has_document
     this._total_el.textContent = `/ ${model.view_total}`

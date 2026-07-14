@@ -632,21 +632,24 @@ describe('undo / redo', () => {
     expect(model.document.applied.get(1)).toEqual([{ x0: 10, y0: 10, x1: 150, y1: 250 }])
   })
 
-  it('set_offset and commit_offsets each push their own checkpoint (C1)', async () => {
+  it('set_offset + commit_offsets in one dispatch is ONE undo step, not two (99_FOUND_ISSUES 6a)', async () => {
     // Offsets start at the default {0,0,0,0} both before AND after detect_content (detect never
     // touches offsets), so a single stale snapshot would coincidentally look like a correct
-    // revert — chain two distinct edits and undo once to prove each call pushed its OWN entry.
+    // revert — chain two distinct edits to prove the checkpoint is real, not a no-op push.
     const model = await loaded_model({ page_w: 200, page_h: 400 })
     await model.detect_content().result()
     const before = model.offsets
     model.set_offset('L', 5)
-    const after_set_offset = model.offsets
-    expect(after_set_offset).not.toEqual(before)
-    model.commit_offsets()
-    model.undo()   // should undo ONLY commit_offsets, landing back at the set_offset result
-    expect(model.offsets).toEqual(after_set_offset)
-    model.undo()   // should undo set_offset, landing back at the pre-edit default
+    model.commit_offsets()   // the crop_panel offset-field flow: set_offset then commit_offsets
+    expect(model.offsets).not.toEqual(before)
+    model.undo()   // one Ctrl+Z reaches the pre-edit state directly — not an intermediate one
     expect(model.offsets).toEqual(before)
+  })
+
+  it('commit_offsets alone (no preceding set_offset) still applies, just not undoable on its own', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 400 })
+    await model.detect_content().result()
+    expect(() => { model.commit_offsets() }).not.toThrow()
   })
 
   it('a completed auto-drag resize is undoable one drag at a time (C1)', async () => {

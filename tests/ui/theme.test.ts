@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { apply_theme, current_theme } from '@ui/theme'
+import { apply_theme } from '@ui/theme'
 
 function stub_matchMedia(matches: boolean): void {
   const listeners: Array<(e: MediaQueryListEvent) => void> = []
@@ -15,9 +15,8 @@ function stub_matchMedia(matches: boolean): void {
 describe('theme', () => {
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('apply_theme(dark) sets tokens and data-theme, and current_theme tracks it', () => {
+  it('apply_theme(dark) sets tokens and data-theme', () => {
     apply_theme('dark')
-    expect(current_theme()).toBe('dark')
     expect(document.documentElement.dataset['theme']).toBe('dark')
     expect(document.documentElement.style.getPropertyValue('--bg-app')).toBe('#1e1d1b')
   })
@@ -31,7 +30,6 @@ describe('theme', () => {
   it('apply_theme(system) resolves via matchMedia', () => {
     stub_matchMedia(true)
     apply_theme('system')
-    expect(current_theme()).toBe('system')
     expect(document.documentElement.dataset['theme']).toBe('dark')
     // switching away removes the media listener without throwing
     expect(() => { apply_theme('light') }).not.toThrow()

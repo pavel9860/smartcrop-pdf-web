@@ -7,7 +7,7 @@ import {
   UNDO_DEPTH_OPTIONS, PAPER_SIZES, CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
   CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DETECT_OUTLIER_OPTIONS,
 } from '@core/constants'
-import { FONT_SIZE_PRESETS, ZOOM_PRESETS } from './constants'
+import { FONT_SIZE_PRESETS, ZOOM_PRESETS, THEMES } from './constants'
 import { requireEl, syncCustomReveal } from './dom'
 
 export class SettingsView {
@@ -47,17 +47,18 @@ export class SettingsView {
     const paper_opts = Object.keys(PAPER_SIZES).map(n =>
       `<option value="${n}">${n}</option>`).join('')
       + `<option value="${CUSTOM_PAPER_PRESET}">Custom…</option>`
+    // L3: generated from THEMES (ui/constants.ts), not three hand-duplicated buttons — adding a
+    // theme only ever means updating that one array.
+    const theme_btns = THEMES.map(t =>
+      `<button class="btn btn-seg" data-theme="${t}">${t.charAt(0).toUpperCase()}${t.slice(1)}</button>`)
+      .join('')
 
     this._el.innerHTML = `
       <section class="settings-section">
         <h3 class="settings-section__title">Appearance</h3>
         <div class="settings-row">
           <span class="settings-label">Colour scheme</span>
-          <div class="btn-group">
-            <button class="btn btn-seg" data-theme="dark">Dark</button>
-            <button class="btn btn-seg" data-theme="light">Light</button>
-            <button class="btn btn-seg" data-theme="system">System</button>
-          </div>
+          <div class="btn-group">${theme_btns}</div>
         </div>
         <div class="settings-row">
           <span class="settings-label">Font size</span>
@@ -182,9 +183,10 @@ export class SettingsView {
       btn.classList.toggle('active', btn.dataset['theme'] === ui.theme)
     }
     this._font_sel.value = String(ui.font_size)
-    const nearest = ZOOM_PRESETS.reduce((a, b) =>
-      Math.abs(b - ui.ui_scale) < Math.abs(a - ui.ui_scale) ? b : a)
-    this._zoom_sel.value = String(nearest)
+    // ui_scale is always an exact ZOOM_PRESETS value by construction — both this dropdown and
+    // Ctrl +/- keyboard stepping only ever set one (M1: display always equals live state, never
+    // an approximated "nearest" preset).
+    this._zoom_sel.value = String(ui.ui_scale)
 
     if (document.activeElement !== this._postfix_inp) this._postfix_inp.value = model.output_postfix
     if (document.activeElement !== this._custom_dpi_inp) {

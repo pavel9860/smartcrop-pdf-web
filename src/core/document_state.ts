@@ -1,8 +1,8 @@
-// DocumentState — exactly the 8 undoable fields (spec §13/§W9.2, ARCHITECTURE §5.1).
-// Nothing outside this list is snapshotted. (Previously 12 fields, mislabeled "11" here; drawn,
-// detect_cache, union, auto_active moved to non-undoable AppModel state 2026-07 — spec-web §W9.2 —
-// since they are detection/drag scaffolding used to arrive at a committed operation, not an
-// operation themselves. See model.ts's _drawn/_detect_cache/_union/_auto_active.)
+// DocumentState — exactly the 8 undoable fields (spec-web §12, ARCHITECTURE §5.1).
+// Nothing outside this list is snapshotted. drawn/detect_cache/union/auto_active are non-undoable
+// AppModel fields, not DocumentState fields — they are detection/drag scaffolding used to arrive
+// at a committed operation, not an operation themselves. See model.ts's
+// _drawn/_detect_cache/_union/_auto_active.
 
 import type { Box } from './geometry'
 import { FilterMode } from './enums'

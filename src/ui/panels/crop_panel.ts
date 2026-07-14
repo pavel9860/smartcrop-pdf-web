@@ -157,7 +157,9 @@ export class CropPanel {
     this._rotate_btn.addEventListener('click', () =>
       { ctrl.dispatch(() => { model.rotate_pages() }) })
     this._delete_btn.addEventListener('click', () => {
-      if (confirm('Delete selected pages?')) ctrl.dispatch(() => { model.delete_pages() })
+      void ctrl.confirm('Delete selected pages?', 'Delete').then(ok => {
+        if (ok) ctrl.dispatch(() => { model.delete_pages() })
+      })
     })
   }
 

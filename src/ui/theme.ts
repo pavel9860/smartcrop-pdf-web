@@ -62,11 +62,9 @@ const LIGHT: Record<string, string> = {
   '--seg-unsel':    '#6e6b64',
 }
 
-let _current_theme: Theme = 'dark'
 let _media_query: MediaQueryList | null = null
 
 export function apply_theme(theme: Theme): void {
-  _current_theme = theme
   if (_media_query) {
     _media_query.removeEventListener('change', _on_system_change)
     _media_query = null
@@ -92,5 +90,3 @@ function _apply_tokens(tokens: Record<string, string>): void {
   const root = document.documentElement
   for (const [k, v] of Object.entries(tokens)) root.style.setProperty(k, v)
 }
-
-export function current_theme(): Theme { return _current_theme }

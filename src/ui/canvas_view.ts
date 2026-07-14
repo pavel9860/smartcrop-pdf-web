@@ -8,7 +8,7 @@ import { CANVAS_MARGIN, HANDLE_R, HANDLE_SLACK, SYNTH_W, SYNTH_H } from '@core/c
 import {
   OVERLAY_DASH, OVERLAY_LINE_WIDTH_SPLIT, OVERLAY_LINE_WIDTH_CROP, HANDLE_LINE_WIDTH,
   SPLIT_BADGE_FONT_SCALE, SPLIT_BADGE_RADIUS_SCALE, RUBBER_BAND_DASH, RUBBER_BAND_LINE_WIDTH,
-  LOADING_FONT_SIZE,
+  LOADING_FONT_SIZE, SCALE_THROTTLE_MS,
 } from './constants'
 
 // Canvas 2D fillStyle/strokeStyle/font do NOT resolve CSS var() — no cascade context.
@@ -35,6 +35,7 @@ export class CanvasView {
   private readonly _arrow_prev: HTMLButtonElement
   private readonly _arrow_next: HTMLButtonElement
   private _ro: ResizeObserver
+  private _resize_timer: ReturnType<typeof setTimeout> | null = null
   private _theme: ThemeColors = {
     bg: '#121212', crop: '#4a9eff', split: '#2a7edb',
     handle: '#ffffff', text_dim: '#888888', font: 'sans-serif',
@@ -66,7 +67,12 @@ export class CanvasView {
     this.el.addEventListener('wheel', this._on_wheel, { passive: true })
     window.addEventListener('keydown', this._on_key)
 
-    this._ro = new ResizeObserver(() => { this._resize() })
+    // Debounced: a live window/panel drag-resize can fire ResizeObserver many times a second,
+    // and each firing may now trigger a display-DPI re-render (spec-web §2) — not just a repaint.
+    this._ro = new ResizeObserver(() => {
+      if (this._resize_timer !== null) clearTimeout(this._resize_timer)
+      this._resize_timer = setTimeout(() => { this._resize_timer = null; this._resize() }, SCALE_THROTTLE_MS)
+    })
     this._ro.observe(this.el)
   }
 
@@ -325,6 +331,7 @@ export class CanvasView {
 
   destroy(): void {
     this._ro.disconnect()
+    if (this._resize_timer !== null) clearTimeout(this._resize_timer)
     window.removeEventListener('keydown', this._on_key)
   }
 }

@@ -4,8 +4,11 @@ import { make_model, make_ctrl, mount, type FakeController } from './harness'
 import type { AppModel } from '@core/model'
 import type { UIConfig } from '@ui/app'
 
+// ui_scale is always an exact ZOOM_PRESETS value in real usage (M1: zoom() steps the grid,
+// set_ui_scale() only ever receives a preset from the dropdown) — using a real preset here tests
+// that invariant instead of the old "shows the nearest preset" approximation behavior.
 const UI: Readonly<UIConfig> = {
-  theme: 'light', font_size: 15, ui_scale: 1.2, remember_folder: true,
+  theme: 'light', font_size: 15, ui_scale: 1.15, remember_folder: true,
 }
 
 describe('SettingsView', () => {
@@ -31,7 +34,7 @@ describe('SettingsView', () => {
     view.refresh(model, UI)
     expect(root.querySelector('[data-theme="light"]')!.classList.contains('active')).toBe(true)
     expect(root.querySelector<HTMLSelectElement>('#sv-font')!.value).toBe('15')
-    expect(root.querySelector<HTMLSelectElement>('#sv-zoom')!.value).toBe('1.15')  // nearest to 1.2
+    expect(root.querySelector<HTMLSelectElement>('#sv-zoom')!.value).toBe('1.15')  // exact match, not approximated (M1)
     expect(root.querySelector<HTMLInputElement>('#sv-remember')!.checked).toBe(true)
   })
 

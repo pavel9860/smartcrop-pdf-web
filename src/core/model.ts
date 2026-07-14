@@ -238,10 +238,9 @@ export class AppModel {
   // The clear still runs (fire-and-forget) to bound storage; correctness no longer depends on it.
   private _doc_gen = 0
 
-  // Logical page index -> original adapter page index. The adapter (pdf.js) has no page-deletion
-  // primitive — unlike desktop's PyMuPDF `doc.delete_pages()`, which physically shrinks the
-  // document so indices simply renumber — so delete_pages() here removes entries from this map
-  // instead. Every adapter call that takes a page index must translate through it (_get_work).
+  // Logical page index -> original adapter page index. pdf.js has no page-deletion primitive
+  // that renumbers indices in place, so delete_pages() removes entries from this map instead.
+  // Every adapter call that takes a page index must translate through it (_get_work).
   private _page_map: number[] = []
 
   constructor(private readonly _adapter: RendererAdapter) {}
@@ -384,9 +383,7 @@ export class AppModel {
   }
 
   detect_content(): BatchJob {
-    if (!this.has_document) throw new NoDocumentError('No document loaded')
-    const pages = this.resolve_pages()
-    if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
+    const pages = this._require_pages()
 
     const job = new PageBatchJob('Detecting content…', pages.length)
     void this._run_detect(job, pages)
@@ -491,9 +488,7 @@ export class AppModel {
   }
 
   apply_crop(): void {
-    if (!this.has_document) throw new NoDocumentError('No document loaded')
-    const pages = this.resolve_pages()
-    if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
+    const pages = this._require_pages()
 
     if (this._split_count > 1 && this.document.crop_rects.length !== this._split_count) {
       throw new InvalidSplitError(
@@ -502,7 +497,7 @@ export class AppModel {
 
     this.history.push(this.document)
 
-    // Export also commits live auto-crop for uncommitted pages (spec §12.4)
+    // Export also commits live auto-crop for uncommitted pages (spec-web §10.6)
     for (const p of pages) {
       if (this._split_count === 1) {
         const boxes = this._compute_crop_boxes_for_page(p)
@@ -564,7 +559,13 @@ export class AppModel {
     }
   }
 
-  // Snap out-of-range offsets to page-limit (spec §7.4a)
+  // Snap out-of-range offsets to page-limit (spec-web §4.6). Does NOT push its own history
+  // checkpoint (99_FOUND_ISSUES 6a): its one real caller, crop_panel's offset-field blur/Enter
+  // handler, always calls set_offset() first in the same dispatch, which already pushed the
+  // pre-edit checkpoint — this adjustment folds into that same undo step instead of forcing a
+  // second Ctrl+Z to reach the state before the field was edited. If a future caller ever needs
+  // to call commit_offsets() on its own (no preceding set_offset in the same dispatch), it must
+  // push its own checkpoint first.
   commit_offsets(): void {
     const doc = this._doc
     if (!doc) return
@@ -573,7 +574,6 @@ export class AppModel {
     const union    = this._union
     if (!detected || !union) return
 
-    this.history.push(this.document)
     const rect = auto_crop_rect(detected, union, this.document.offsets,
       sz.width, sz.height, this._anchor_left, this._anchor_top)
 
@@ -899,10 +899,12 @@ export class AppModel {
   // Scan processing
   // ---------------------------------------------------------------------------
 
-  // Shared guard for the three scan-processing toggles below: all require a document and a
-  // non-empty page selection before touching undoable state (M4 — set_filter_strength was
-  // missing this, unlike its two siblings).
-  private _require_scan_pages(): number[] {
+  // Shared guard: every mutating/batch command requires a document and a non-empty page
+  // selection before touching undoable state (99_FOUND_ISSUES 6b — was duplicated as an inline
+  // 2-line check across detect_content/apply_crop/rotate_pages/delete_pages, plus a same-shaped
+  // helper scoped to only the three scan-processing toggles below; M4 — set_filter_strength was
+  // missing it entirely, unlike its two siblings, before that helper existed).
+  private _require_pages(): number[] {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
     if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
@@ -910,14 +912,14 @@ export class AppModel {
   }
 
   // Scan toggles: the intent flips SYNCHRONOUSLY (undoable — history pushed first), then the
-  // returned BatchJob pre-computes the selection's work rasters under the §14 progress overlay,
-  // yielding to the event loop between pages so the overlay repaints and Cancel works. A cancel
-  // keeps the intent: unprocessed pages fall back to on-view lazy compute in _get_work. This is
-  // desktop §14 parity — the lazy-only design (16c1b6d) deferred ALL processing to view/detect
-  // time, which made scanned-mode Auto-detect and navigation pay render+OpenCV(+ONNX) per page
-  // with no progress UI (spec-web §W2 row 5).
+  // returned BatchJob pre-computes the selection's work rasters under the progress overlay
+  // (spec-web §11), yielding to the event loop between pages so the overlay repaints and Cancel
+  // works. A cancel keeps the intent: unprocessed pages fall back to on-view lazy compute in
+  // _get_work — this avoids the earlier lazy-only design, which deferred ALL processing to view/
+  // detect time and made scanned-mode Auto-detect and navigation pay render+OpenCV(+ONNX) per
+  // page with no progress UI.
   run_dewarp(): BatchJob {
-    const pages = this._require_scan_pages()
+    const pages = this._require_pages()
     this.history.push(this.document)   // snapshot BEFORE the toggle so undo reverts it
     this.document.dewarp_on = !this.document.dewarp_on
     this._apply_scan_intents(pages)
@@ -925,7 +927,7 @@ export class AppModel {
   }
 
   set_filter_mode(mode: FilterMode): BatchJob {
-    const pages = this._require_scan_pages()
+    const pages = this._require_pages()
     this.history.push(this.document)
     // Toggle: pressing the active filter turns it off (spec §7.2)
     this.document.filter_mode = (mode === this.document.filter_mode) ? FilterMode.NONE : mode
@@ -934,7 +936,7 @@ export class AppModel {
   }
 
   set_filter_strength(n: number): BatchJob {
-    const pages = this._require_scan_pages()
+    const pages = this._require_pages()
     this.history.push(this.document)
     this.document.filter_strength =
       Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n))
@@ -1073,10 +1075,7 @@ export class AppModel {
   // ---------------------------------------------------------------------------
 
   rotate_pages(): void {
-    if (!this.has_document) throw new NoDocumentError('No document loaded')
-    const pages = this.resolve_pages()
-    if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
-    if (!this._doc) return
+    const pages = this._require_pages()
 
     this.history.push(this.document)
     for (const p of pages) this._rotate_page(p)
@@ -1084,7 +1083,7 @@ export class AppModel {
 
   private _rotate_page(p: number): void {
     // Effective dims BEFORE this 90° step — box coords being carried through are still in
-    // that (pre-step) frame. Must read before mutating rotation (mirrors model.py:558-566).
+    // that (pre-step) frame. Must read before mutating rotation.
     const sz = this._page_dims(p)
     const cur_rot = this.document.rotation.get(p) ?? 0
     this.document.rotation.set(p, (cur_rot + 90) % 360)
@@ -1108,11 +1107,7 @@ export class AppModel {
   }
 
   delete_pages(): void {
-    if (!this.has_document) throw new NoDocumentError('No document loaded')
-    const doc = this._doc
-    if (!doc) return
-    const pages = this.resolve_pages()
-    if (pages.length === 0) throw new EmptySelectionError('No pages in selection')
+    const pages = this._require_pages()
     if (pages.length >= this.page_count()) throw new DeleteAllPagesError('Cannot delete all pages')
 
     const sorted = [...pages].sort((a, b) => a - b)

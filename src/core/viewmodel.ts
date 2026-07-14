@@ -23,6 +23,7 @@ export function view_to_source(
   source_count: number,
   applied: Map<number, Box[]>,
 ): { src_page: number; split_idx: number } {
+  if (source_count <= 0) throw new RangeError('view_to_source: source_count must be > 0')
   let remaining = view_pos
   for (let i = 0; i < source_count; i++) {
     const n = applied.get(i)?.length ?? 1

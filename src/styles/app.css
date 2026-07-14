@@ -143,7 +143,7 @@ input, select { font: inherit; }
 /* ── Canvas area ── */
 .canvas-area {
   flex: 1;
-  min-width: 0;
+  min-width: 400px;   /* never shrinks below this, even with the detail panel open (spec-web §3) */
   position: relative;
   background: var(--bg-canvas);
   display: flex;
@@ -262,18 +262,10 @@ input, select { font: inherit; }
   white-space: nowrap;
   line-height: 1;
 }
-/* Gapped action-button row (Rotate | Delete): NOT a segmented group — desktop leaves a gap. */
+/* Gapped action-button row (Rotate | Delete): NOT a segmented group, has a visible gap. */
 .btn-row { display: flex; gap: 6px; margin-top: 6px; }
 .btn:hover:not(:disabled) { background: var(--btn-bg-hover); }
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
-.btn-primary {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: var(--text-inv);
-  font-weight: 600;
-}
-.btn-primary:hover:not(:disabled) { background: var(--accent-h); border-color: var(--accent-h); }
 
 .btn-secondary { background: var(--btn-bg); }
 
@@ -481,10 +473,7 @@ input, select { font: inherit; }
 /* ── Export row ── */
 .export-row { display: flex; gap: 4px; }
 
-/* ── Same-size row ── */
-.same-size-row { padding: 2px 0; }
-
-/* Split card label+switch rows: label left (desktop ROW_LABEL_W=90), switch, optional ratio. */
+/* Split card label+switch rows: label left (90px), switch, optional ratio. */
 .split-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .split-row__label { width: 90px; font-size: 0.9375rem; color: var(--text-primary); }
 .split-row .toggle-label { flex-shrink: 0; }
@@ -512,12 +501,8 @@ input, select { font: inherit; }
    Custom paper-height row, revealed only when Paper size = Custom) still renders as a flex row. */
 .settings-row[hidden] { display: none; }
 .settings-label { font-size: 0.9375rem; color: var(--text-label); flex-shrink: 0; }
-.settings-note { font-size: 0.9375rem; color: var(--text-dim); margin-top: 4px; }
-.settings-section--info p { font-size: 0.8125rem; line-height: 1.5; color: var(--text-primary); }
 .settings-row .select,
 .settings-row .text-input { max-width: 160px; }
-.zoom-controls { display: flex; align-items: center; gap: 8px; }
-.zoom-controls .settings-note { margin-top: 0; min-width: 3em; text-align: right; }
 
 /* ── Help view ── */
 .help-view { display: flex; flex-direction: column; gap: 16px; }
@@ -618,6 +603,9 @@ input, select { font: inherit; }
   transition: width 0.1s linear;
 }
 .overlay__counter { font-size: 0.8125rem; color: var(--text-dim); }
+
+/* ── Confirm dialog (confirm.ts) — same .overlay/.overlay__card shell as the progress overlay ── */
+.confirm-actions { display: flex; gap: 8px; }
 
 /* ── Drop zone (empty state) ── */
 .drop-zone {

@@ -21,7 +21,7 @@ export class DetailPanel {
     header.className = 'detail-panel__header'
     header.innerHTML = `
       <span class="detail-panel__title"></span>
-      <button class="detail-panel__close icon-btn" title="Close">✕</button>`
+      <button class="detail-panel__close btn-icon" title="Close">✕</button>`
     requireEl<HTMLElement>(header, '.detail-panel__close')
       .addEventListener('click', () => { ctrl.toggle_detail(this._active) })
     this._el.appendChild(header)

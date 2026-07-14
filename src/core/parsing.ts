@@ -69,7 +69,9 @@ function parse_slice(s: string, total: number, out: Set<number>): void {
 
   if (isNaN(start) || isNaN(stop) || isNaN(step) || step <= 0) return
 
-  for (let p = start; p <= Math.min(stop, total); p += step) {
-    if (p >= 1) out.add(p - 1)
+  // Seed at max(1, start), matching parse_range: an unbounded-looking negative start (e.g.
+  // "-999999999:5") must not iterate from there up to 1 one step at a time (H4 — froze the tab).
+  for (let p = Math.max(1, start); p <= Math.min(stop, total); p += step) {
+    out.add(p - 1)
   }
 }
