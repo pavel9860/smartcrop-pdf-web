@@ -1,9 +1,12 @@
 import { AppController } from './ui/app'
 import type { AppModel } from './core/model'
+import { register_service_worker } from './ui/sw_register'
 
 const root = document.getElementById('app')
 if (!root) throw new Error('#app not found')
 const app = new AppController(root)
+
+register_service_worker()
 
 // DEV-only test hook: Playwright (running against `npm run dev`) reads model.view_snapshot() to
 // assert canvas coordinate behavior it cannot observe through the DOM. Stripped from prod builds.

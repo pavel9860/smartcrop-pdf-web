@@ -948,6 +948,20 @@ Normal-mode users (the majority) download ~500 KB total.
 Scanned-mode users load the 8MB OpenCV chunk once on first filter/detect press.
 Dewarp adds another 18MB one-time download, cached indefinitely in IndexedDB.
 
+**Icons + offline (`public/sw.js`, `public/site.webmanifest`, `src/ui/sw_register.ts`):** a
+hand-rolled service worker, not `vite-plugin-pwa`/workbox — the JS/CSS bundle's filenames are
+content-hashed per build, so there's no static precache manifest to generate without adding a
+plugin dependency; instead the SW caches same-origin GET responses opportunistically (cache-first,
+populate-on-miss) as the running app requests them. `sw_register.ts` registers it only when
+`import.meta.env.PROD` (never under `vite dev` — a dev-mode SW would intercept fetches and serve
+stale cached responses instead of Vite's HMR updates). The manifest's icon `src` values are
+relative, not root-absolute (`public/` files are copied verbatim by Vite, unlike `index.html`'s
+`%BASE_URL%`-templated links — a root-absolute manifest icon path 404s under a GitHub Pages
+project-page subpath). Playwright e2e runs against `vite dev` (playwright.config.ts), where the SW
+deliberately never registers, so there is no automated offline-after-online-load e2e check yet —
+verify that manually against a production build (`vite build && vite preview`) before relying on
+the offline behavior at deploy time.
+
 ---
 
 ## 19. Quality gates (run before every commit)

@@ -687,6 +687,23 @@ drag-and-drop onto the canvas. Combine order and mode classification follow §9.
 SCANNED, §10.3). JPG/PNG/TIFF download as one `.zip` (§10.5). There is no overwrite-confirmation
 control — a browser download cannot detect or block an overwrite, so no such setting is offered.
 
+**Icons & installability:** a full icon set (favicon SVG/ICO/PNG, apple-touch-icon, 192/512
+maskable PWA icons) and a web app manifest (`public/site.webmanifest`) make the app installable
+as a standalone PWA. Manifest icon paths are relative (not root-absolute) so they resolve
+correctly under a GitHub Pages project-page subpath, where the manifest itself doesn't live at
+the domain root — Vite does not rewrite `public/` file contents the way it rewrites `index.html`'s
+own `%BASE_URL%`-prefixed links, so a root-absolute manifest icon path would silently 404 under a
+subpath deploy.
+
+**Offline:** a hand-rolled service worker (`public/sw.js`, registered only in production builds —
+never in dev, to avoid intercepting Vite's HMR with stale cached responses) caches every
+same-origin GET response opportunistically as the running app requests it: cache-first on repeat
+requests, falling back to network and populating the cache on a miss. There is no static
+build-time precache manifest (the JS/CSS bundle's filenames are content-hashed per build); instead,
+a normal boot plus one scanned-mode run naturally pulls the app shell, OpenCV wasm, ONNX models,
+pdf.js worker/cmaps/fonts and icons through the cache at least once, which is what "the app works
+offline after one online load" requires. No `SharedArrayBuffer`/COOP-COEP dependency.
+
 ---
 
 ## 16. Performance targets
