@@ -25,7 +25,7 @@ import {
   DeleteAllPagesError, ImagingError,
 } from './errors'
 import {
-  CACHE_WINDOW, SRC_DPI, NORMAL_DPI, DPI_PRESETS, EXPORT_FORMATS,
+  CACHE_WINDOW, SRC_DPI, NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DPI_PRESETS, EXPORT_FORMATS,
   DEFAULT_UNDO_DEPTH, FULL_PAGE_FRAC, OFFSET_LIMIT,
   FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX, UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
   MAX_SPLIT, SYNTH_W, SYNTH_H, type ExportFormat,
@@ -48,7 +48,7 @@ export interface DocInfo {
   page_sizes: PageSize[]
   file_names: string[]   // for window title / suggested export name
   mode: Mode
-  // True only for the no-file-open placeholder document (frozen spec §1). Pages of a
+  // True only for the no-file-open placeholder document (spec-web §1). Pages of a
   // synthetic doc have no PageSource; they must render via make_synth_page, not
   // get_source_image. Omitted (falsy) for every real load.
   synthetic?: boolean
@@ -165,16 +165,22 @@ export class AppModel {
   private _select_pattern = ''
   private _current_follow = false
 
-  // Detection/drawn-window working state (not undoable — spec-web §W9.2, moved out of
-  // DocumentState 2026-07). These are scaffolding used to ARRIVE at a committed operation
+  // Detection/drawn-window working state (not undoable — spec-web §12, moved out of
+  // DocumentState). These are scaffolding used to ARRIVE at a committed operation
   // (applied/rotation), not an operation themselves, so Undo does not revert them: pressing Undo
   // right after Auto-detect, before anything is committed via Crop, is now a no-op. Same lifecycle
   // both modes; SCANNED's committed crop/rotate/filter/dewarp are unaffected (those stay in
   // DocumentState). Reset on _reset_state/_run_detect/rotate/delete exactly as document.* used to be.
-  private _drawn:        Box | null = null   // global hand-drawn window, page coords (§9.3)
+  private _drawn:        Box | null = null   // global hand-drawn window, page coords (§6.4)
   private _detect_cache = new Map<number, Box>()   // per-page content box from last detect
-  private _union:        Box | null = null   // aggregate detection union (§8)
+  private _union:        Box | null = null   // aggregate detection union (§5)
   private _auto_active   = false             // auto-detect was run at least once
+
+  // NORMAL-mode preview render DPI (spec-web §2), resolved from the canvas' actual display size
+  // via set_display_scale() — never below NORMAL_DPI, never above NORMAL_DISPLAY_DPI_MAX. Purely
+  // a display/viewport concern: SCANNED's SRC_DPI is untouched, and no crop/geometry math reads
+  // this (page units for NORMAL are PDF points, independent of render resolution).
+  private _display_dpi = NORMAL_DPI
 
   // Transient drag state (not snapshotted)
   private _drag:         DragState | null = null
@@ -1351,7 +1357,7 @@ export class AppModel {
   }
 
   // The outline shown over a committed (cropped) page: only the drawn window, clamped to the crop
-  // box so it can never paint outside the cropped view (frozen spec §9.3). Empty when no window is
+  // box so it can never paint outside the cropped view (spec-web §6.3). Empty when no window is
   // being drawn (a plain committed crop shows no frame — bug 18).
   private _committed_overlay(box: Box | undefined): OverlayBox[] {
     const drawn = this._drawn
@@ -1362,6 +1368,26 @@ export class AppModel {
       x1: Math.max(box.x0, Math.min(drawn.x1, box.x1)),
       y1: Math.max(box.y0, Math.min(drawn.y1, box.y1)),
     } }]
+  }
+
+  // Reports the canvas' current physical-pixels-per-page-unit ratio (fit-to-canvas scale ×
+  // devicePixelRatio) so NORMAL-mode preview can render sharp instead of upscaling a fixed-DPI
+  // bitmap on a large window or a HiDPI display (spec-web §2). ui/ owns canvas sizing — core/
+  // stays DOM-free by only ever receiving this one number, never reading canvas/window itself.
+  // No-op for SCANNED: SRC_DPI stays fixed, the scan pipeline's perf budgets are tuned against it
+  // (spec-web §16), and page units there are already raster px, not points.
+  // Only re-renders when a MEANINGFULLY sharper bitmap is needed (>10%) — avoids re-rendering on
+  // every pixel of a live window resize — and never downgrades back to a blurrier cached bitmap
+  // once bumped up in this session.
+  set_display_scale(px_per_page_unit: number): void {
+    if (this._mode !== Mode.NORMAL || !(px_per_page_unit > 0)) return
+    const needed = px_per_page_unit * 72   // page unit = PDF point = 1/72 inch; DPI = px/inch
+    const resolved = Math.max(NORMAL_DPI, Math.min(NORMAL_DISPLAY_DPI_MAX, needed))
+    if (resolved > this._display_dpi * 1.1) {
+      this._display_dpi = resolved
+      this._source_cache.clear()
+      this._invalidate_current_bitmap()
+    }
   }
 
   // Call this before reading view_snapshot() to ensure bitmaps are ready.
@@ -1465,12 +1491,12 @@ export class AppModel {
 
   // Raw page raster (before scan processing), rendered once per page and cached. Every consumer
   // that needs pixels — the NORMAL view, the SCANNED work pipeline, and Auto-detect — goes through
-  // here, so the PDF is rasterized exactly once per (page, rotation), never twice (§W2 row 5).
+  // here, so the PDF is rasterized exactly once per (page, rotation), never twice (spec-web §7).
   private async _get_source(p: number): Promise<ImageBitmap> {
     const cached = this._source_cache.get(p)
     if (cached) return cached
     const doc = this._doc
-    const dpi = this._mode === Mode.SCANNED ? SRC_DPI : NORMAL_DPI
+    const dpi = this._mode === Mode.SCANNED ? SRC_DPI : this._display_dpi
     const rotation = this.document.rotation.get(p) ?? 0
     // p is logical (post-delete); the adapter only knows original pdf.js page indices.
     const orig = this._page_map[p] ?? p

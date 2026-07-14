@@ -11,6 +11,7 @@ import {
 import {
   CUSTOM_DPI_MIN, CUSTOM_DPI_MAX, UNDO_DEPTH_OPTIONS,
   CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DEFAULT_CUSTOM_PAPER_IN,
+  SRC_DPI, NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX,
 } from '@core/constants'
 
 // ---------------------------------------------------------------------------
@@ -32,10 +33,12 @@ function make_mock_adapter(opts: MockOpts = {}): {
   adapter: RendererAdapter
   calls: Record<string, number>
   render_args: { dpi: number | null; grey: boolean }[]
+  source_dpis: number[]
 } {
   const { page_count = 3, page_w = 200, page_h = 300, mode = Mode.NORMAL } = opts
   const calls: Record<string, number> = {}
   const render_args: { dpi: number | null; grey: boolean }[] = []
+  const source_dpis: number[] = []
   const bump = (k: string): void => { calls[k] = (calls[k] ?? 0) + 1 }
 
   const adapter: RendererAdapter = {
@@ -50,8 +53,9 @@ function make_mock_adapter(opts: MockOpts = {}): {
         mode,
       })
     },
-    get_source_image: (): Promise<ImageBitmap> => {
+    get_source_image: (_i, dpi): Promise<ImageBitmap> => {
       bump('get_source_image')
+      source_dpis.push(dpi)
       return Promise.resolve(make_bitmap(page_w, page_h))
     },
     get_work_image: (): Promise<ImageBitmap> => {
@@ -90,7 +94,7 @@ function make_mock_adapter(opts: MockOpts = {}): {
     },
     close: (): void => { bump('close') },
   }
-  return { adapter, calls, render_args }
+  return { adapter, calls, render_args, source_dpis }
 }
 
 const FILE = (name = 'a.pdf'): File => new File(['x'], name, { type: 'application/pdf' })
@@ -527,6 +531,61 @@ describe('scan processing (toggle flips instantly; warm batch behavior in scan_b
     await model.load_files([FILE()])
     expect(() => { model.run_dewarp() }).not.toThrow()   // intent recorded; job fails async
     expect(model.dewarp_on).toBe(true)
+  })
+})
+
+describe('set_display_scale (NORMAL preview sharpness, spec-web §2)', () => {
+  it('is a no-op in SCANNED mode — SRC_DPI never changes', async () => {
+    const { adapter, source_dpis } = make_mock_adapter({ mode: Mode.SCANNED, page_count: 1 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    model.set_display_scale(10)   // would resolve to a huge NORMAL-scale DPI if it applied here
+    await model.prepare_current_view()
+    expect(source_dpis.every(d => d === SRC_DPI)).toBe(true)
+  })
+
+  it('resolves NORMAL render DPI from display scale, clamped [NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX]', async () => {
+    const { adapter, source_dpis } = make_mock_adapter({ mode: Mode.NORMAL, page_count: 1 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    await model.prepare_current_view()
+    expect(source_dpis).toEqual([NORMAL_DPI])   // baseline before any display-scale report
+
+    model.set_display_scale(3)   // 3 physical px per PDF point -> 216dpi, within bounds
+    source_dpis.length = 0
+    await model.prepare_current_view()
+    expect(source_dpis).toEqual([216])
+
+    model.set_display_scale(1000)   // absurd window/DPR -> clamps to the cap, not unbounded
+    source_dpis.length = 0
+    await model.prepare_current_view()
+    expect(source_dpis).toEqual([NORMAL_DISPLAY_DPI_MAX])
+  })
+
+  it('only re-renders for a meaningfully sharper request, and never downgrades once bumped', async () => {
+    const { adapter, source_dpis } = make_mock_adapter({ mode: Mode.NORMAL, page_count: 1 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    await model.prepare_current_view()
+    expect(source_dpis).toEqual([NORMAL_DPI])
+
+    // ~151dpi — barely above the 150 baseline, under the 10% bump threshold: cache hit, no re-render.
+    model.set_display_scale(151 / 72)
+    source_dpis.length = 0
+    await model.prepare_current_view()
+    expect(source_dpis).toEqual([])
+
+    // 216dpi — meaningfully higher: bumps and re-renders.
+    model.set_display_scale(3)
+    source_dpis.length = 0
+    await model.prepare_current_view()
+    expect(source_dpis).toEqual([216])
+
+    // Window shrinks back down — must not discard the sharper cached render.
+    model.set_display_scale(1)
+    source_dpis.length = 0
+    await model.prepare_current_view()
+    expect(source_dpis).toEqual([])
   })
 })
 

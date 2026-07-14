@@ -67,13 +67,29 @@ img_x, img_y = centre the fitted bitmap in the canvas
 ```
 
 `CANVAS_MARGIN = 0` — the page fills the canvas edge-to-edge. On a committed single-crop page,
-`page_w`/`page_h` above are the committed box's own dimensions, not the full page — see §9.8's
+`page_w`/`page_h` above are the committed box's own dimensions, not the full page — see §6.8's
 `crop_origin` mechanism for the exact pointer↔page mapping in that case.
 
 The page view is always **fit-to-window**: `scale` recomputes on every render and on canvas resize,
 so the whole page (or the whole committed crop) is always fully inside the canvas on both axes —
 never magnified out of view. There is no page zoom; **the mouse wheel over the canvas turns pages**
 (up = previous, down = next). `Ctrl +/-` scales the whole UI (§14 Settings), not the fitted page.
+
+**NORMAL-mode preview sharpness.** The underlying page raster is rendered at a DPI independent of
+this fit-to-canvas `scale` — `scale` only decides how that raster is drawn into the canvas, not
+what resolution it's rendered at. On a large window or a HiDPI display, drawing a fixed
+150dpi (`NORMAL_DPI`) raster at a much larger `scale` upscales it, which blurs. Whenever the
+canvas resizes, it reports its physical-pixels-per-page-unit ratio (`scale × devicePixelRatio`)
+to `AppModel.set_display_scale()`, which re-renders the NORMAL-mode source raster at whatever DPI
+that ratio actually needs — never below `NORMAL_DPI`, capped at `NORMAL_DISPLAY_DPI_MAX` — only
+when meaningfully sharper (>10%) than the last render, and never back down once bumped in a
+session. This is purely a display/rendering concern: crop/split/offset geometry (all in PDF
+points, per above) is completely unaffected by which DPI the raster happens to be shown at — the
+operation metadata that actually gets exported (§10.3) never touches this raster at all for a
+NORMAL+PDF export. SCANNED mode is untouched — `SRC_DPI` stays fixed; the scan pipeline's
+performance budgets (§16) are tuned against it, and re-deriving a whole dewarped/filtered raster
+at a different resolution on every window resize would be far more expensive than a plain PDF.js
+re-render.
 
 ---
 
@@ -703,7 +719,7 @@ duplicate values into logic). UI-only tunables live in `src/ui/constants.ts`.
 
 ```
 # DPI / caches
-SRC_DPI = 150.0    NORMAL_DPI = 150.0    CACHE_WINDOW = 4
+SRC_DPI = 150.0    NORMAL_DPI = 150.0    NORMAL_DISPLAY_DPI_MAX = 450.0    CACHE_WINDOW = 4
 # crop geometry
 HANDLE_R = 10    HANDLE_SLACK = 6    CANVAS_MARGIN = 0    OFFSET_LIMIT = 100.0    MIN_RECT = 5.0 (geometry.ts)
 # classification / detection

@@ -1,5 +1,5 @@
 // canvas_view.ts — page canvas: paint from ViewSnapshot + pointer events → model gestures.
-// Spec §5, §9.3, §9.6, §19. No status text on the canvas (spec-web §W3); the only overlay
+// Spec-web §2, §6.3, §6.6, §18. No status text on the canvas (spec-web §3); the only overlay
 // text is the bottom-right cursor read-out.
 
 import type { AppModel, ViewSnapshot, OverlayBox } from '@core/model'
@@ -27,7 +27,7 @@ export class CanvasView {
   private _img_y = 0
   // Full-page-unit origin of the shown image. {0,0} on a full page; the committed box's top-left on
   // a committed (cropped) page, so pointer input and painted overlays map into the zoomed cropped
-  // view: canvas = _img + (page − crop_origin)·scale (spec-web §W8).
+  // view: canvas = _img + (page − crop_origin)·scale (spec-web §6.8).
   private _crop_origin = { x: 0, y: 0 }
   private _page_w = SYNTH_W
   private _page_h = SYNTH_H
@@ -51,7 +51,7 @@ export class CanvasView {
     this._coords_el = document.createElement('div')
     this._coords_el.className = 'canvas-coords'
 
-    // Hover ◀/▶ nav arrows on the canvas edge midpoints (desktop canvas_view.py; bug 10).
+    // Hover ◀/▶ nav arrows on the canvas edge midpoints.
     this._arrow_prev = this._make_arrow('◀', 'canvas-nav--left',
       () => { this._model.prev_page(); this._notify() })
     this._arrow_next = this._make_arrow('▶', 'canvas-nav--right',
@@ -74,7 +74,7 @@ export class CanvasView {
     const { el, _ctx: ctx } = this
     // Size the backing store in PHYSICAL pixels (× devicePixelRatio) so the page raster and the
     // crop overlay are sharp on HiDPI/scaled displays — the canvas was rendering at CSS resolution
-    // (half-res on a 2× screen), which made text look blurry vs the native desktop app. All drawing
+    // (half-res on a 2× screen), which made text look blurry. All drawing
     // below stays in CSS-pixel units; the transform maps them to the physical backing store.
     const dpr = window.devicePixelRatio || 1
     const cw = el.clientWidth, ch = el.clientHeight
@@ -88,7 +88,7 @@ export class CanvasView {
     ctx.fillRect(0, 0, cw, ch)
 
     // Attach DOM overlays (coords/nav arrows) once the canvas is in the tree. There is no
-    // page/size status element (removed 2026-07-05, spec-web §W3).
+    // page/size status element (spec-web §3).
     const parent = this.el.parentElement
     if (parent && this._coords_el.parentElement === null) {
       parent.appendChild(this._coords_el)
@@ -105,10 +105,7 @@ export class CanvasView {
     this._page_h = snap.page_h
 
     // Fit page to canvas
-    const scale = Math.min(
-      (cw - CANVAS_MARGIN * 2) / snap.page_w,
-      (ch - CANVAS_MARGIN * 2) / snap.page_h,
-    )
+    const scale = this._fit_scale(cw, ch, snap.page_w, snap.page_h)
     this._scale = scale
     this._crop_origin = snap.crop_origin
     this._img_x = (cw - snap.page_w * scale) / 2
@@ -123,10 +120,17 @@ export class CanvasView {
     for (const box of snap.overlay) this._draw_overlay_box(ctx, box, scale)
     if (snap.draw_rect) this._draw_rubber_band(ctx, snap.draw_rect, scale)
 
-    // Nothing is painted on the page image (desktop inv 32); cursor coordinates show in the
-    // bottom-right DOM overlay (bug 10). No page/size status element (spec-web §W3).
+    // Nothing is painted on the page image; cursor coordinates show in the
+    // bottom-right DOM overlay. No page/size status element (spec-web §3).
     this._arrow_prev.disabled = snap.position <= 1
     this._arrow_next.disabled = snap.position >= snap.total
+  }
+
+  private _fit_scale(cw: number, ch: number, page_w: number, page_h: number): number {
+    return Math.min(
+      (cw - CANVAS_MARGIN * 2) / page_w,
+      (ch - CANVAS_MARGIN * 2) / page_h,
+    )
   }
 
   private _make_arrow(label: string, side: string, on_click: () => void): HTMLButtonElement {
@@ -205,7 +209,7 @@ export class CanvasView {
     ctx.restore()
   }
 
-  // Cursor read-out in the bottom-right label (desktop canvas_view.py: coords_label at relx/rely
+  // Cursor read-out in the bottom-right label (relative to the canvas element, bottom-right corner
   // 1.0, "se"). Empty when the pointer is off the page. Same font/colour as the sidebar text.
   private _update_coords(px: number, py: number): void {
     // px/py are full-page units; the read-out is relative to the shown view (the crop on a
@@ -306,6 +310,16 @@ export class CanvasView {
   private _notify(): void { this._on_change?.() }
 
   private _resize(): void {
+    // Report the canvas' new physical-px-per-page-unit ratio so NORMAL-mode preview can
+    // re-render sharp instead of upscaling a fixed-DPI bitmap (spec-web §2). Uses the last-painted
+    // page_w/page_h — close enough for this purpose, and avoids a chicken-and-egg dependency on a
+    // view_snapshot() that itself depends on the DPI this call is about to resolve.
+    const cw = this.el.clientWidth, ch = this.el.clientHeight
+    if (cw > 0 && ch > 0) {
+      const dpr = window.devicePixelRatio || 1
+      const scale = this._fit_scale(cw, ch, this._page_w, this._page_h)
+      this._model.set_display_scale(scale * dpr)
+    }
     this._notify()
   }
 

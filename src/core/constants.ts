@@ -1,9 +1,14 @@
-// Domain constants — single source of truth (spec §18).
+// Domain constants — single source of truth (spec-web §17).
 // UI-only tunables live in ui/constants.ts.
 
 // DPI / raster
-export const SRC_DPI    = 150.0   // scanned-mode source render DPI
-export const NORMAL_DPI = 150.0   // normal-mode preview/export render DPI (crisper text on HiDPI)
+export const SRC_DPI    = 150.0   // scanned-mode source render DPI — fixed, never display-scaled
+                                   // (the scan pipeline's perf budgets are tuned against it, §16)
+export const NORMAL_DPI = 150.0   // normal-mode baseline/minimum render DPI
+// Normal-mode preview re-renders sharper than NORMAL_DPI when the canvas' actual display size
+// needs it (spec-web §2) — never below NORMAL_DPI, never above this cap (bounds memory/CPU on an
+// extreme window size or devicePixelRatio).
+export const NORMAL_DISPLAY_DPI_MAX = 450.0
 export const CACHE_WINDOW = 4   // max pages in each LRU raster cache
 
 // Crop geometry (canvas-unit / page-unit tunables)
