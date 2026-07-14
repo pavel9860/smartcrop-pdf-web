@@ -1,71 +1,20 @@
 CLAUDE.md — SmartCrop PDF Web
 
-Current state (read this before anything else)
-HEAD is GREEN, verified 2026-07-10 (T3 export-sizing/output-settings pass, after the T2 same-size
-v3/v2-restore pass — see 99_FOUND_ISSUES.txt item 7 for that design history/reversal): `tsc
---noEmit` is 0 errors. `vitest run`: 374/377 passing, 3 failures, all in
-`tests/core/detect_union.test.ts` (a union-rebuild-after-rotate/delete regression, and a
-NORMAL-mode text-layer-vs-ink-path detection contradiction; both unresolved, see
-99_FOUND_ISSUES.txt item 2). `eslint src tests` is clean. `vite build` succeeds. `playwright test`:
-14/14 passing (chromium + firefox; smoke/crop_split/committed_window). T3 verified export sizing
-is paper-based (C2, locked by a new `tests/pdf/loader.test.ts` test against the real
-`render_output_image` math, not just the mock target_long_px parameter); added `PAPER_SIZES`
-Custom entry (`settings.custom_paper_in`, reveals like Custom DPI via the new shared
-`ui/dom.ts:syncCustomReveal()`); set `UNDO_DEPTH_OPTIONS = [1,2,4,8]` (was `[2,4,10,20,50]`);
-removed the dead `Output folder` setting end to end (T2's continuation task). Red still: vitest run
---coverage (ui/ and pdf/ below threshold on some files) — not touched this pass.
-Do not trust a "gate green" claim in an old commit message without re-running it —
-commit 9cf743d claimed "344 unit + 7 e2e green" while already shipping the tsc-breaking import
-above; every prior doc test-count (319/319, 349/349) inherited that false claim uncorrected.
-Do not trust any older ARCHITECTURE.md/spec-web claim not yet corrected against this —
-verify every "Implemented"/"verified" row yourself before relying on it, and correct the doc as
-part of the work, not as a followup. Dewarp specifically is NOT a stub: full two-stage ONNX
-pipeline, verified end-to-end against the actual model files (io names/shapes/dtypes match,
-output is non-identity), wired button→AppModel→ensure_onnx→apply_dewarp. Any doc still calling
-it a "no-op" is stale.
-
-UI ground truth
-docs/app_design_screenshots/ contains the desktop app's screens across its different mode
-workflows. This — not spec prose, not memory of the desktop app — is the ground truth for UI
-parity. Before touching any file in src/ui/, read every screenshot in that folder relevant to
-the panel/mode being changed. If a needed state isn't covered there, stop and ask; do not infer
-desktop layout, icon set, or control grouping from spec-web's prose description alone.
-
-Environment constraints (mechanical — verified this session, not hypothesis)
-This repo, as connected, sits on a mount where cross-boundary writes are not atomic: git's
-`.git/index.lock` cannot be removed (`unlink` forbidden), and rewriting a file in place can
-truncate it mid-write (this has hit package.json, vite.config.ts, and tests output files —
-symptom: `.fuse_hidden*` orphan files in the tree, or a file ending mid-token/mid-comment).
-Consequence: git commits cannot run from a sandboxed session on this mount, and any file write
-must be verified (re-read after write) before being trusted.
-Fix, apply once: operate on a native Linux path (WSL home, not a /mnt/c-style path) for any
-session that needs to commit. Once on a native path, commits should happen automatically after
-every gate-passing step — this section exists so that requirement doesn't collide with the mount
-bug again. If still on the Windows-mounted path, do not assume a write succeeded; re-view the
-file after writing, and do not attempt git add/commit — hand those back to the user with the
-exact files changed.
-`node_modules/.bin/*` (tsc, eslint) can lose their executable bit on this mount — `npx tsc`/
-`npx eslint` then fail (`Permission denied`, or eslint silently falls back to a stray global
-install missing the flat config). Verified 2026-07-10. Workaround: `node node_modules/typescript/
-bin/tsc` / `node node_modules/eslint/bin/eslint.js` (same args). Fix the bit with `chmod +x` if
-the write survives the mount; don't assume `npx <tool>` failing means the tool itself is broken.
 
 Source of truth
-docs/SmartCrop_PDF_Specification.md is the canonical, platform-agnostic behavioral contract —
-copied verbatim from the desktop repo, unchanged for web, and FROZEN — never edit it.
-docs/SmartCrop_PDF_Specification_Web.md is the web-only supplement (every point where the browser
-forces a real deviation, plus browser-only behavior the desktop has no equivalent of). Code
-conforms to both, not the reverse. Any behavior change requires updating the relevant spec FIRST,
-then tests, then code — in that order. ARCHITECTURE.md is mechanism only (module layout, build/
+docs/SmartCrop_PDF_Specification_Web.md is the behaviour contract.
+Any behavior change requires updating the relevant spec FIRST, then tests, then code — in that order.
+ARCHITECTURE.md is mechanism only (module layout, build/
 test/deploy) — if a fact describes what the user experiences, it belongs in a spec doc, not there.
-docs/app_design_screenshots/ is the UI ground truth (see above) — it does not replace spec-web,
+docs/app_design_screenshots/ is the UI reference — it does not replace spec-web,
 it constrains how spec-web's described controls are laid out and styled.
 
 Gates — must pass before any step is marked done
 tsc --noEmit && eslint src && vitest run --coverage --reporter=verbose && playwright test
 All four in one line, plus `vite build` succeeding and producing a working dist/. If any fails,
 the step is not done — do not update the ARCHITECTURE.md status table to "Implemented" until it
-passes.
+passes. A "gate green" claim in a commit message or doc is not evidence — re-run the gate yourself
+before trusting a done status; do not propagate a pass/fail count you have not personally run.
 
 Hard rules (mechanical — not principles)
 core/ never imports window, document, Worker, pdfjs-dist, or pdf-lib — enforced by
@@ -76,50 +25,68 @@ private fields (model._document, model._drag, etc.).
 No function over 30 lines without a why-comment explaining why it cannot be split.
 No magic numbers inline — domain tunables in src/core/constants.ts, presentation tunables in
 src/ui/constants.ts.
-render_output_image() in pdf/loader.ts is the ONE image path for preview and export (WYSIWYG,
-spec §8.3/§22.12). Never add a second rendering path.
-Only export.worker.ts is a real Web Worker. PDF.js (loader.ts) and OpenCV.js (imaging.ts) run on
-the main thread — this was a deliberate reversal after both proved incompatible with dedicated
-Worker context; see ARCHITECTURE.md §7a before "fixing" this back to a worker.
+No god-like objects or files more then 600 lines of code.
+render_output_image() in pdf/loader.ts is the ONE raster image path for preview (both modes) and
+for export whenever export rasterizes: SCANNED mode always, NORMAL mode for JPG/PNG/TIFF. It is
+NOT used for NORMAL-mode PDF export, which produces no raster at all — see export_pdf_vector below.
+Never add a second raster path; a second non-raster output path (vector PDF assembly) is the one
+documented exception.
+Only export.worker.ts is a real Web Worker. PDF.js (loader.ts), OpenCV.js (imaging.ts), and
+pdf-lib's vector PDF assembly (loader.ts::export_pdf_vector) run on the main thread — the source
+PDFDocumentProxy objects export_pdf_vector needs cannot cross to a Worker, and none of the three
+involve image-codec work of the kind export.worker.ts exists to offload. PDF.js/OpenCV.js were a
+deliberate reversal after both proved incompatible with dedicated Worker context; see
+ARCHITECTURE.md §7a before "fixing" any of this back to a worker.
 ONNX execution providers: ['webgpu','wasm'], gated on navigator.gpu, ort.env.wasm.numThreads = 1.
 No SharedArrayBuffer dependency — required because GitHub Pages cannot set COOP/COEP headers.
 Do not reintroduce threaded WASM without solving the Pages header constraint first.
-TIFF export IS supported (added 2026-07-03) via a hand-rolled baseline encoder
+TIFF export IS supported via a hand-rolled baseline encoder
 (src/workers/tiff.ts, uncompressed 8-bit RGB single strip). Image exports (JPG/PNG/TIFF) deliver
 ONE .zip (fflate, in export.worker.ts), not N loose files — never reintroduce per-page loose
 downloads or a "TIFF excluded" claim.
-Known desktop bug, already fixed there, must not be reintroduced here: split=1, left-click-drag
-still magnifying the page, root cause was self._scale. Verify canvas_view.ts's drag/scale handling
-carries the equivalent fix before treating split=1 drag as working.
-confirm_overwrite (spec §13) depends on the File System Access API, which is Chromium-only. Do
-not report this control as working without stating the Safari/Firefox behavior explicitly.
+DocumentState's undoable field set is exactly 8 fields (document_state.ts) — applied, crop_rects,
+rotation, processed, offsets, dewarp_on, filter_mode, filter_strength. detect_cache/union/
+auto_active/drawn are non-undoable AppModel fields, not DocumentState fields — do not add them
+back to DocumentState, and do not assume Undo reverts them.
 GitHub Pages deploy risk: Vite `base` path misconfiguration and WASM asset MIME/header
 requirements (OpenCV.js, ONNX Runtime, §18) are known failure modes on GH Pages. A local build
 succeeding is not sufficient evidence the deploy will work — verify against the actual Pages
 output, not just dist/.
 
 Architecture
-See ARCHITECTURE.md for the file map, dependency graph, and state split. Target layout is
-src/core (pure TS), src/pdf (PDF.js + pdf-lib adapters, main thread), src/workers (export.worker.ts
+See ARCHITECTURE.md for the dependency graph, worker/build/deploy mechanism, and state split;
+docs/smartcrop_web_function_map.md for the per-file function/line-number map — that file is the
+canonical function reference, do not duplicate its tables here or in ARCHITECTURE.md.
+Target layout is src/core (pure TS), src/pdf (PDF.js + pdf-lib adapters, main thread), src/workers (export.worker.ts
 only), src/ui (DOM/canvas/panels), tests/{core,ui,e2e,fixtures}.
 
 AppModel public interface, ViewSnapshot fields, BatchJob protocol
 Full signatures live in ARCHITECTURE.md — §5 (AppModel), §5a (ViewSnapshot, incl. crop_origin/
-is_loading), §6 (BatchJob) — and are kept current there, not duplicated here: this block's own
-copy drifted stale twice (missing set_paper_size/set_custom_dpi/paper_size/custom_dpi/
-document_name; a phantom is_finished() on BatchJob that doesn't exist in src/core/batch.ts).
-In Step 4+ sessions: read ARCHITECTURE.md §5 instead of all of core/model.ts.
+is_loading), §6 (BatchJob) — kept current there, not duplicated here. Read ARCHITECTURE.md §5
+instead of loading all of core/model.ts into a session.
 
 Process
 Read CLAUDE.md + the ≤6 files actually needed for the task. Never load the whole codebase into a
-single session.
+single session. Prefer even read parts of files if possible. Never rewrite whole files, just necessary parts.
+Root-cause fixes only. No monkeypatching, no papering over a symptom to make a test/gate pass.
+Prefer the smallest correct change over rewriting large parts of the code.
+Reuse, don't duplicate: a bug fixed in NORMAL mode but left broken in SCANNED, or three near-copies
+of a split-count-conditional path, is a defect even if each copy individually works. Unify shared
+logic behind one code path; if a real special-case is unavoidable, say why in a comment. If you spot
+a monkeypatch, duplication, over-complication, or non-senior solution while in a file for an
+unrelated reason, flag it to the user rather than silently fixing it outside the current task's scope
+(or silently leaving it).
+Ask before guessing on any real ambiguity or spec conflict — a wrong guess compounds across
+everything built on top of it; a clarifying question costs one turn.
 Bug reports: diagnose root cause before fixing when the cause is ambiguous between two plausible
 sites (e.g. core/ math vs pdf/ adapter vs ui/ event handling).
-After any fix: re-verify all §22 invariants (spec doc), not just the one related to the bug.
+After any fix: re-verify all §21 acceptance invariants (spec-web.md), not just the one related to
+the bug.
 Spec violations and correctness issues flagged directly — no softening or hedging.
 State confidence explicitly on non-obvious diagnoses: [high]/[med]/[low].
-Do not rewrite spec or ARCHITECTURE.md prose unrelated to the change, except the status table when
-its claim is verified false. Never edit SmartCrop_PDF_Specification.md (frozen).
+Do not rewrite spec or ARCHITECTURE.md prose unrelated to the change, except a status claim verified
+false. Verify ARCHITECTURE.md/spec-web "Implemented"/"verified" claims against the actual code
+before relying on them; correct the doc as part of the work, not as a followup.
 New behaviour → unit test for the pure part first (tests/core/); e2e test in tests/e2e/ if it
 spans DOM/canvas/worker boundaries.
 Commit after every gate-passing step, from a native filesystem session (see Environment

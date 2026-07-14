@@ -1,70 +1,22 @@
 # SmartCrop PDF Web — Architecture
 
-Status: **implemented (beta), architecture under active correction**. The prior "approved,
-pre-implementation" status line was stale — `src/` is a working ~4,200-line app, not a design
-sketch, and this document is being brought back in line with the real code rather than the other
-way around.
+Status: **implemented (beta), architecture under active correction.**
 
-**Document split (2026-07-01):** behavior and mechanism used to be mixed in this one file. They
-are now three documents, mirroring the desktop repo's CLAUDE.md/spec split:
-- `docs/SmartCrop_PDF_Specification.md` — the canonical, platform-agnostic behavioral contract
-  (§1–§22), copied verbatim from the desktop repo. Unchanged for the web.
-- `docs/SmartCrop_PDF_Specification_Web.md` — web-specific behavioral supplement: every point
-  where the browser platform forces a real deviation from that contract (§W2), plus browser-only
-  behavior the desktop has no equivalent of at all (layout, shortcuts, file I/O — §W3–§W7).
+**Document split:** behavior and mechanism are two documents.
+- `docs/SmartCrop_PDF_Specification_Web.md` — behavioral contract.
 - **This file** — mechanism only: module layout, PDF/imaging stack, worker model, state ownership,
-  build/test/deploy. If a fact describes what the user experiences, it belongs in one of the two
-  spec documents above, not here — file it there instead of restating it in this file.
-
-**Implementation status at a glance** (kept current — update this table, not just prose, when
-something changes):
-
-| Area | Status |
-|---|---|
-| Core state/logic (`src/core/*.ts`) | Implemented, 1:1 with desktop `AppModel`/`DocumentState`/`History`/`Settings`/`DragState`/`BatchJob` (§5, §10). `model.ts` is covered by `tests/core/model*.ts` + gesture/workflow suites (every public method; a real `delete_pages()` regression was caught during authoring). Coverage status: see the Test suite row below. |
-| PDF load/classify/render (`src/pdf/loader.ts`) | Implemented — one adapter class, runs on the **main thread**, not `render.worker.ts` (that file no longer exists — see §7a) |
-| OpenCV.js scan processing (`src/pdf/imaging.ts`) | Implemented — also main thread, not `imaging.worker.ts` (deleted — see §7a). Detect/Auto-detect/Crop/B-W/Sharpen all verified working via headless-browser E2E. |
-| PDF glyph shaping (CJK/Bengali/Devanagari/standard-14 fonts) | Implemented — `cMapUrl`/`standardFontDataUrl`/`useWorkerFetch` wired into `getDocument()`, resources served via `vite-plugin-static-copy`. Previously garbled without this. |
-| Rotate | Implemented — rotates the actual raster (`rotate_bitmap_cw` in loader.ts) and the page-unit coordinate frame (`AppModel._page_dims`, §5a). Previously a state-only no-op: `document.rotation` was written but never read by the render path, so the button visibly did nothing. Fixed and E2E-verified. |
-| Detection + B/W filter (real Sauvola) | Implemented (§9) — was `cv.adaptiveThreshold` approximation, now a faithful box-filter Sauvola port |
-| Sharpen filter | Implemented, strength drives denoise + unsharp (§9) |
-| Dewarp (docuwarp/ONNX mesh unwarp) | Implemented (2026-07-03) — full two-stage UVDoc pipeline in `imaging.ts` (`ensure_onnx` + `apply_dewarp`), EPs `['webgpu','wasm']` gated on `navigator.gpu`, `numThreads=1`, no SharedArrayBuffer. Verified against the actual model files (io names/shapes/dtypes, non-identity output); WebGPU-on-real-GPU still unconfirmed (§W2 row 1) |
-| DPI-scaled kernels, 2× supersample refinement | Not ported (minor fidelity residuals, §9) |
-| Multi-file PDF documents | Fixed (2026-07-03) — `loader.ts` holds `_pdfs[]` + per-output-page `_pages[]` `PageSource` map; pages combine in selection order. Unit-tested (`tests/pdf/loader.test.ts`) |
-| Mixed PDF + image documents | Fixed (2026-07-03) — image pages carry `{kind:'image', blob}` sources decoded on demand via the same `_pages[]` map. Unit-tested |
-| Export (PDF single file; JPG/PNG/TIFF → single `.zip`) | Implemented (§8.4, §13). TIFF via `workers/tiff.ts` (baseline RGB); image formats zipped in `export.worker.ts` via `fflate`. |
-| Settings panel (spec §15: Appearance/Output/Behaviour/Scan) | Implemented (§2, `settings_view.ts`) |
-| Help panel (spec §16: Contents card + sections) | Implemented (§2, `help_view.ts`) |
-| Output Quality / Export as two cards (matches desktop `panels.py`, not the merged card an earlier draft shipped) | Implemented |
-| `confirm_overwrite` setting | **Control removed (2026-07-04)** — the browser download path cannot detect an overwrite (no File System Access write), so the inert Settings checkbox was removed rather than shown with no effect (§W2 row 6) |
-| Test suite (`tests/`) | **GREEN, verified 2026-07-10 (T3 pass)**: `tsc --noEmit` — 0 errors. `vitest run` — 374/377 passing, 377 total across `tests/core/` (20 files, incl. `detect_union.test.ts`), `tests/ui/` (jsdom, every panel/view), `tests/pdf/loader.test.ts`, `tests/architecture.test.ts`; 3 failures, all in `detect_union.test.ts` (union-rebuild-after-rotate/delete regression + a NORMAL-mode text-layer-vs-ink-path detection contradiction, both unresolved — 99_FOUND_ISSUES.txt item 2). `eslint src tests` clean. `vite build` succeeds. Playwright e2e re-run this pass: 14/14 passing (chromium + firefox; smoke, crop_split, committed_window). Prior "319/344/349 green" figures in commit messages and older doc revisions predate this check and were not actually verified — do not cite them. Coverage gate (separate, not re-run): 90% on `src/core/**`, 80% global lines, with `imaging.ts`/`canvas_view.ts`/`app.ts`/workers excluded as e2e-covered (vitest.config.ts) — some `ui/`/`pdf/` files reported below threshold as of the last coverage run, gap open. |
+  build/test/deploy. If a fact describes what the user experiences, it belongs in the spec document
+  above, not here. `docs/smartcrop_web_function_map.md` is the third: the canonical per-file
+  function/line-number reference — don't duplicate its tables here.
 
 Where this document and the running code disagree, that is a bug in the document (or a
 regression in the code) — file it as such, not as an acceptable drift.
-
-## 1. Why TypeScript + Vanilla DOM, not a Python port
-
-Desktop `core/` is PyMuPDF + OpenCV + scikit-image + docuwarp/ONNX. No Python→JS transpilation
-produces maintainable code. The web port re-implements the same spec using web-native equivalents:
-
-| Desktop | Web equivalent |
-|---|---|
-| PyMuPDF (`fitz`) — read + render | PDF.js (`pdfjs-dist`) |
-| PyMuPDF — write output PDF | pdf-lib |
-| PIL / NumPy ImageData | `ImageBitmap` / `ImageData` via Canvas API |
-| OpenCV + scikit-image (Sauvola, components, sharpen) | OpenCV.js WASM, lazy-loaded in worker |
-| docuwarp + ONNX Runtime | ONNX Runtime Web + model, lazy-loaded in worker |
-| `root.after()` cooperative batch loop | Web Worker + `postMessage` per page |
-| CustomTkinter + `tk.Canvas` | HTML/CSS + `<canvas>` (vanilla TS, zero framework runtime) |
-
-The spec-defined state model, geometry, parsing, error taxonomy and batch protocol map 1:1 from
-Python to TypeScript — those modules are re-implemented verbatim, not framework-wrapped.
 
 **Technology decisions (locked):**
 - Language: TypeScript (strict mode, zero `any`)
 - UI: Vanilla TS + DOM APIs, no framework runtime
 - Build: Vite 5
-- Image processing: OpenCV.js WASM (lazy-loaded; full parity with desktop Sauvola pipeline)
+- Image processing: OpenCV.js WASM (lazy-loaded; a faithful box-filter Sauvola port — see §9)
 - Dewarp: ONNX Runtime Web + docuwarp model (lazy-loaded; cached in IndexedDB after first load)
 - Tests: Vitest (unit) + Playwright (e2e)
 - Deployment: GitHub Pages (static) + Cloudflare CDN
@@ -88,24 +40,25 @@ C:/DOCS/Code/SmartCroPDF-Web/
     core/                   Framework-agnostic. Zero DOM, zero Worker API, zero pdf-lib, zero PDF.js.
                             Enforced by architecture test (§7). Pure TypeScript.
 
-      constants.ts          All domain tunables — mirror of Python core/constants.py:
-                              SRC_DPI=200, NORMAL_DPI=150, CACHE_WINDOW=16,
-                              HANDLE_R=10, HANDLE_SLACK=6, CANVAS_MARGIN=40, MIN_RECT=5,
+      constants.ts          All domain tunables:
+                              SRC_DPI=150, NORMAL_DPI=150, CACHE_WINDOW=4,
+                              HANDLE_R=10, HANDLE_SLACK=6, CANVAS_MARGIN=0, MIN_RECT=5,
                               OFFSET_LIMIT=100, MODE_TEXT_MIN=8, DETECT_MAX_PX=1400,
                               BORDER_FRAC=0.02, MIN_COMP_FRAC=2.5e-4, FULL_PAGE_FRAC=0.97,
                               DESKEW_MAX_DEG=15, CLEAN_AMOUNT={1:0.6, 2:1.1, 3:1.6},
-                              SYNTH_PAGES=24, SYNTH_W=595, SYNTH_H=842 (+ SYNTH_BG_COLOR etc. —
+                              SYNTH_PAGES=1, SYNTH_W=595, SYNTH_H=842 (+ SYNTH_BG_COLOR etc. —
                               synthetic placeholder styling lives here, not ui/constants.ts,
                               because pdf/loader.ts cannot import ui/ — see §4 dependency graph),
                               DPI_PRESETS, EXPORT_FORMATS, IMAGE_LOAD_EXT,
                               PAPER_SIZES (A2-A6), CUSTOM_DPI_PRESET, DEFAULT_CUSTOM_DPI,
                               CUSTOM_DPI_MIN/MAX, CUSTOM_PAPER_PRESET, DEFAULT_CUSTOM_PAPER_IN,
-                              CUSTOM_PAPER_MIN/MAX (paper-based export sizing, §W2 row 8),
+                              CUSTOM_PAPER_MIN/MAX (paper-based export sizing, spec-web §10.4),
                               FILTER_STRENGTH_MIN/MAX, UNDO_DEPTH_MIN/MAX, MAX_SPLIT,
-                              CC_CONNECTIVITY, DETECT_THRESHOLD_BLOCK/C, BG_KERNEL_SIZE,
-                              BW_THRESHOLD_C, BW_BLOCK_SIZE, SHARPEN_BILATERAL_D/SIGMA_COLOR/SPACE
-                              (the last group are coarse adaptiveThreshold tuning values, not the
-                              desktop's true Sauvola binarization — see §9 fidelity note)
+                              CC_CONNECTIVITY, SAUVOLA_R, SAUVOLA_WINDOW, BG_KERNEL_SIZE,
+                              BG_DOWNSCALE, BW_STRENGTH (k + min-despeckle-area per level 1-3),
+                              SHARPEN_STRENGTH (bilateral d/sigmaColor/sigmaSpace + unsharp blur
+                              sigma per level), SAUVOLA_DPI_REFERENCE/SCALE_MIN/MAX — real
+                              box-filter Sauvola parameters (§9), not adaptiveThreshold tuning
 
       enums.ts              Mode (NORMAL|SCANNED), FilterMode (NONE|BW|SHARPEN),
                               PagesMode (ALL|ODD|EVEN|SELECT) — string-backed enums
@@ -114,14 +67,17 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               InvalidSplitError, DeleteAllPagesError, DocumentLoadError,
                               ImagingError, MissingDependencyError — same taxonomy as Python
 
-      geometry.ts           Box type, hit_handle(), auto_crop_rect(), drag_resize(),
-                              drag_move(), union_box(), rotate_box_cw(), clamp_to_page(),
-                              keep_ratio_normalise(), keep_ratio_anchored() (§W2 row 9, now
-                              ratio-preserving at the page wall for every anchor case),
-                              edge_deltas() / apply_edge_deltas() / clamp_edge_deltas() (same-size
-                              RESIZE, restored+refined 2026-07-10 after a same-day v3 attempt broke
-                              row/column alignment — see 99_FOUND_ISSUES.txt item 7 — gated to
-                              exclude `move`, §W2 row 10) — pure math, no I/O.
+      geometry.ts           Box type, HandleId; hit_handle(), point_in_box(), clamp_box_shift(),
+                              clamp_box_drag(), apply_handle_drag(), auto_crop_rect(),
+                              offsets_from_rect(), detection_union(), union_box(),
+                              keep_ratio_normalise(), keep_ratio_anchored() (ratio-preserving at
+                              the page wall for every anchor case, spec-web §6.7), rotate_box_cw(),
+                              rotate_box_ccw() (its algebraic inverse), to_native_frame()
+                              (current display frame → source's native rotation=0 frame, used by
+                              vector export, spec-web §10.3), edge_deltas() / apply_edge_deltas() /
+                              clamp_edge_deltas() (same-size RESIZE propagation, gated to exclude
+                              `move`, spec-web §6.6), split_rects_grid(), reindex_map(),
+                              box_width()/box_height()/box_area() — pure math, no I/O.
 
       parsing.ts            resolve_pages(pattern, total, mode) → number[]
                               All/Odd/Even + pattern: ranges, slices (1:4, ::2, 10:), mixed
@@ -132,7 +88,10 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               — committed-split pages expand to N views, same math as Python
 
       document_state.ts     Offsets (frozen), PageProcessIntent (frozen), DocumentState
-                              (the 11 undoable fields + snapshot()), identical to Python
+                              (8 undoable fields: applied, crop_rects, rotation, processed,
+                              offsets, dewarp_on, filter_mode, filter_strength + snapshot()).
+                              detect_cache/union/auto_active/drawn are non-undoable AppModel
+                              fields, not DocumentState fields (spec-web §12).
 
       settings.ts           Settings dataclass — compress_preset, custom_dpi, paper_size,
                               custom_paper_in, output_colours, export_format,
@@ -140,7 +99,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
 
       history.ts            History — bounded undo/redo of DocumentState snapshots, same interface
 
-      drag.ts               AutoDrag | SplitDrag | DrawDrag | CropEditDrag — frozen tagged union
+      drag.ts               AutoDrag | SplitDrag | DrawDrag | DrawnDrag — frozen tagged union
 
       batch.ts              BatchJob interface + BatchResult (Ok|Cancelled|Failed)
                               Web version: result() returns Promise<BatchResult>; progress via
@@ -152,18 +111,19 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               async adapters (see §5).
 
     workers/                Web Workers — each a Vite `?worker` import, lazy-initialized.
-                            **Only one worker remains: export.worker.ts.** `render.worker.ts` and
-                            `imaging.worker.ts` were deleted this session after both proved
-                            fundamentally incompatible with running inside a dedicated Worker —
-                            see §7a for the full root-cause writeup and why pdf.js and OpenCV.js
-                            now run on the main thread instead (in `pdf/loader.ts` and
-                            `pdf/imaging.ts` respectively).
+                            Only one worker: export.worker.ts. pdf.js and OpenCV.js run on the
+                            main thread instead (in `pdf/loader.ts` and `pdf/imaging.ts`
+                            respectively) — see §7a for why.
 
-      export.worker.ts      pdf-lib assembly — receives cropped ImageBitmap[] per output page,
-                              encodes to JPEG bytes (quality by compress preset), builds PDF.
-                              Also handles JPG/PNG blob output per page.
-                              Initialized on first export(). pdf-lib has zero `window`/`document`
-                              references, so it's Worker-safe (unlike pdf.js/OpenCV.js — §7a).
+      export.worker.ts      Raster export assembly — receives cropped ImageBitmap[] per output
+                              page. PDF: encodes each to JPEG, builds a PDF via pdf-lib. JPG/PNG/
+                              TIFF: encodes each page (TIFF via `workers/tiff.ts`'s hand-rolled
+                              encoder) and packs all pages into one `.zip` (`fflate`). Used for
+                              SCANNED-mode export (any format) and NORMAL-mode JPG/PNG/TIFF export.
+                              NOT used for NORMAL-mode PDF export — see `loader.ts::export_pdf_vector`
+                              below, which runs on the main thread instead (spec-web §10.3).
+                              pdf-lib has zero `window`/`document` references, so it's Worker-safe
+                              (unlike pdf.js/OpenCV.js — §7a).
 
     pdf/                    PDF.js + OpenCV.js adapters, running on the MAIN thread (§7a). May use
                             DOM (File, ArrayBuffer, Blob, URL, OffscreenCanvas) and import workers/.
@@ -180,19 +140,35 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               - get_source_image(page_idx, dpi, rotation) → `page.render()` onto
                                 an OffscreenCanvas, then `rotate_bitmap_cw()` bakes the page's
                                 current rotation angle into the pixels (§5a) before returning.
-                              - get_work_image(page_idx, intent, supersample, rotation) → source
-                                image unchanged if intent has no dewarp/filter, else
+                              - get_work_image(source: ImageBitmap, intent, supersample) → source
+                                bitmap unchanged if intent has no dewarp/filter, else
                                 `pdf/imaging.ts`'s `process_page_async()` (same thread, no RPC).
+                                Takes the already-rendered SOURCE bitmap, not a page index — each
+                                page is rasterized once, by get_source_image, never twice.
                               - render_output_image(src, box, page_w, page_h, target_dpi,
                                 greyscale) → Promise<ImageBitmap> — the WYSIWYG function (§8.3),
-                                used by both canvas preview and export. Crops to box (page-unit →
+                                used by both canvas preview and export whenever export rasterizes
+                                (SCANNED any format; NORMAL JPG/PNG/TIFF). Crops to box (page-unit →
                                 source-pixel via `src.width / page_w`), resamples to target_dpi
                                 (null = original), optionally desaturates. Runs on the main thread
                                 via OffscreenCanvas.
                               - detect_content_box(img, page_w, page_h, mode) →
-                                `pdf/imaging.ts`'s `detect_content_async()` (same thread).
+                                `pdf/imaging.ts`'s `detect_content_async()` (same thread). SCANNED
+                                only — see detect_text_box below for NORMAL.
+                              - detect_text_box(page_idx) → Box | null — NORMAL-mode fast path:
+                                unions text-run bounding boxes straight from
+                                `page.getTextContent()`, no rasterization, no OpenCV. Returns null
+                                for a page with no usable text (image page, or a degenerate box);
+                                AppModel records no detected box for that page rather than
+                                rasterizing (spec-web §5).
                               - export_pdf(pages) / export_images(pages, format) → export.worker,
                                 lazy-initialised on first export (the one real Worker left).
+                              - export_pdf_vector(pages) → Promise<Uint8Array> — NORMAL-mode PDF
+                                export (spec-web §10.3): pdf-lib `embedPage`/`setRotation`
+                                against the original page content, main thread, no worker, no
+                                rasterization. One pdf-lib parse per unique source PDF
+                                (`PDFDocumentProxy.getData()` → `PDFDocument.load()`), cached across
+                                all of that file's exported pages/boxes in one export call.
                               - make_synth_page(idx, w, h) — synthetic placeholder (§14), drawn
                                 directly with Canvas API, no worker involved.
 
@@ -202,10 +178,11 @@ C:/DOCS/Code/SmartCroPDF-Web/
 
     ui/                     Presentation layer. Imports @core/* and @pdf/*. core/ never imports ui/.
       constants.ts          UI-only tunables: PANEL_WIDTH=320, DETAIL_PANEL_WIDTH=380,
-                              CANVAS_MARGIN=40 (same as core), STATUS_IDLE_MS=2400,
-                              SCALE_THROTTLE_MS=80, FONT_SIZE_DEFAULT=15, THEMES,
-                              canvas overlay drawing tunables (dash patterns, line widths,
-                              split-badge scale, status-text offsets — see canvas_view.ts)
+                              STATUS_IDLE_MS=2400, SCALE_THROTTLE_MS=80, FONT_SIZE_DEFAULT=15,
+                              THEMES, canvas overlay drawing tunables (dash patterns, line widths,
+                              split-badge scale, status-text offsets — see canvas_view.ts).
+                              CANVAS_MARGIN lives in core/constants.ts only, imported directly by
+                              canvas_view.ts — not redefined here.
 
       dom.ts                 requireEl<E>(root, selector) — throws instead of a silent null;
                               replaces `querySelector(...)!` non-null assertions across every
@@ -221,12 +198,12 @@ C:/DOCS/Code/SmartCroPDF-Web/
       canvas_view.ts        <canvas> element management:
                               - paint(snapshot: ViewSnapshot) — draws page bitmap + overlay boxes;
                                 the only text is the bottom-right cursor DOM overlay — no status
-                                element, nothing painted on the raster (spec-web §W3, inv 32)
+                                element, nothing painted on the raster (spec-web §3, inv 32)
                               - Pointer events (pointerdown/move/up) → page-unit coords →
                                 model.begin_drag / update_drag / end_drag / cancel_drag
-                              - Wheel → next/prev page (spec §5)
+                              - Wheel → next/prev page (spec-web §2)
                               - Resize observer → recompute scale, repaint
-                              - Esc + right-click → cancel_drag() (spec §9.3)
+                              - Esc + right-click → cancel_drag() (spec-web §6.3)
 
       overlay.ts            Progress overlay — a <div> centred over the canvas, shown only when
                               batch total > 1. Displays title, determinate bar, page counter, Cancel.
@@ -249,16 +226,15 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               Dewarp toggle; B/W / Sharpen buttons (mutually exclusive highlight);
                               Strength 1/2/3 buttons (always selectable).
 
-        output_panel.ts     "Output Quality" + "Export" cards — two separate cards, matching the
-                              desktop's actual `_build_compress`/`_build_export` split
-                              (`ui/panels.py`, titled "Output Quality" there — the spec prose's
-                              literal "Compress Document" title is stale relative to the app;
-                              this doc follows the app, per project convention).
-                              DPI preset dropdown; Output colours dropdown.
-                              Export split button (main = current format; ▾ = PDF/JPG/PNG picker).
+        output_panel.ts     "Output Quality" + "Export" cards split
+                              (`ui/panels.py`, titled "Output Quality" there).
+                              DPI preset dropdown (+ Custom… numeric field) and Output colours
+                              dropdown, hidden/disabled for a NORMAL document exporting to PDF
+                              (spec-web §3, §10.3). Export button + adjacent format
+                              `<select>` (PDF/JPG/PNG/TIFF), always visible.
 
-        nav_bar.ts          Pinned bottom bar: Undo / Redo / Reset (3 equal buttons);
-                              page nav < [n] / total >.
+        nav_bar.ts          Pinned bottom bar, three rows: Settings/Help buttons; Undo/Redo/Reset
+                              (3 equal buttons); page nav < [n] / total >.
                               Always visible, outside scroll, one instance only.
 
       detail_panel.ts       The THIRD column — slides in between left sidebar and canvas when
@@ -268,65 +244,54 @@ C:/DOCS/Code/SmartCroPDF-Web/
 
       settings_view.ts      Settings content rendered inside detail_panel:
                               Appearance (colour scheme, font size, zoom/UI scale);
-                              Output (compress preset, default format, output folder, postfix);
-                              Behaviour (confirm overwrite, remember folder, undo depth);
+                              Output (postfix, Custom DPI, paper size + Custom paper height);
+                              Behaviour (remember last folder, undo/redo depth);
                               Scan (dewarp supersample).
-                              Theme/font-size/zoom/confirm-overwrite/remember-folder go through
-                              AppController's UIConfig setters (`set_theme`, `set_font_size`,
-                              `zoom`, `set_confirm_overwrite`, `set_remember_folder` — §10);
-                              compress preset, default format, output postfix, undo depth
-                              and dewarp supersample are domain `Settings` (§10) and go through
-                              `AppModel` setters directly (`set_compress_preset`,
-                              `set_output_postfix`, `set_undo_depth`,
-                              `set_dewarp_supersample`) — there is no single `apply_setting()`
-                              dispatcher; each field has its own typed setter on the owner that
-                              actually holds it (§5.2's `Settings`-vs-`UIConfig` split, unchanged
-                              from desktop). The sidebar's Output Quality card and Settings'
-                              "Compress to"/"Default format" write through the *same* AppModel
-                              setters, so either control always reflects the other (spec §15).
+                              Theme/font-size/zoom go through AppController's UIConfig setters
+                              (`set_theme`, `set_font_size`, `zoom`/`set_ui_scale`,
+                              `set_remember_folder` — §10); postfix, Custom DPI, paper size,
+                              undo depth and dewarp supersample are domain `Settings` (§10) and go
+                              through `AppModel` setters directly (`set_output_postfix`,
+                              `set_custom_dpi`, `set_paper_size`, `set_custom_paper_in`,
+                              `set_undo_depth`, `set_dewarp_supersample`) — there is no single
+                              `apply_setting()` dispatcher; each field has its own typed setter on
+                              the owner that actually holds it (§5.2's `Settings`-vs-`UIConfig`
+                              split). The sidebar's Output Quality card and
+                              Settings' Custom DPI write through the *same* AppModel setter
+                              (`set_custom_dpi`), so either control always reflects the other.
 
       help_view.ts          Help content rendered inside detail_panel:
                               Heading + one-liner; Contents card (buttons scroll to sections);
-                              Section blocks in spec §16 order.
+                              Section blocks in spec-web §14 order.
 
       theme.ts              CSS custom property injection for dark/light/system themes.
-                              Warm-gray chrome + blue accent — same palette as desktop (§19).
+                              Warm-gray chrome + blue accent(§19).
 
     main.ts                 Entry point: mounts AppController to #app, initialises synthetic doc.
 
   tests/
-    core/                   Pure TS unit tests — Vitest, no DOM, workers mocked as interfaces
-      geometry.test.ts
-      parsing.test.ts
-      history.test.ts
-      model.test.ts         AppModel via mock RendererAdapter; no real PDF.js
-      document_state.test.ts
-      viewmodel.test.ts
-      lru.test.ts
-
-    ui/                     DOM wiring tests — Vitest + jsdom or real browser (Playwright Component)
-      canvas_view.test.ts
-      panels.test.ts
-      detail_panel.test.ts
-
-    e2e/                    Playwright — full Chromium, real PDFs from tests/fixtures/
-      crop.spec.ts          Auto-detect, drag gestures, Apply, invariants §22.1–§22.5
-      scan.spec.ts          Filter, dewarp, idempotency (§22.3)
-      export.spec.ts        PDF/JPG/PNG output, WYSIWYG (§22.12), streaming (§22.21)
-      history.spec.ts       Undo/Redo/Reset (§22.4), keep-ratio (§22.19)
-      pages.spec.ts         Page selection, delete/reindex (§22.5), split views (§22.11)
-
-    fixtures/               Small real PDFs + images used by tests (committed, < 1 MB each)
+    core/                   Pure TS unit tests — Vitest, no DOM, workers mocked as interfaces.
+                              One file per core/ module, plus *_edges.test.ts / *_more.test.ts /
+                              *_gestures.test.ts siblings for branch coverage past the happy path.
+    ui/                     DOM wiring tests — Vitest + jsdom, one file per ui/ component/panel.
+    pdf/                    loader.ts/imaging.ts adapter tests (mocked PDF.js/OpenCV.js surfaces).
+    e2e/                    Playwright, real Chromium + Firefox, real PDFs from tests/assets/ —
+                              smoke, crop/split, committed-window, scan/SIMD flows.
+    perf/                   Standalone perf suite (npm run test:perf), not part of `vitest run`.
+    assets/                 Real PDFs + images used by tests (committed, small).
     architecture.test.ts    Import-graph guard: walk src/core/ TS files, fail if any import
                               contains 'window'|'document'|'Worker'|'pdfjs-dist'|'pdf-lib'
 ```
+
+The exact file list above rots on every test addition — `ls tests/core tests/ui tests/e2e` for the
+current, authoritative set rather than trusting an enumeration here.
 
 ---
 
 ## 3. Three-column layout — DOM/CSS mechanism
 
 Behavior (card order/content, detail-panel open/close semantics, status-text placement) is
-specified in `docs/SmartCrop_PDF_Specification_Web.md` §W3 — this section is the CSS/DOM
+specified in `docs/SmartCrop_PDF_Specification_Web.md` spec-web §3 — this section is the CSS/DOM
 implementation of that behavior only.
 
 **Left sidebar** — fixed width `PANEL_WIDTH` (320px), `<div>` with `overflow-y: auto`. Pinned
@@ -339,8 +304,8 @@ No modal, no overlay, no z-index stacking — the panel is a normal DOM sibling.
 
 **Status text** — one DOM overlay owned by `canvas_view.ts`, appended next to the canvas:
 `_coords_el` (`.canvas-coords`, bottom-right cursor read-out), updated on `pointermove`. There is
-no page/size status element (removed 2026-07-05, spec-web §W3); `ViewSnapshot.status` remains in
-the model but is not displayed. Nothing is painted onto the canvas bitmap (desktop inv 32).
+no page/size status element (spec-web §3); `ViewSnapshot.status` remains in
+the model but is not displayed. Nothing is painted onto the canvas bitmap.
 
 ---
 
@@ -389,7 +354,7 @@ The `rotation` parameter on `get_source_image`/`get_work_image` is the page's cu
 rotation angle (`document.rotation.get(p) ?? 0`, 0/90/180/270) — the adapter bakes it into the
 returned raster (§5a). It is NOT incremental; each call passes the full current angle and the
 adapter re-derives the raster from the unrotated source each time (caches are invalidated on
-rotate, matching desktop `model.py`'s `img.rotate(-ang, expand=True)` semantics).
+rotate)
 
 ---
 
@@ -405,7 +370,7 @@ class AppModel {
   async reset(): Promise<void>
   page_count(): number
   get has_document(): boolean
-  get document_name(): string         // sidebar doc-name card, spec-web §W3
+  get document_name(): string         // sidebar doc-name card, spec-web §3
 
   // navigation
   next_page(): void
@@ -467,7 +432,7 @@ class AppModel {
 
   // output settings (outside History — survive Undo)
   set_compress_preset(name: string): void
-  set_paper_size(name: string): void  // PAPER_SIZES key or CUSTOM_PAPER_PRESET, §W2 row 8
+  set_paper_size(name: string): void  // PAPER_SIZES key or CUSTOM_PAPER_PRESET, spec-web §10.4
   set_custom_paper_in(height_in: number): void  // paper height (in) when paper_size === 'Custom'
   set_custom_dpi(dpi: number): void   // shared by sidebar Output Quality card + Settings → Output
   set_output_colours(mode: string): void
@@ -478,50 +443,43 @@ class AppModel {
 
   // export
   suggested_export_name(): string
-  export(filename: string): BatchJob     // drives export.worker
+  export(filename: string): BatchJob     // drives export.worker (raster path) or
+                                          // loader.ts::export_pdf_vector (NORMAL+PDF, spec-web §10.3)
 }
 ```
 
 ### 5a. Rotation pipeline
 
 `rotate_pages()` mutates three things per page: the `document.rotation` angle map (+90° mod
-360), the committed/detected crop boxes (rotated 90° CW via `geometry.ts`'s `rotate_box_cw`,
-using the page's **effective dims from before this step** — see below), and invalidates that
+360), the committed crop boxes (`document.applied`) and cached detected box (`AppModel._detect_cache`
+— non-undoable, spec-web §12), both rotated 90° CW via `geometry.ts`'s `rotate_box_cw` using the
+page's **effective dims from before this step** — see below), and invalidates that
 page's source/work/output raster caches so the next render re-derives them.
 
 The effective page size the rest of `AppModel` reads (`view_snapshot().page_w/page_h`, detect/
 crop/split/offset math) comes from the private `_page_dims(p)` helper, not the raw stored
 `doc.page_sizes[p]`: it swaps width/height when the page's current rotation is 90° or 270°.
-Every call site that used to read `doc.page_sizes[p]` directly now goes through `_page_dims(p)`
-— mirrors desktop `model.py`'s `_page_dims()` exactly (same swap rule, same DPI-agnostic
-page-unit space for the web version since it has no separate pixel/point distinction to fold in).
+Every call site that used to read `doc.page_sizes[p]` directly now goes through `_page_dims(p)`.
 
 The actual pixel rotation happens in the adapter, not `core/` (which must stay DOM-free):
 `pdf/loader.ts`'s `rotate_bitmap_cw()` draws the unrotated source raster onto a rotated,
-dimension-swapped `OffscreenCanvas` via `ctx.translate()`/`ctx.rotate()`, equivalent to PIL's
-`img.rotate(-ang, expand=True)` on the desktop. `AppModel._get_work()` passes the page's current
-rotation angle into `get_source_image()`/`get_work_image()` on every (cache-missed) call.
-
-**Bug this fixed (2026-07-01):** `document.rotation` was written by `rotate_pages()` but never
-read anywhere in the render path — `_current_page_size()` always returned the raw, unswapped
-`page_sizes[p]`, and the adapter never rotated pixels. Result: clicking Rotate silently did
-nothing to the displayed page and export, while the (now-desynced) crop-box overlay coordinates
-still rotated — producing a blank canvas with a floating, misaligned selection box. Confirmed via
-headless-browser E2E (screenshot), root-caused against desktop `model.py:208-231,550-570` to
-confirm the intended behavior, and fixed by adding `_page_dims()` + `rotate_bitmap_cw()`.
+dimension-swapped `OffscreenCanvas` via `ctx.translate()`/`ctx.rotate()`.
+`AppModel._get_source()` passes the page's current
+rotation angle into `get_source_image()` on every (cache-missed) call; `get_work_image()` takes the
+already-rotated source bitmap, not a separate rotation parameter.
 
 `ViewSnapshot` fields (identical to Python):
 ```ts
 interface ViewSnapshot {
-  image: ImageBitmap        // page raster or committed-crop output image
+  image: ImageBitmap | null // page raster or committed-crop output image; null = loading
   page_w: number
   page_h: number
   overlay: readonly OverlayBox[]
   draw_rect: Box | null
   position: number          // 1-based output-page position
   total: number
-  status: string            // page/size string; model-level only, not displayed (spec-web §W3)
-  crop_origin: {x: number, y: number}  // full-page-unit origin of shown image (spec-web §W8)
+  status: string            // page/size string; model-level only, not displayed (spec-web §3)
+  crop_origin: {x: number, y: number}  // full-page-unit origin of shown image (spec-web §6.8)
   is_loading: boolean       // image=null + loading indicator
 }
 ```
@@ -530,7 +488,7 @@ interface ViewSnapshot {
 
 ## 6. BatchJob — Promise-based cooperative model
 
-Desktop: `step()` + `root.after()`. Web: Worker drives pages; main thread receives
+Worker drives pages; main thread receives
 `postMessage` progress events.
 
 ```ts
@@ -569,7 +527,7 @@ async dispatch_job(make_job: () => BatchJob): Promise<void> {
 }
 ```
 
-Single-page jobs (`total === 1`) suppress the overlay — same as desktop.
+Single-page jobs (`total === 1`) suppress the overlay.
 
 ---
 
@@ -626,7 +584,7 @@ Trade-off: detect/filter/dewarp now run on the UI thread instead of off it. Each
 bounded operation (per-page budgets now met, §9a below), so this is a brief-UI-block UX regression,
 not a correctness one — tracked as follow-up, not silently accepted as fine.
 
-### 7b. OpenCV.js build variant — SIMD, single-thread (task T4)
+### 7b. OpenCV.js build variant — SIMD, single-thread
 
 The vendored `@techstark/opencv-js@4.10.0-release.1` was a **scalar (non-SIMD)** WASM build — a
 straight mirror of `docs.opencv.org/4.10.0/opencv.js`, confirmed by disassembling the shipped
@@ -646,7 +604,7 @@ emscripten export is an async `Promise<Module>`; a small appended shim bridges i
 stable-object + assignable `onRuntimeInitialized` shape `imaging.ts::ensure_cv` expects, and a
 `var Module` fix makes OpenCV's UMD wrapper strict-mode/ESM safe. **Key finding:** SIMD alone gave
 only ~1.5–4.5×; it did **not** meet the per-page budget on its own — the architecture fixes (§9a)
-and the downscaled-morphology change (spec-web §W2 row 12) did the bulk of the work.
+and the downscaled-morphology change (spec-web §16) did the bulk of the work.
 
 ---
 
@@ -659,7 +617,7 @@ no RPC, no separate worker reply. Aggregates: any native page → `Mode.NORMAL`,
 `Mode.SCANNED`; image files always count as non-native.
 
 ```ts
-// Mirrors spec §4 exactly (is_native_page() in loader.ts)
+// Mirrors spec-web §1 exactly (is_native_page() in loader.ts)
 async function is_native_page(page: pdfjs.PDFPageProxy): Promise<boolean> {
   const text = await page.getTextContent()
   const char_count = text.items.reduce((n, it) => n + ('str' in it ? it.str.length : 0), 0)
@@ -718,8 +676,8 @@ render_output_image(
 ```
 
 Called identically by `canvas_view.ts` (preview) and `AppModel.export()`'s per-page loop
-(export) — the WYSIWYG guarantee (spec §12.1, invariant §22.12) holds because both call sites go
-through this one method on the one `PdfRendererAdapter` instance, not two implementations.
+(export) — the WYSIWYG guarantee (spec-web §10.1) holds because both call sites go through this one
+method on the one `PdfRendererAdapter` instance, not two implementations.
 
 ### 8.4 Export (export.worker.ts)
 
@@ -737,7 +695,7 @@ postMessage({ type: 'ok', bytes: pdfBytes }, [pdfBytes.buffer])
 ```
 
 For JPG/PNG: individual `OffscreenCanvas.convertToBlob({type, quality})` per page,
-streamed back one at a time so memory stays flat (spec §12.5, §17).
+streamed back one at a time so memory stays flat (spec-web §10.5, §16).
 
 ---
 
@@ -750,24 +708,21 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | Spec algorithm | OpenCV.js implementation | Status |
 |---|---|---|
 | Sauvola binarization | `sauvola_ink_mask()`: `cv.boxFilter` on the image and its square to get local mean/std, `T = mean·(1+k·(std/R−1))`, `ink = flat < T` | **Faithful port** of `core/imaging.py _sauvola_threshold` — real formula, not `cv.adaptiveThreshold` (see history note below) |
-| Illumination flatten | `illumination_flatten()`: `cv.morphologyEx(MORPH_CLOSE)` **on a 1/`BG_DOWNSCALE` copy, upscaled** (`morph_close_background`) + divide | Implemented, shared by detect and both filter modes. The large-kernel close is estimated on a downscale then upscaled (spec-web §W2 row 12): opencv.js's single-thread morphology is O(pixels·kernel²) with no large-kernel optimization and, full-res, dominated everything (0.6–9 s/page). ~36× faster, final bilevel ~95% identical (unchanged vs the opencv.js-vs-opencv-python baseline) |
-| `clean_document_bilevel` | `clean_document_bilevel()`: flatten → Sauvola → single-pass label-LUT despeckle | Implemented for both `detect_content()` (strength-2 params, downscaled) and the B/W filter (per-strength `k`/`min_area` from `BW_STRENGTH`) — same function backs both, as spec §8 requires |
-| Connected-component despeckle | `cv.connectedComponentsWithStats` → per-label keep array → one `O(pixels)` LUT pass (not per-component `cv.compare`, which would be `O(components·pixels)` and miss the spec §17 "single-pass despeckle" performance target) | Implemented |
+| Illumination flatten | `illumination_flatten()`: `cv.morphologyEx(MORPH_CLOSE)` **on a 1/`BG_DOWNSCALE` copy, upscaled** (`morph_close_background`) + divide | Implemented, shared by detect and both filter modes. The large-kernel close is estimated on a downscale then upscaled (spec-web §16): opencv.js's single-thread morphology is O(pixels·kernel²) with no large-kernel optimization and, full-res, dominated everything (0.6–9 s/page). ~36× faster, final bilevel ~95% identical (unchanged vs the opencv.js-vs-opencv-python baseline) |
+| `clean_document_bilevel` | `clean_document_bilevel()`: flatten → Sauvola → single-pass label-LUT despeckle | Implemented for both `detect_content()` (strength-2 params, downscaled) and the B/W filter (per-strength `k`/`min_area` from `BW_STRENGTH`) — same function backs both, as spec-web §5 requires |
+| Connected-component despeckle | `cv.connectedComponentsWithStats` → per-label keep array → one `O(pixels)` LUT pass (not per-component `cv.compare`, which would be `O(components·pixels)` and miss the spec-web §16 "single-pass despeckle" performance target) | Implemented |
 | `content_box()` | bounding rect of kept components, border-touching fallback | Implemented |
-| Unsharp mask (Sharpen) | `cv.bilateralFilter` (strength-scaled `d`/`sigmaColor`/`sigmaSpace` from `SHARPEN_STRENGTH`) → `cv.GaussianBlur` (strength-scaled radius) → `cv.addWeighted` (`CLEAN_AMOUNT` gain) | Implemented, strength now drives denoise/blur radius **and** gain (matches `imaging.py sharpen_grayscale`/`_GRAY_STRENGTH` — the fix for the regression the desktop code comments describe: fixed-denoise Sharpen amplified noise at high strength) |
+| Unsharp mask (Sharpen) | `cv.bilateralFilter` (strength-scaled `d`/`sigmaColor`/`sigmaSpace` from `SHARPEN_STRENGTH`) → `cv.GaussianBlur` (strength-scaled radius) → `cv.addWeighted` (`CLEAN_AMOUNT` gain) | Implemented, strength now drives denoise/blur radius **and** gain|
 | DPI-scaled kernels | — | **Not ported.** `imaging.py`'s `_dpi_scale()` scales the Sauvola window / bg-kernel / min-area by source DPI (0.5×–4× clamp) so scans at different resolutions binarize comparably. The web always uses the base `SAUVOLA_WINDOW`/`BG_KERNEL_SIZE` regardless of DPI. Low-severity residual gap — SRC_DPI is fixed at 200 in the web (no variable-DPI source rasters), so this mainly affects the B/W filter's absolute kernel size relative to `imaging.py`'s 150 DPI reference, not correctness. |
 | 2× supersample refinement | — | **Not ported.** `clean_document_bilevel` upscales 2× before thresholding then downsamples for a cleaner edge; the web version thresholds at native resolution. Cosmetic quality difference only. |
-| Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model → bilinear resample | **Implemented (2026-07-03)** — two-stage ONNX pipeline, EPs `['webgpu','wasm']` gated on `navigator.gpu`, `numThreads=1`. Verified headlessly against the real model tensors (io names/dims/dtypes, non-identity output); WebGPU on a real GPU pending (§W2 row 1) |
+| Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model → bilinear resample | Implemented — two-stage ONNX pipeline, EPs `['webgpu','wasm']` gated on `navigator.gpu`, `numThreads=1` |
 | Deskew angle | — | Spec §10.1 folds deskew into the single Dewarp & Deskew mesh-unwarp control ("there is no separate deskew step") — there is intentionally no standalone deskew function to port; it ships (or doesn't) together with dewarp. |
 
-`detect_content()` downscales to `DETECT_MAX_PX` for speed (same as Python), then runs
-`clean_document_bilevel` on the downscaled raster at the desktop's default strength-2 params —
-this is what spec §8 means by "content_box over a real Sauvola filter (clean_document_bilevel)";
-earlier revisions of this doc and of `imaging.worker.ts` used a direct `cv.adaptiveThreshold` call
+`detect_content()` downscales to `DETECT_MAX_PX` for speed used a direct `cv.adaptiveThreshold` call
 for detection with no relationship to the B/W filter's algorithm at all, which was wrong on two
 counts (not Sauvola, and not shared with the filter). Both are fixed.
 
-### 9a. Scan pipeline dataflow and the two-tier work cache (task T4)
+### 9a. Scan pipeline dataflow and the two-tier work cache
 
 The scan pipeline was ~10–20× too slow; profiling (not the SIMD width — see §7b) found four causes,
 all fixed. The model (`core/model.ts`) rasterizes each page **exactly once** through `_get_source(p)`
@@ -781,9 +736,7 @@ goes through it.
   staying in `cv.Mat` across stages (one ImageBitmap→Mat in, one Mat→ImageBitmap out).
 - **Detect on the raw source.** `_detect_each_page` runs `detect_content_box` on `_get_source(p)`, the
   **raw** raster — never the processed work image. Detection was running the full dewarp+filter
-  pipeline per page and then discarding most of it by downscaling to `DETECT_MAX_PX`. Desktop detects
-  the content box on the raw scan's cleaned bilevel too, so this is parity; the only tradeoff is that
-  dewarp's small geometric shift is not reflected in the detected bounds (documented, spec-web §W2 row 5).
+  pipeline per page and then discarding most of it by downscaling to `DETECT_MAX_PX`.
 - **Two-tier, write-back processed-raster cache.** `_work_cache` is a small RAM LRU for the viewing
   window; the disk tier is `pdf/work_store.ts` (IndexedDB, PNG blobs) behind the adapter's optional
   `load_work`/`persist_work`/`clear_work_cache` (kept in `pdf/` because `core/` may not touch
@@ -801,16 +754,13 @@ goes through it.
   page reloads from disk instead of re-running OpenCV/ONNX. Regression-guarded by
   `tests/core/work_cache.test.ts`.
 
-Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spec-web §W5).
+Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spec-web §16).
 Regression-guarded by `tests/perf/scan_speed.test.ts` (`npm run test:perf`) and, end-to-end in a real
 browser, `tests/e2e/scan_simd.spec.ts`.
 
-**Dewarp: implemented (2026-07-03).** `apply_dewarp()` runs the two-stage UVDoc pipeline
-(warp-field inference → bilinear resample), wired button→AppModel→`ensure_onnx`→`apply_dewarp`.
-Validated headlessly against the actual model files (io names/dims/dtypes match, output raster
-non-identity). Remaining risk: WebGPU EP on a real GPU and end-to-end visual correctness on an
-actual scanned page are unconfirmed — the verification sandbox had no GPU, so only the wasm EP
-ran in-browser (§W2 row 1).
+**Dewarp** — `apply_dewarp()` runs the two-stage UVDoc pipeline (warp-field inference → bilinear
+resample), wired button→AppModel→`ensure_onnx`→`apply_dewarp`. Execution providers `['webgpu','wasm']`
+gated on `navigator.gpu` (spec-web §7.1).
 
 ONNX model cache:
 ```ts
@@ -822,13 +772,15 @@ const session = await ort.InferenceSession.create(modelBytes, { executionProvide
 
 ---
 
-## 10. State model (unchanged from desktop)
+## 10. State model 
 
 `DocumentState`, `History`, `Settings`, `DragState` map 1:1 from Python to TypeScript.
 
 The defining rules are preserved:
-- `DocumentState` holds exactly the 11 undoable fields; `snapshot()` deep-copies the
-  per-page maps and shares the frozen scalars
+- `DocumentState` holds exactly the 8 undoable fields (`applied`, `crop_rects`, `rotation`,
+  `processed`, `offsets`, `dewarp_on`, `filter_mode`, `filter_strength`); `snapshot()` deep-copies
+  the per-page maps and shares the frozen scalars. `detect_cache`/`union`/`auto_active`/`drawn`
+  are non-undoable `AppModel` fields, 
 - `Settings` fields are those consumed by domain commands; `UIConfig` (theme/font/scale)
   is owned by `AppController`, invisible to `core/`
 - `History.push()` stores a pre-mutation snapshot; `undo()` pushes current to redo, returns
@@ -862,15 +814,14 @@ Worker errors: worker posts `{type:'error', message}` → caught in worker messa
 converted to `ImagingError` → passed to `dispatch_job` as `Failed(error)`.
 
 Unhandled promise rejections are caught by a global `window.addEventListener('unhandledrejection')`
-handler — clears `_current_job`, hides overlay, repaints, surfaces error. Equivalent to
-desktop's `report_callback_exception` recovery.
+handler — clears `_current_job`, hides overlay, repaints, surfaces error. 
 
 ---
 
 ## 12. UI rendering loop
 
 No framework = no virtual DOM. After every model mutation, `AppController.refresh_all()` is
-called (same pattern as desktop `AppWindow.refresh_all()`):
+called:
 
 ```ts
 refresh_all(): void {
@@ -886,7 +837,7 @@ refresh_all(): void {
 ```
 
 Each panel's `refresh()` reads raw model properties and sets widget states (enabled/visible/value)
-unconditionally — same pattern as the desktop. No diffing, no reactive state. For a tool of this
+unconditionally.For a tool of this
 complexity (< 20 interactive controls) this is simpler and faster than a framework.
 
 Canvas paint (`canvas_view.paint(snap)`):
@@ -894,7 +845,7 @@ Canvas paint (`canvas_view.paint(snap)`):
 2. Draw overlay boxes (dashed crop frames, handles, split badges)
 3. Draw `draw_rect` (rubber-band) if active
 4. Update the bottom-right cursor DOM overlay — no status element, and nothing is painted onto
-   the page raster (desktop inv 32, spec-web §W3)
+   the page raster
 
 Throttle: canvas paint is debounced at `SCALE_THROTTLE_MS` on resize. All other refreshes
 are immediate (user action → synchronous model mutation → immediate repaint, < 1 ms for non-
@@ -904,7 +855,7 @@ imaging ops).
 
 ## 13. File I/O — implementation
 
-Behavior specified in `docs/SmartCrop_PDF_Specification_Web.md` §W6. Implementation:
+Behavior specified in `docs/SmartCrop_PDF_Specification_Web.md` §15. Implementation:
 
 **Load:** `<input type="file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff">` + drag-and-drop
 on canvas/window. `File` objects passed directly to `loader.ts` (no temp files).
@@ -915,15 +866,15 @@ on canvas/window. `File` objects passed directly to `loader.ts` (no temp files).
   with `fflate` (`zipSync`, pure JS ~10KB) → single `<base>.zip` download on all browsers. Entries
   `<base>_NNN.<ext>`. TIFF pages via `workers/tiff.ts`. No per-page loose downloads.
 - Overwrite confirmation has no web code path (browser download cannot detect an overwrite); the
-  inert Settings checkbox was removed 2026-07-04 (spec Web §W2 row 6).
+  inert Settings checkbox was removed (spec-web §15).
 
 ---
 
 ## 14. Synthetic document
 
-On first load (no file open), render a `SYNTH_PAGES`-page (24) placeholder document using
-Canvas API directly (no PDF.js needed) — white pages with grey placeholder text/blocks matching
-the desktop's synthetic doc. All controls stay fully usable (spec §1).
+On first load (no file open), render a `SYNTH_PAGES`-page (1) placeholder document using
+Canvas API directly (no PDF.js needed) — white pages with grey placeholder text/blocks.
+ All controls stay fully usable (spec-web §1).
 
 Implemented in `pdf/loader.ts` as a special `SyntheticDoc` path that generates
 `ImageBitmap` pages on demand without a real file.
@@ -932,15 +883,15 @@ Implemented in `pdf/loader.ts` as a special `SyntheticDoc` path that generates
 
 ## 15. Performance targets
 
-Targets specified in `docs/SmartCrop_PDF_Specification_Web.md` §W5. Implementation levers:
-LRU `CACHE_WINDOW=16` pages bound resident GPU memory; export streams one page at a time;
+Targets specified in `docs/SmartCrop_PDF_Specification_Web.md` §16. Implementation levers:
+LRU `CACHE_WINDOW=4` pages bound resident GPU memory; export streams one page at a time;
 `ImageBitmap.close()` is called on LRU eviction to release the GPU texture immediately.
 
 ---
 
 ## 16. Keyboard shortcuts
 
-Behavior/mapping specified in `docs/SmartCrop_PDF_Specification_Web.md` §W4. Implemented as a
+Behavior/mapping specified in `docs/SmartCrop_PDF_Specification_Web.md` §20. Implemented as a
 single `keydown` listener in `app.ts` dispatching to the matching `AppModel`/`AppController` call;
 `Ctrl +/-/0` scale via CSS `font-size` on `:root` (rem-based layout scales with it).
 
@@ -949,7 +900,7 @@ single `keydown` listener in `app.ts` dispatching to the matching `AppModel`/`Ap
 ## 17. Theme and typography — implementation
 
 Palette semantics (what each color means, when it's used) specified in
-`docs/SmartCrop_PDF_Specification_Web.md` §W3 and desktop spec §19. Implementation: CSS custom
+`docs/SmartCrop_PDF_Specification_Web.md` spec-web §3. Implementation: CSS custom
 properties for the two-theme palette (dark/light/system via `prefers-color-scheme`):
 
 ```css
@@ -963,7 +914,7 @@ properties for the two-theme palette (dark/light/system via `prefers-color-schem
 
 All sizes in `rem`; root `font-size` = `FONT_SIZE_DEFAULT` (15px) scaled by the zoom setting.
 Crop frame: dashed border + diamond handles at corners + midpoints. Split badges: circle with
-number, 30% larger than base font. Cursor coords: DOM overlay, not canvas-drawn (spec-web §W3).
+number, 30% larger than base font. Cursor coords: DOM overlay, not canvas-drawn (spec-web §3).
 Icons: SVG inline, colour via `currentColor` (follows button active/inactive state; no independent
 colour channel).
 
@@ -1011,58 +962,20 @@ tsc --noEmit && eslint src && vitest run --coverage --reporter=verbose && playwr
 - All Playwright e2e green on Chromium + Firefox
 - Architecture test: no `core/` file may import `window`, `document`, `Worker`,
   `pdfjs-dist`, `pdf-lib`, or `@pdf/*` or `@ui/*`
-- No function over 30 lines without a why-comment (same rule as desktop CLAUDE.md)
+- No function over 30 lines without a why-comment
 - No magic numbers — all tunables in `src/core/constants.ts` (domain) or `src/ui/constants.ts` (UI)
 
 ---
 
-## 20. Spec invariants coverage (§22)
+## 20. Spec invariants coverage
 
-Gaps against these invariants are tracked in `docs/SmartCrop_PDF_Specification_Web.md` §W2, not
-here. Every §22 invariant is exercised by at least one test:
+`docs/SmartCrop_PDF_Specification_Web.md` §21 lists the current acceptance invariants. A per-
+invariant → test-file mapping belongs here once it's been verified against the real suite — the
+previous version of this table cited `e2e/crop.spec.ts`, `scan.spec.ts`, `export.spec.ts`,
+`history.spec.ts`, `pages.spec.ts`, `ui/canvas_view.test.ts` and `ui/panels.test.ts`, none of which
+exist in the current `tests/` tree (the real e2e suite is `tests/e2e/{smoke,crop_split,
+committed_window,scan_simd}.spec.ts`, and per-panel coverage lives in `tests/ui/*.test.ts` named
+after the panel, not a single `panels.test.ts`) — it was fabricated or badly stale and has been
+removed rather than left misleading. Rebuild this table against the actual suite instead of
+reconstructing it from memory.
 
-| Invariant | Test file |
-|---|---|
-| §22.1 Auto-detect union crop | core/model.test.ts + e2e/crop.spec.ts |
-| §22.2 Non-dragged edges pixel-stable | core/geometry.test.ts |
-| §22.3 Filter/dewarp idempotent | e2e/scan.spec.ts |
-| §22.4 Undo reverts; Reset reloads | e2e/history.spec.ts |
-| §22.5 Rotate preserves crop; Delete reindexes | e2e/pages.spec.ts |
-| §22.6 No implicit scan processing | e2e/scan.spec.ts |
-| §22.7 Crop rectangles clamped to page | core/geometry.test.ts |
-| §22.8 Batch overlay, cancel, no partial file | e2e/export.spec.ts |
-| §22.9 Memory flat (LRU) | core/lru.test.ts |
-| §22.10 Main-thread PDF.js — N/A (workers handle it safely) | architecture.test.ts |
-| §22.11 Split nav as N output pages | e2e/crop.spec.ts |
-| §22.12 WYSIWYG — same render_output_image path | e2e/export.spec.ts |
-| §22.13 Drawing is local | e2e/crop.spec.ts |
-| §22.14 Page always in window | ui/canvas_view.test.ts |
-| §22.15 Crop never dropped | e2e/crop.spec.ts |
-| §22.16 Re-detect refreshes committed crop | e2e/crop.spec.ts |
-| §22.17 Multi-file combine order | core/model.test.ts |
-| §22.18 Classification by vector data | core/model.test.ts |
-| §22.19 Keep ratio all gestures | core/geometry.test.ts + e2e/crop.spec.ts |
-| §22.20 Compress downsamples, never larger | e2e/export.spec.ts |
-| §22.21 Export formats + streaming | e2e/export.spec.ts |
-| §22.22 Greyscale via one render path | e2e/export.spec.ts |
-| §22.23 Icon labels unchanged | ui/panels.test.ts |
-| §22.24 Cancel drag — no commit, no snapshot | e2e/crop.spec.ts |
-
-**§22.23 note:** the spec prose ("never concatenated into the label string") describes the
-desktop's `image=` `CTkImage` pictogram convention (Settings/Help/Load/Save/Crop/Rotate — a
-handful of "primary action" buttons per spec §19). The *actual* desktop code (`ui/panels.py`)
-bakes a leading glyph character into the button string for most other controls — Undo/Redo/Reset,
-Auto-detect, Crop/Rotate/Delete (`"✶  Auto-detect"`, `"↪  Redo"`, …) — and the real, code-level
-invariant `test_app.py` checks is a **string-prefix** rule (glyph leads, e.g. `"↪ Redo"` not
-`"Redo ↪"`), not "no glyph in the string at all." The web mirrors the actual code: buttons keep
-plain glyph-prefixed label strings (`nav_bar.ts`, `crop_panel.ts`, …), and the ported
-`panels.test.ts` should assert the same string-prefix rule, not a DOM-level icon/label split that
-the desktop itself doesn't have.
-
----
-
-## 21. What does NOT change
-
-See `docs/SmartCrop_PDF_Specification_Web.md` §W7 for the full behavioral invariant list. All four
-export formats (PDF/JPG/PNG/TIFF) are supported; the desktop's N-loose-files behavior for image
-formats is replaced by a single `.zip` (§13), which is the web-correct equivalent.
