@@ -16,8 +16,10 @@
 // aren't blocking the UI thread with parsing — only the (cheap) canvas compositing in
 // page.render() runs on this thread, same as pdf.js's documented usage pattern.
 import * as pdfjs from 'pdfjs-dist'
-import type { DocInfo, RendererAdapter, OutputPage, PageSize } from '@core/model'
+import { PDFDocument, degrees } from 'pdf-lib'
+import type { DocInfo, RendererAdapter, OutputPage, VectorExportPage, PageSize } from '@core/model'
 import type { Box } from '@core/geometry'
+import { to_native_frame } from '@core/geometry'
 import type { PageProcessIntent } from '@core/document_state'
 import { Mode } from '@core/enums'
 import { DocumentLoadError } from '@core/errors'
@@ -73,6 +75,20 @@ function rotate_bitmap_cw(bitmap: ImageBitmap, angle: number): ImageBitmap {
   ctx.drawImage(bitmap, 0, 0)
   bitmap.close()
   return canvas.transferToImageBitmap()
+}
+
+// Re-encode an image blob as PNG bytes — used by export_pdf_vector for an image-sourced page in
+// any format pdf-lib can't embed directly (only JPEG/PNG). createImageBitmap already succeeded on
+// this same blob at load time (is_native_page/page_sizes), so it is known-decodable here too.
+async function reencode_as_png(blob: Blob): Promise<Uint8Array> {
+  const bitmap = await createImageBitmap(blob)
+  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('2d context unavailable')
+  ctx.drawImage(bitmap, 0, 0)
+  bitmap.close()
+  const encoded = await canvas.convertToBlob({ type: 'image/png' })
+  return new Uint8Array(await encoded.arrayBuffer())
 }
 
 // ---------------------------------------------------------------------------
@@ -380,6 +396,69 @@ export class PdfRendererAdapter implements RendererAdapter {
     return exp.call<Uint8Array>(
       { type: 'export_images', pages, format, base, quality: JPEG_QUALITY },
       pages.map(p => p.bitmap), on_progress)
+  }
+
+  // Vector PDF export (spec-web §W9.3): crops/rotates/splits via pdf-lib's embedPage against the
+  // ORIGINAL page content — never rasterizes a PDF-sourced page. Image-sourced pages (mixed
+  // PDF+image NORMAL documents) embed losslessly (PNG/JPEG passthrough, no re-encode) via the same
+  // native-frame crop math; anything else the browser can decode re-encodes once as PNG, since
+  // pdf-lib only embeds JPEG/PNG. Runs on the main thread, not export.worker.ts: no image-codec
+  // work here (unlike JPEG/TIFF raster export) — just PDF structure manipulation — and the source
+  // PDFDocumentProxy objects this needs can't cross to a Worker anyway (tied to this thread's
+  // pdf.worker.mjs connection). Revisit if profiling shows this janks on very large documents.
+  async export_pdf_vector(pages: readonly VectorExportPage[]): Promise<Uint8Array> {
+    const outDoc = await PDFDocument.create()
+    // One pdf-lib parse per unique SOURCE pdf.js doc, however many of its pages/boxes are
+    // exported — getData() returns the same already-parsed bytes pdf.js holds, no re-fetch.
+    const pdflib_cache = new Map<pdfjs.PDFDocumentProxy, Promise<PDFDocument>>()
+    const get_pdflib_doc = (src: pdfjs.PDFDocumentProxy): Promise<PDFDocument> => {
+      let p = pdflib_cache.get(src)
+      if (!p) { p = src.getData().then(bytes => PDFDocument.load(bytes)); pdflib_cache.set(src, p) }
+      return p
+    }
+
+    for (const entry of pages) {
+      const source = this._pages[entry.orig_page]
+      if (!source) continue
+      for (const box of entry.boxes) {
+        // native frame: the source page's OWN (rotation=0) coordinates — embedPage/drawImage below
+        // clip in that frame, with no notion of this app's rotation state (geometry.ts §W9.3).
+        const native = to_native_frame(box, entry.page_w, entry.page_h, entry.rotation)
+        const out_w = native.x1 - native.x0
+        const out_h = native.y1 - native.y0
+        const outPage = outDoc.addPage([out_w, out_h])
+
+        if (source.kind === 'pdf') {
+          const srcDoc  = await get_pdflib_doc(source.pdf)
+          const srcPage = srcDoc.getPage(source.page_num - 1)
+          const src_h   = srcPage.getHeight()
+          // pdf-lib boundingBox is {left,bottom,right,top} in the SOURCE page's own bottom-left-
+          // origin PDF space; native is top-left-origin (this app's convention) — Y-flip here.
+          const embedded = await outDoc.embedPage(srcPage, {
+            left: native.x0, right: native.x1,
+            bottom: src_h - native.y1, top: src_h - native.y0,
+          })
+          outPage.drawPage(embedded, { x: 0, y: 0, width: out_w, height: out_h })
+        } else {
+          const bytes  = new Uint8Array(await source.blob.arrayBuffer())
+          const is_png  = bytes[0] === 0x89 && bytes[1] === 0x50
+          const is_jpeg = bytes[0] === 0xff && bytes[1] === 0xd8
+          const img = is_png  ? await outDoc.embedPng(bytes)
+                    : is_jpeg ? await outDoc.embedJpg(bytes)
+                    : await outDoc.embedPng(await reencode_as_png(source.blob))
+          // Same native-frame crop as the PDF branch, expressed as a draw offset: place the FULL
+          // image so only [native.x0,x1]×[native.y0,y1] falls within the (crop-sized) output page
+          // — PDF pages clip to their own bounds, so nothing else renders. Derivation: a pixel at
+          // image-relative (tx,ty) lands at drawn (x+tx, y+imgH-ty); solving x+tx = tx-native.x0
+          // and y+imgH-ty = native.y1-ty gives x=-native.x0, y=native.y1-imgH.
+          outPage.drawImage(img, {
+            x: -native.x0, y: native.y1 - img.height, width: img.width, height: img.height,
+          })
+        }
+        if (entry.rotation !== 0) outPage.setRotation(degrees(entry.rotation))
+      }
+    }
+    return outDoc.save({ useObjectStreams: true })
   }
 
   make_synth_page(_idx: number, w: number, h: number): Promise<ImageBitmap> {

@@ -60,6 +60,19 @@ export interface OutputPage {
   height: number
 }
 
+// One source page's vector-export instructions (spec-web §W9.3). `boxes` is normally length 1;
+// a split page (crop_rects committed as N boxes) becomes N output pages from the SAME source.
+// page_w/page_h/rotation are the page's CURRENT (already rotation-adjusted) values, i.e. exactly
+// what _page_dims/document.rotation already carry — the adapter converts back to the source's
+// native frame itself (geometry.ts::to_native_frame), core/ does not need to know that frame exists.
+export interface VectorExportPage {
+  readonly orig_page: number
+  readonly boxes:     readonly Box[]
+  readonly page_w:    number
+  readonly page_h:    number
+  readonly rotation:  number
+}
+
 export interface RendererAdapter {
   load_files(files: File[]): Promise<DocInfo>
   get_source_image(page_idx: number, dpi: number, rotation: number): Promise<ImageBitmap>
@@ -83,6 +96,10 @@ export interface RendererAdapter {
   persist_work?(key: string, bitmap: ImageBitmap): Promise<void>
   clear_work_cache?(): Promise<void>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
+  // Lossless vector PDF export for NORMAL-mode documents (spec-web §W9.3): crops/rotates/splits
+  // via the ORIGINAL PDF page content (pdf-lib embedPage), never rasterizes. Optional — an adapter
+  // without it (test mocks) simply means AppModel falls back to the raster export path.
+  export_pdf_vector?(pages: readonly VectorExportPage[]): Promise<Uint8Array>
   export_images(
     pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
     on_progress?: (done: number, total: number) => void,
@@ -136,8 +153,8 @@ export class AppModel {
   // Interaction settings (not undoable). anchor_left/anchor_top jointly determine the crop
   // together with document.offsets (which IS undoable) but are deliberately excluded here, same
   // as keep_ratio/ratio/split_count below: DocumentState's undo boundary is exactly the frozen
-  // 11-field list (document_state.ts, spec §13) — anchors are a persistent interaction mode, not
-  // a per-edit value, so Undo leaves them untouched (L5; see model.test.ts for the locking test).
+  // 8-field list (document_state.ts, spec §13/§W9.2) — anchors are a persistent interaction mode,
+  // not a per-edit value, so Undo leaves them untouched (L5; see model.test.ts for the locking test).
   private _anchor_left  = true
   private _anchor_top   = true
   private _keep_ratio   = false
@@ -147,6 +164,17 @@ export class AppModel {
   private _pages_mode   = PagesMode.ALL
   private _select_pattern = ''
   private _current_follow = false
+
+  // Detection/drawn-window working state (not undoable — spec-web §W9.2, moved out of
+  // DocumentState 2026-07). These are scaffolding used to ARRIVE at a committed operation
+  // (applied/rotation), not an operation themselves, so Undo does not revert them: pressing Undo
+  // right after Auto-detect, before anything is committed via Crop, is now a no-op. Same lifecycle
+  // both modes; SCANNED's committed crop/rotate/filter/dewarp are unaffected (those stay in
+  // DocumentState). Reset on _reset_state/_run_detect/rotate/delete exactly as document.* used to be.
+  private _drawn:        Box | null = null   // global hand-drawn window, page coords (§9.3)
+  private _detect_cache = new Map<number, Box>()   // per-page content box from last detect
+  private _union:        Box | null = null   // aggregate detection union (§8)
+  private _auto_active   = false             // auto-detect was run at least once
 
   // Transient drag state (not snapshotted)
   private _drag:         DragState | null = null
@@ -247,6 +275,10 @@ export class AppModel {
     this._current_follow = false
     this._drag = null
     this._draw_rect = null
+    this._drawn = null
+    this._detect_cache = new Map()
+    this._union = null
+    this._auto_active = false
     this._source_cache.clear()
     this._work_cache.clear()
     this._work_disk_keys.clear()
@@ -365,10 +397,13 @@ export class AppModel {
 
     const union = this._compute_detection_union(per_page_boxes)
 
+    // detect_cache/union/auto_active are non-undoable working state (§W9.2). history.push still
+    // runs here — it protects _refresh_committed_crops_after_detect's `applied` writes below,
+    // which remain undoable.
     this.history.push(this.document)
-    for (const [p, box] of per_page_boxes) this.document.detect_cache.set(p, box)
-    this.document.union = union
-    this.document.auto_active = true
+    for (const [p, box] of per_page_boxes) this._detect_cache.set(p, box)
+    this._union = union
+    this._auto_active = true
 
     this._refresh_committed_crops_after_detect(pages, union)
     // Ratio source is the detection UNION's aspect ratio, not the page's (model.py:375-376
@@ -390,23 +425,24 @@ export class AppModel {
       try {
         const size = this._page_dims(p)
         const orig = this._page_map[p] ?? p
-        // NORMAL pages: derive the content box from the PDF text layer — fast, no rasterisation
-        // and no OpenCV (desktop detect.py normal_page_box). Falls back to the Sauvola image path
-        // only when there is no usable text layer (or in SCANNED mode).
-        let box: Box | null = null
-        if (this._mode === Mode.NORMAL && this._adapter.detect_text_box) {
-          box = await this._adapter.detect_text_box(orig)
-        }
-        if (!box) {
-          // Detect on the RAW source raster, never the processed work image (desktop detects the
-          // content box on the raw scan's cleaned bilevel; running dewarp+filter first was pure
-          // waste — detect_content_box downscales to DETECT_MAX_PX and re-binarizes anyway). This
-          // is what makes Auto-detect meet its <0.1 s/page budget (§W5). Dewarp's small geometric
-          // shift is not reflected in the bounds — a documented fidelity tradeoff (§W2 row 5).
+        let box: Box | null
+        if (this._mode === Mode.NORMAL) {
+          // NORMAL: text-layer box ONLY (desktop detect.py normal_page_box) — no rasterisation, no
+          // OpenCV, ever (spec-web §W9.1a; previously fell back to the raster path below). A page
+          // with no extractable text (rare: vector-art/no-text page, still classified NORMAL by
+          // is_native_page's vector-op check) simply gets no detected box — every downstream
+          // consumer (_compute_crop_boxes_for_page, _live_auto_crop_for, _begin_auto_drag) already
+          // null-checks `detected` and degrades to "no auto-crop for this page" correctly.
+          box = this._adapter.detect_text_box ? await this._adapter.detect_text_box(orig) : null
+        } else {
+          // SCANNED: unchanged — raster/Sauvola on the RAW source, never the processed work image
+          // (desktop detects on the raw scan's cleaned bilevel; running dewarp+filter first was
+          // pure waste — detect_content_box downscales to DETECT_MAX_PX and re-binarizes anyway).
+          // This is what makes Auto-detect meet its <0.1 s/page budget (§W5).
           const img = await this._get_source(p)
           box = await this._adapter.detect_content_box(img, size.width, size.height, this._mode)
         }
-        per_page_boxes.set(p, box)
+        if (box) per_page_boxes.set(p, box)
       } catch (e) {
         ctrl.complete(new Failed(new ImagingError(String(e))))
         return null
@@ -433,7 +469,7 @@ export class AppModel {
     if (!union) return
     for (const p of pages) {
       if (!this.document.applied.has(p)) continue
-      const detected = this.document.detect_cache.get(p)
+      const detected = this._detect_cache.get(p)
       if (!detected || !(this._anchor_left || this._anchor_top)) continue
       const sz = this._page_dims(p)
       const rect = auto_crop_rect(detected, union, this.document.offsets,
@@ -468,7 +504,7 @@ export class AppModel {
         this._invalidate_output_cache(p)
       }
     }
-    this.document.drawn = null   // the drawn window became the crop across all pages (§12.2)
+    this._drawn = null   // the drawn window became the crop across all pages (§12.2)
   }
 
   private _compute_crop_boxes_for_page(p: number): Box[] | null {
@@ -477,7 +513,7 @@ export class AppModel {
     const sz = this._page_dims(p)
 
     // Hand-drawn window takes precedence — clamp the global window to this page (§12.2).
-    const drawn = this.document.drawn
+    const drawn = this._drawn
     if (drawn) {
       return [{
         x0: Math.max(0, Math.min(drawn.x0, sz.width)),
@@ -487,10 +523,10 @@ export class AppModel {
       }]
     }
 
-    const detected  = this.document.detect_cache.get(p)
-    const union     = this.document.union
+    const detected  = this._detect_cache.get(p)
+    const union     = this._union
 
-    if (detected && union && this.document.auto_active
+    if (detected && union && this._auto_active
         && (this._anchor_left || this._anchor_top)) {
       let rect = auto_crop_rect(detected, union, this.document.offsets,
         sz.width, sz.height, this._anchor_left, this._anchor_top)
@@ -522,8 +558,8 @@ export class AppModel {
     const doc = this._doc
     if (!doc) return
     const sz = this._page_dims(this._current_page)
-    const detected = this.document.detect_cache.get(this._current_page)
-    const union    = this.document.union
+    const detected = this._detect_cache.get(this._current_page)
+    const union    = this._union
     if (!detected || !union) return
 
     this.history.push(this.document)
@@ -562,11 +598,11 @@ export class AppModel {
     if (this._split_count > 1) {
       const r = this.document.crop_rects[0]
       if (r && box_height(r) > 0) return box_width(r) / box_height(r)
-    } else if (this.document.drawn) {
-      const d = this.document.drawn
+    } else if (this._drawn) {
+      const d = this._drawn
       if (box_height(d) > 0) return box_width(d) / box_height(d)
     }
-    const u = this.document.union
+    const u = this._union
     if (u && box_height(u) > 0) return box_width(u) / box_height(u)
     if (this._doc) {
       const sz = this._current_page_size()
@@ -581,7 +617,7 @@ export class AppModel {
     // Committed crops belong to the previous layout — drop them when the split changes
     // (desktop model.py:417-418). Prevents stale single-crop pages surviving into split mode.
     this.document.applied.clear()
-    this.document.drawn = null
+    this._drawn = null
     this._split_count = n
     if (this._doc) {
       const sz = this._page_dims(this._current_page)
@@ -628,9 +664,9 @@ export class AppModel {
     const pt: readonly [number, number] = [px, py]
 
     if (this._split_count > 1) { this._begin_split_drag(pt, tol, sz); return }
-    // A pending manual window (document.drawn): grab a handle to resize, press INSIDE to move it,
+    // A pending manual window (_drawn): grab a handle to resize, press INSIDE to move it,
     // press OUTSIDE to drop it and rubber-band a new one (desktop WindowDrag / DrawDrag, §9.3/§9.4).
-    const drawn = this.document.drawn
+    const drawn = this._drawn
     if (drawn) {
       const h = hit_handle(drawn, px, py, tol)
       if (h || point_in_box(drawn, px, py)) {
@@ -676,9 +712,9 @@ export class AppModel {
     pt: readonly [number, number], tol: number, sz: PageSize,
   ): boolean {
     const [px, py] = pt
-    const detected = this.document.detect_cache.get(this._current_page)
-    const union    = this.document.union
-    if (!this.document.auto_active || !detected || !union
+    const detected = this._detect_cache.get(this._current_page)
+    const union    = this._union
+    if (!this._auto_active || !detected || !union
         || !(this._anchor_left || this._anchor_top)) return false
 
     let live = auto_crop_rect(detected, union, this.document.offsets,
@@ -699,7 +735,7 @@ export class AppModel {
   }
 
   private _begin_draw_drag(pt: readonly [number, number], sz: PageSize): void {
-    this.document.drawn = null   // a fresh press drops the previous drawn window at once (bug 6)
+    this._drawn = null   // a fresh press drops the previous drawn window at once (bug 6)
     this._drag = { kind: 'draw', start: pt, page_w: sz.width, page_h: sz.height } satisfies DrawDrag
     this._draw_rect = null
   }
@@ -737,8 +773,8 @@ export class AppModel {
     let updated = apply_handle_drag(drag.handle ?? 'move', drag.rect0,
       drag.start, [px, py], drag.page_w, drag.page_h)
     if (this._keep_ratio) updated = keep_ratio_normalise(updated, this._ratio, sz.width, sz.height)
-    const detected = this.document.detect_cache.get(this._current_page)
-    const union    = this.document.union
+    const detected = this._detect_cache.get(this._current_page)
+    const union    = this._union
     if (detected && union) {
       this.document.offsets = offsets_from_rect(updated, detected, union,
         sz.width, sz.height, this._anchor_left, this._anchor_top)
@@ -787,7 +823,7 @@ export class AppModel {
       drag.start, [px, py], drag.page_w, drag.page_h)
     // Keep-ratio holds LIVE during a resize, anchored opposite the dragged handle so only the
     // dragged side moves (spec-web §W2 row 9). A move (null/'move' handle) preserves the ratio.
-    this.document.drawn = (this._keep_ratio && drag.handle && drag.handle !== 'move')
+    this._drawn = (this._keep_ratio && drag.handle && drag.handle !== 'move')
       ? keep_ratio_anchored(box, this._ratio, drag.handle, drag.page_w, drag.page_h)
       : box
   }
@@ -810,9 +846,10 @@ export class AppModel {
       // The drawn window is a GLOBAL pending crop shown as an outline on every page — it is NOT
       // committed here. Clicking Crop maps it onto each selected page then clears it, so a hand-
       // drawn window crops ALL pages (desktop §9.3/§12.2), and the page never zooms to the crop
-      // on mouse-up (was the "magnification" bug).
-      this.history.push(this.document)
-      this.document.drawn = drawn
+      // on mouse-up (was the "magnification" bug). _drawn is non-undoable working state (§W9.2) —
+      // no history.push here (removed): finishing a rubber-band draw must not clear the redo
+      // stack, since nothing undo-tracked changes until Crop commits it into `applied`.
+      this._drawn = drawn
       return
     }
 
@@ -827,7 +864,7 @@ export class AppModel {
     this._draw_rect = null
 
     if (!drag) {
-      this.document.drawn = null   // Esc / right-click drops the pending drawn window (bug 5)
+      this._drawn = null   // Esc / right-click drops the pending drawn window (bug 5)
       return
     }
 
@@ -841,7 +878,7 @@ export class AppModel {
       // Cancelling a move/resize of an EXISTING window restores it, not drops it (help_view §5:
       // cancel changes nothing) — distinct from the no-drag Esc above, which intentionally drops
       // a pending window that was never being edited.
-      this.document.drawn = drag.rect0
+      this._drawn = drag.rect0
     }
     // 'draw': nothing to restore — _begin_draw_drag already cleared any prior drawn window at
     // press time (bug 6), and no window was committed yet.
@@ -1040,19 +1077,19 @@ export class AppModel {
 
     const app = this.document.applied.get(p)
     if (app) this.document.applied.set(p, app.map(b => rotate_box_cw(b, sz.height)))
-    const det = this.document.detect_cache.get(p)
-    if (det) this.document.detect_cache.set(p, rotate_box_cw(det, sz.height))
+    const det = this._detect_cache.get(p)
+    if (det) this._detect_cache.set(p, rotate_box_cw(det, sz.height))
 
     this._source_cache.delete(p)
     this._work_cache.delete(p)
     this._invalidate_output_cache(p)
 
     this.document.offsets = DEFAULT_OFFSETS
-    if (this.document.union) {
+    if (this._union) {
       // Rebuild with the SAME FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a,
       // 99_FOUND_ISSUES): the old raw detection_union() re-admitted full-page fallback boxes after
       // a rotate, silently inflating every crop. Judged against each page's rotated dims.
-      this.document.union = this._compute_detection_union(this.document.detect_cache)
+      this._union = this._compute_detection_union(this._detect_cache)
     }
   }
 
@@ -1075,10 +1112,10 @@ export class AppModel {
     this.history.clear()
 
     // Reindex per-page maps (spec §13)
-    this.document.applied      = reindex_map(this.document.applied,      sorted)
-    this.document.rotation     = reindex_map(this.document.rotation,     sorted)
-    this.document.processed    = reindex_map(this.document.processed,    sorted)
-    this.document.detect_cache = reindex_map(this.document.detect_cache, sorted)
+    this.document.applied   = reindex_map(this.document.applied,   sorted)
+    this.document.rotation  = reindex_map(this.document.rotation,  sorted)
+    this.document.processed = reindex_map(this.document.processed, sorted)
+    this._detect_cache      = reindex_map(this._detect_cache,      sorted)
 
     // Rebuild the logical->original page index map (model.py:581-583's `doc.delete_pages` +
     // page_sizes rebuild, adapted since pdf.js has no equivalent in-place deletion primitive).
@@ -1087,14 +1124,14 @@ export class AppModel {
     // against a stale page map).
     this._page_map = this._page_map.filter((_, i) => !removed.has(i))
 
-    if (this.document.auto_active && this.document.detect_cache.size > 0) {
+    if (this._auto_active && this._detect_cache.size > 0) {
       // Same FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a): the old raw
       // detection_union() re-admitted full-page fallback boxes, distorting the union after a delete.
-      this.document.union = this._compute_detection_union(this.document.detect_cache)
-      this.document.auto_active = this.document.union !== null
+      this._union = this._compute_detection_union(this._detect_cache)
+      this._auto_active = this._union !== null
     } else {
-      this.document.union = null
-      this.document.auto_active = false
+      this._union = null
+      this._auto_active = false
     }
 
     this._source_cache.clear()
@@ -1126,12 +1163,17 @@ export class AppModel {
 
     // Image formats have a second, equally-long phase (encode + zip) after rendering; double the
     // total so the bar keeps advancing through encoding instead of freezing at 100% (bug: progress
-    // bar completes, then a long invisible zip pass). PDF has no separate per-page encode phase.
+    // bar completes, then a long invisible zip pass). PDF has no separate per-page encode phase —
+    // true for both the raster and vector PDF paths, so total sizing is unaffected by which runs.
     const total_views = this.view_total
     const is_image = this.settings.export_format !== 'PDF'
     const job = new PageBatchJob(
       `Exporting ${this.settings.export_format}…`, is_image ? total_views * 2 : total_views)
-    void this._run_export(job, filename)
+    // Vector export (§W9.3): NORMAL document, PDF output, adapter supports it. No rasterization —
+    // crop/rotate/split go straight through pdf-lib embedPage against the original page content.
+    const use_vector = this._mode === Mode.NORMAL && this.settings.export_format === 'PDF'
+      && this._adapter.export_pdf_vector !== undefined
+    void (use_vector ? this._run_export_vector(job, filename) : this._run_export(job, filename))
     return job
   }
 
@@ -1161,6 +1203,40 @@ export class AppModel {
       return
     }
 
+    ctrl.complete(new Ok())
+  }
+
+  // Vector counterpart to _run_export: builds VectorExportPage entries (current-frame box +
+  // rotation per source page — the adapter converts to the source's native frame itself) and
+  // hands off to the adapter in one call. No render_output_image, no OffscreenCanvas here — box
+  // resolution is the only work done on this thread; the adapter defensively falls back to
+  // _run_export if export_pdf_vector is somehow missing (export() already checks this ­— belt and
+  // braces, since this method could in principle be called directly by a future caller).
+  private async _run_export_vector(job: PageBatchJob, filename: string): Promise<void> {
+    const ctrl = job.controller
+    if (!this._adapter.export_pdf_vector) { await this._run_export(job, filename); return }
+
+    const pages: VectorExportPage[] = []
+    for (let p = 0; p < this.page_count(); p++) {
+      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return }
+      const sz = this._page_dims(p)
+      const boxes = this._export_boxes_for_page(p, sz)
+      pages.push({
+        orig_page: this._page_map[p] ?? p,
+        boxes,
+        page_w: sz.width, page_h: sz.height,
+        rotation: this.document.rotation.get(p) ?? 0,
+      })
+      for (let i = 0; i < boxes.length; i++) ctrl.advance()
+    }
+
+    try {
+      const bytes = await this._adapter.export_pdf_vector(pages)
+      this._download_pdf(bytes, filename)
+    } catch (e) {
+      ctrl.complete(new Failed(new ImagingError(String(e))))
+      return
+    }
     ctrl.complete(new Ok())
   }
 
@@ -1270,7 +1346,7 @@ export class AppModel {
   // box so it can never paint outside the cropped view (frozen spec §9.3). Empty when no window is
   // being drawn (a plain committed crop shows no frame — bug 18).
   private _committed_overlay(box: Box | undefined): OverlayBox[] {
-    const drawn = this.document.drawn
+    const drawn = this._drawn
     if (!drawn || !box) return []
     return [{ kind: 'committed', box: {
       x0: Math.max(box.x0, Math.min(drawn.x0, box.x1)),
@@ -1336,7 +1412,8 @@ export class AppModel {
   // ---------------------------------------------------------------------------
 
   get mode(): Mode { return this._mode }
-  get auto_active(): boolean { return this.document.auto_active }
+  get auto_active(): boolean { return this._auto_active }
+  get union(): Box | null { return this._union }
   get offsets(): Offsets { return this.document.offsets }
   get dewarp_on(): boolean { return this.document.dewarp_on }
   get filter_mode(): FilterMode { return this.document.filter_mode }
@@ -1458,9 +1535,9 @@ export class AppModel {
   }
 
   private _live_auto_crop_for(p: number): Box | null {
-    const detected = this.document.detect_cache.get(p)
-    const union    = this.document.union
-    if (!detected || !union || !this.document.auto_active
+    const detected = this._detect_cache.get(p)
+    const union    = this._union
+    if (!detected || !union || !this._auto_active
         || !(this._anchor_left || this._anchor_top)) return null
     const sz = this._page_dims(p)
     let rect = auto_crop_rect(detected, union, this.document.offsets,
@@ -1482,7 +1559,7 @@ export class AppModel {
 
     // Global drawn window (pending crop) — outline on every page, clamped to it; overrides the
     // auto/committed display until Crop maps it in.
-    const drawn = this.document.drawn
+    const drawn = this._drawn
     if (drawn) {
       const sz = this._page_dims(p)
       out.push({ kind: 'committed', box: {

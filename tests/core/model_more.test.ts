@@ -16,6 +16,9 @@ function adapter(pc = 4, mode = Mode.NORMAL, w = 200, h = 300): RendererAdapter 
     get_work_image: () => Promise.resolve(bmp(w, h)),
     render_output_image: (_s, b) => Promise.resolve(bmp(Math.max(1, Math.round(b.x1 - b.x0)), Math.max(1, Math.round(b.y1 - b.y0)))),
     detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
+    // NORMAL-mode detect is text-layer only, no raster fallback — mirror detect_content_box's
+    // inset box here so NORMAL-mode detect_content() calls in this file behave as before.
+    detect_text_box: (_i) => Promise.resolve({ x0: 20, y0: 20, x1: w - 20, y1: h - 20 }),
     export_pdf: () => Promise.resolve(new Uint8Array([1])),
     export_images: () => Promise.resolve(new Uint8Array([4])),
     make_synth_page: (_i, w2, h2) => Promise.resolve(bmp(w2, h2)),

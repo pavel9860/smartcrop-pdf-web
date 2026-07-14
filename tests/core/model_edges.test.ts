@@ -23,6 +23,9 @@ function make_adapter(page_count = 4, mode = Mode.NORMAL, page_w = 200, page_h =
     render_output_image: (_s, box) => Promise.resolve(
       make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
     detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
+    // NORMAL-mode detect is text-layer only, no raster fallback — mirror detect_content_box's
+    // inset box here so NORMAL-mode detect_content() calls in this file behave as before.
+    detect_text_box: (_i) => Promise.resolve({ x0: 20, y0: 20, x1: page_w - 20, y1: page_h - 20 }),
     export_pdf: () => Promise.resolve(new Uint8Array([1])),
     export_images: () => Promise.resolve(new Uint8Array([4])),
     make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
@@ -192,10 +195,14 @@ describe('history / rotate / delete edges', () => {
 
   it('redo stack is cleared by a new committing action', async () => {
     const m = await loaded(3, Mode.NORMAL, 200, 300)
+    // end_drag() itself no longer commits (the drawn window is non-undoable scaffolding, §W9.2) —
+    // apply_crop() is the committing action that pushes history.
     m.begin_drag(10, 10, 5); m.update_drag(150, 250); m.end_drag()
+    m.apply_crop()
     m.undo()
     expect(m.can_redo).toBe(true)
     m.begin_drag(20, 20, 5); m.update_drag(160, 260); m.end_drag()
+    m.apply_crop()
     expect(m.can_redo).toBe(false)
   })
 

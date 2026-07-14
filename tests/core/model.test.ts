@@ -70,6 +70,12 @@ function make_mock_adapter(opts: MockOpts = {}): {
       // Inset box — not near-full-page, so it survives the FULL_PAGE_FRAC union filter.
       return Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 })
     },
+    // NORMAL-mode detect is text-layer only, no raster fallback — mirror detect_content_box's
+    // inset box here so NORMAL-mode detect_content() calls in this file behave as before.
+    detect_text_box: (_i) => {
+      bump('detect_text_box')
+      return Promise.resolve({ x0: 20, y0: 20, x1: page_w - 20, y1: page_h - 20 })
+    },
     export_pdf: () => {
       bump('export_pdf')
       return Promise.resolve(new Uint8Array([1, 2, 3]))
@@ -517,12 +523,21 @@ describe('undo / redo', () => {
     model.begin_drag(10, 10, 5)
     model.update_drag(150, 250)
     model.end_drag()
+    // The drawn window is non-undoable scaffolding (§W9.2) — nothing undo-tracked changes until
+    // Crop commits it into `applied`.
+    expect(model.can_undo).toBe(false)
+    expect(model.view_snapshot().overlay).toHaveLength(1)   // still shown as a pending window
+
+    model.apply_crop()
     expect(model.can_undo).toBe(true)
+    expect(model.document.applied.size).toBeGreaterThan(0)
+
     model.undo()
-    expect(model.view_snapshot().overlay).toEqual([])
+    expect(model.document.applied.size).toBe(0)
     expect(model.can_redo).toBe(true)
+
     model.redo()
-    expect(model.view_snapshot().overlay).toHaveLength(1)
+    expect(model.document.applied.size).toBeGreaterThan(0)
   })
 
   it('set_split destroys committed crops but undo fully restores them (C1)', async () => {

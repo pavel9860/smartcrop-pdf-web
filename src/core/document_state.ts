@@ -1,5 +1,8 @@
-// DocumentState — exactly the 11 undoable fields (spec §13, ARCHITECTURE §5.1).
-// Nothing outside this list is snapshotted.
+// DocumentState — exactly the 8 undoable fields (spec §13/§W9.2, ARCHITECTURE §5.1).
+// Nothing outside this list is snapshotted. (Previously 12 fields, mislabeled "11" here; drawn,
+// detect_cache, union, auto_active moved to non-undoable AppModel state 2026-07 — spec-web §W9.2 —
+// since they are detection/drag scaffolding used to arrive at a committed operation, not an
+// operation themselves. See model.ts's _drawn/_detect_cache/_union/_auto_active.)
 
 import type { Box } from './geometry'
 import { FilterMode } from './enums'
@@ -20,14 +23,9 @@ export interface PageProcessIntent {
 
 export interface DocumentState {
   applied:       Map<number, Box[]>               // committed crop(s) per source page
-  drawn:         Box | null                       // global hand-drawn window, page coords (§9.3);
-                                                   // applied to all selected pages on Crop, then cleared
   crop_rects:    Box[]                             // live split rectangles (split=2/4)
   rotation:      Map<number, number>               // page → degrees CW (0/90/180/270)
   processed:     Map<number, PageProcessIntent>    // scan-processing intent per page
-  detect_cache:  Map<number, Box>                  // per-page content box from last detect
-  union:         Box | null                        // aggregate detection union (§8)
-  auto_active:   boolean                           // auto-detect was run at least once
   offsets:       Offsets
   dewarp_on:     boolean
   filter_mode:   FilterMode
@@ -37,13 +35,9 @@ export interface DocumentState {
 export function default_document_state(): DocumentState {
   return {
     applied:        new Map(),
-    drawn:          null,
     crop_rects:     [],
     rotation:       new Map(),
     processed:      new Map(),
-    detect_cache:   new Map(),
-    union:          null,
-    auto_active:    false,
     offsets:        DEFAULT_OFFSETS,
     dewarp_on:      false,
     filter_mode:    FilterMode.NONE,
@@ -56,13 +50,9 @@ export function default_document_state(): DocumentState {
 export function snapshot(state: DocumentState): DocumentState {
   return {
     applied:        new Map([...state.applied].map(([k, v]) => [k, [...v]])),
-    drawn:          state.drawn,          // immutable Box, safe to share
     crop_rects:     [...state.crop_rects],
     rotation:       new Map(state.rotation),
     processed:      new Map(state.processed),
-    detect_cache:   new Map(state.detect_cache),
-    union:          state.union,          // immutable, safe to share
-    auto_active:    state.auto_active,
     offsets:        state.offsets,        // immutable Offsets object
     dewarp_on:      state.dewarp_on,
     filter_mode:    state.filter_mode,

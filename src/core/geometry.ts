@@ -275,6 +275,36 @@ export function rotate_box_cw(box: Box, page_h: number): Box {
   }
 }
 
+// Inverse of rotate_box_cw — undoes exactly one CW step. `page_w` is the CURRENT box's page
+// width (i.e. the page rotate_box_cw produced), not the original pre-rotation width; after this
+// step the page dimensions swap back. Verified by composition: rotate_box_ccw(rotate_box_cw(box,
+// h), h) === box for any box/h (rotate_box_cw's output page has width h).
+export function rotate_box_ccw(box: Box, page_w: number): Box {
+  return {
+    x0: box.y0,
+    y0: page_w - box.x1,
+    x1: box.y1,
+    y1: page_w - box.x0,
+  }
+}
+
+// Convert a box from the CURRENT (rotation-applied) display frame back to its source's NATIVE
+// (rotation=0) frame — needed wherever an operation must address the original, unrotated content
+// directly (spec-web §W9.3: vector PDF export via pdf-lib embedPage, which clips the source page's
+// OWN coordinate system and has no notion of this app's rotation state). Applies rotate_box_ccw
+// once per 90° of current rotation, tracking width at each step (mirrors AppModel._rotate_page's
+// forward walk, in reverse). `rotation` is normalised into [0,360) before stepping.
+export function to_native_frame(
+  box: Box, page_w: number, page_h: number, rotation: number,
+): Box {
+  let b = box, w = page_w, h = page_h
+  for (let r = ((rotation % 360) + 360) % 360; r > 0; r -= 90) {
+    b = rotate_box_ccw(b, w)
+    ;[w, h] = [h, w]
+  }
+  return b
+}
+
 // Per-edge deltas of a resize (updated − rect0) — the unit that same-size RESIZE propagates to
 // the partner windows (spec-web §W2 row 10). Never used for a 'move' drag — same-size does not
 // propagate translation, only a resize's edge deltas.

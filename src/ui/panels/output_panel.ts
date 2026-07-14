@@ -5,10 +5,12 @@
 
 import type { AppModel } from '@core/model'
 import type { AppController } from '../app'
+import { Mode } from '@core/enums'
 import { DPI_PRESETS, EXPORT_FORMATS, CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX } from '@core/constants'
 import { requireEl, syncCustomReveal } from '../dom'
 
 export class OutputPanel {
+  private readonly _quality_card:   HTMLElement
   private readonly _compress_sel:   HTMLSelectElement
   private readonly _custom_dpi_inp: HTMLInputElement
   private readonly _colours_sel:    HTMLSelectElement
@@ -46,6 +48,7 @@ export class OutputPanel {
       </div>`
     container.appendChild(export_el)
 
+    this._quality_card   = compress_el
     this._compress_sel   = requireEl(compress_el, '#op-compress')
     this._custom_dpi_inp = requireEl(compress_el, '#op-custom-dpi')
     this._colours_sel    = requireEl(compress_el, '#op-colours')
@@ -70,15 +73,21 @@ export class OutputPanel {
   }
 
   refresh(model: AppModel, busy: boolean): void {
+    // §W9.4: Output Quality only configures a rasterization step. SCANNED always rasterizes;
+    // NORMAL rasterizes only for JPG/PNG/TIFF output (§W9.3) — a NORMAL+PDF export is vector,
+    // nothing here applies to it.
+    const show_quality = model.mode === Mode.SCANNED || model.export_format !== 'PDF'
+    this._quality_card.classList.toggle('hidden', !show_quality)
+
     this._compress_sel.value = model.compress_preset
     syncCustomReveal(this._compress_sel, this._custom_dpi_inp, this._custom_dpi_inp,
       CUSTOM_DPI_PRESET, String(model.custom_dpi))
     this._colours_sel.value  = model.output_colours
     this._format_sel.value   = model.export_format
     this._export_btn.textContent = `💾︎  Export ${model.export_format}`
-    this._compress_sel.disabled   = busy
-    this._custom_dpi_inp.disabled = busy
-    this._colours_sel.disabled    = busy
+    this._compress_sel.disabled   = busy || !show_quality
+    this._custom_dpi_inp.disabled = busy || !show_quality
+    this._colours_sel.disabled    = busy || !show_quality
     this._format_sel.disabled     = busy
     this._export_btn.disabled     = busy || !model.has_document
   }

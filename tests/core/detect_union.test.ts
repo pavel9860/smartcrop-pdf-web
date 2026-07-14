@@ -1,7 +1,6 @@
-// Auto-detect union regression tests (spec §8, spec-web §W2 rows 5/13).
-// 1. NORMAL-mode detection uses the PDF text-layer fast path (detect_text_box) when a usable text
-//    layer exists — desktop parity with detect.py normal_page_box (spec-web §W2 row 13). It only
-//    falls back to the ink path (detect_content_box) when there is no text layer.
+// Auto-detect union regression tests (spec-web §W2 rows 5/13).
+// 1. NORMAL-mode detection uses the PDF text-layer fast path (detect_text_box) ONLY — no raster
+//    fallback. A page with no usable text layer simply gets no detected box.
 // 2. The union rebuilds after rotate/delete must keep the FULL_PAGE_FRAC exclusion and
 //    judge each box against its OWN page's post-reindex dimensions.
 import { describe, it, expect } from 'vitest'
@@ -15,8 +14,8 @@ function make_bitmap(w = 100, h = 100): ImageBitmap {
 
 const FILE = (name = 'a.pdf'): File => new File(['x'], name, { type: 'application/pdf' })
 
-// detect_content_box has no page argument; detect processes resolve_pages() ascending, so a
-// call-order queue maps 1:1 onto page order for a single detect run.
+// Neither detect_content_box nor detect_text_box takes a page argument; detect processes
+// resolve_pages() ascending, so a call-order queue maps 1:1 onto page order for a single detect run.
 function make_adapter(page_sizes: PageSize[], detect_boxes: Box[]): {
   adapter: RendererAdapter
   calls: Record<string, number>
@@ -41,6 +40,15 @@ function make_adapter(page_sizes: PageSize[], detect_boxes: Box[]): {
       if (!b) throw new Error('detect queue exhausted')
       return Promise.resolve(b)
     },
+    // mode is always NORMAL here (below), so this is the path actually exercised by default —
+    // detect_content_box above stays reachable only via explicit overrides for the ink-path-not-
+    // called assertions.
+    detect_text_box: () => {
+      bump('detect_text_box')
+      const b = queue.shift()
+      if (!b) throw new Error('detect queue exhausted')
+      return Promise.resolve(b)
+    },
     export_pdf:    () => Promise.resolve(new Uint8Array()),
     export_images: () => Promise.resolve(new Uint8Array()),
     make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
@@ -50,7 +58,7 @@ function make_adapter(page_sizes: PageSize[], detect_boxes: Box[]): {
 }
 
 describe('NORMAL-mode detection source (spec-web §W2 row 13)', () => {
-  it('uses the PDF text-layer fast path when a usable text layer exists (desktop parity)', async () => {
+  it('uses the PDF text-layer fast path when a usable text layer exists', async () => {
     const sizes = [{ width: 200, height: 300 }, { width: 200, height: 300 }]
     // Ink boxes the adapter would return IF the image path were taken — used here only to prove it
     // is NOT taken (the text-layer path short-circuits before detect_content_box).
@@ -79,30 +87,37 @@ describe('NORMAL-mode detection source (spec-web §W2 row 13)', () => {
     await model.detect_content().result()
 
     expect(text_calls.n).toBe(2)                    // text layer consulted for both NORMAL pages
-    expect(calls['detect_content_box'] ?? 0).toBe(0) // ink path short-circuited (text layer sufficed)
+    expect(calls['detect_content_box'] ?? 0).toBe(0) // ink path never touched in NORMAL mode
     // §8 aggregate over the text-layer boxes: gL=20, gT=20, W=max(100,80), H=max(260,230)
-    expect(model.document.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
+    expect(model.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
   })
 
-  it('falls back to the ink path when the text layer yields nothing', async () => {
+  it('never falls back to the ink path — a page with no usable text gets no detected box', async () => {
     const sizes = [{ width: 200, height: 300 }, { width: 200, height: 300 }]
+    // Ink boxes the adapter would return IF a raster fallback existed — used here only to prove
+    // it is NEVER called, even for the page whose text layer yields nothing.
     const ink = [
       { x0: 20, y0: 20, x1: 120, y1: 280 },
       { x0: 30, y0: 30, x1: 110, y1: 260 },
     ]
     const { adapter, calls } = make_adapter(sizes, ink)
+    const text_boxes: Record<number, Box | null> = {
+      0: { x0: 20, y0: 20, x1: 120, y1: 280 },   // 100×260
+      1: null,                                    // no usable text layer on this page
+    }
     const with_text: RendererAdapter & {
       detect_text_box?: (i: number) => Promise<Box | null>
     } = {
       ...adapter,
-      detect_text_box: (): Promise<Box | null> => Promise.resolve(null),   // no usable text layer
+      detect_text_box: (i: number): Promise<Box | null> => Promise.resolve(text_boxes[i] ?? null),
     }
     const model = new AppModel(with_text)
     await model.load_files([FILE()])
     await model.detect_content().result()
 
-    expect(calls['detect_content_box']).toBe(2)     // ink path used for every page
-    expect(model.document.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
+    expect(calls['detect_content_box'] ?? 0).toBe(0) // ink path never used, not even as a fallback
+    // Only page 0 contributed a box — union reflects that single box.
+    expect(model.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
   })
 })
 
@@ -119,14 +134,14 @@ describe('union rebuild keeps FULL_PAGE_FRAC exclusion (spec §8)', () => {
     await model.load_files([FILE()])
     await model.detect_content().result()
     // sanity: detect-time union excludes the fallback: gL=20 gT=20 W=100 H=260
-    expect(model.document.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
+    expect(model.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
 
     model.set_select_pattern('2')
     model.set_pages_mode(PagesMode.SELECT)
     model.rotate_pages()
     // p2's box rotates to {20,20,280,120} (260×100). Rebuild must still exclude p1's
     // fallback: gL=min(20,30) gT=min(20,30) W=max(260,80)=260 H=max(100,230)=230.
-    expect(model.document.union).toEqual({ x0: 20, y0: 20, x1: 280, y1: 250 })
+    expect(model.union).toEqual({ x0: 20, y0: 20, x1: 280, y1: 250 })
   })
 
   it('delete: exclusion is judged against the post-reindex page dimensions', async () => {
@@ -145,13 +160,13 @@ describe('union rebuild keeps FULL_PAGE_FRAC exclusion (spec §8)', () => {
     await model.load_files([FILE()])
     await model.detect_content().result()
     // sanity: p3 excluded at detect time: gL=10 gT=10 W=max(100,100) H=max(260,200)
-    expect(model.document.union).toEqual({ x0: 10, y0: 10, x1: 110, y1: 270 })
+    expect(model.union).toEqual({ x0: 10, y0: 10, x1: 110, y1: 270 })
 
     model.set_select_pattern('1')
     model.set_pages_mode(PagesMode.SELECT)
     model.delete_pages()
     // Remaining pages: old p2 (400×300, box kept) and old p3 (200×300, box is a fallback and
     // must STAY excluded — judged vs its own reindexed dims, not a stale page map).
-    expect(model.document.union).toEqual({ x0: 10, y0: 10, x1: 110, y1: 210 })
+    expect(model.union).toEqual({ x0: 10, y0: 10, x1: 110, y1: 210 })
   })
 })
