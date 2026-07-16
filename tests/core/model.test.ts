@@ -632,7 +632,7 @@ describe('undo / redo', () => {
     expect(model.document.applied.get(1)).toEqual([{ x0: 10, y0: 10, x1: 150, y1: 250 }])
   })
 
-  it('set_offset + commit_offsets in one dispatch is ONE undo step, not two (99_FOUND_ISSUES 6a)', async () => {
+  it('set_offset + commit_offsets in one dispatch is ONE undo step, not two', async () => {
     // Offsets start at the default {0,0,0,0} both before AND after detect_content (detect never
     // touches offsets), so a single stale snapshot would coincidentally look like a correct
     // revert — chain two distinct edits to prove the checkpoint is real, not a no-op push.
@@ -1030,11 +1030,6 @@ describe('view_snapshot / prepare_current_view', () => {
     expect(model.view_snapshot().image).toBeNull()
     await model.prepare_current_view()
     expect(model.view_snapshot().image).not.toBeNull()
-  })
-
-  it('status string reports page position and size', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300, page_count: 2 })
-    expect(model.view_snapshot().status).toContain('page 1 / 2')
   })
 })
 

@@ -92,13 +92,12 @@ export class CropController {
     }
   }
 
-  // Snap out-of-range offsets to page-limit (spec-web §4.6). Does NOT push its own history
-  // checkpoint (99_FOUND_ISSUES 6a): its one real caller, crop_panel's offset-field blur/Enter
-  // handler, always calls set_offset() first in the same dispatch, which already pushed the
-  // pre-edit checkpoint — this adjustment folds into that same undo step instead of forcing a
-  // second Ctrl+Z to reach the state before the field was edited. If a future caller ever needs
-  // to call commit_offsets() on its own (no preceding set_offset in the same dispatch), it must
-  // push its own checkpoint first.
+  // Snaps out-of-range offsets to the page limit. Does NOT push its own history checkpoint: its
+  // one real caller, crop_panel's offset-field blur/Enter handler, always calls set_offset() first
+  // in the same dispatch, which already pushed the pre-edit checkpoint — this adjustment folds into
+  // that same undo step instead of forcing a second Ctrl+Z to reach the state before the field was
+  // edited. If a future caller ever needs to call commit_offsets() on its own (no preceding
+  // set_offset in the same dispatch), it must push its own checkpoint first.
   commit_offsets(): void {
     if (!this._ctx.has_document()) return
     const p = this._ctx.current_page()

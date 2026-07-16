@@ -229,12 +229,3 @@ describe('history / rotate / delete edges', () => {
   })
 })
 
-describe('snapshot / status edges', () => {
-  it('status string reflects split position', async () => {
-    const m = await loaded(3)
-    m.set_split(2)
-    m.apply_crop()
-    m.jump_to_output_page(2)
-    expect(m.view_snapshot().status).toContain("page 1 / 3")
-  })
-})

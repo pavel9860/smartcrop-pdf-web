@@ -67,9 +67,9 @@ export class PageOpsService {
 
     doc.offsets = DEFAULT_OFFSETS
     if (det.union) {
-      // Rebuild with the SAME FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a,
-      // 99_FOUND_ISSUES): the old raw detection_union() re-admitted full-page fallback boxes after
-      // a rotate, silently inflating every crop. Judged against each page's rotated dims.
+      // Rebuild with the SAME FULL_PAGE_FRAC exclusion the initial detect applies: a raw
+      // detection_union() would re-admit full-page fallback boxes after a rotate, silently
+      // inflating every crop. Judged against each page's rotated dims.
       this._ctx.set_detection({ ...det, union: this._ctx.recompute_union(det.cache) })
     }
   }

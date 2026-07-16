@@ -304,8 +304,7 @@ No modal, no overlay, no z-index stacking — the panel is a normal DOM sibling.
 
 **Status text** — one DOM overlay owned by `canvas_view.ts`, appended next to the canvas:
 `_coords_el` (`.canvas-coords`, bottom-right cursor read-out), updated on `pointermove`. There is
-no page/size status element (spec-web §3); `ViewSnapshot.status` remains in
-the model but is not displayed. Nothing is painted onto the canvas bitmap.
+no page/size status element. Nothing is painted onto the canvas bitmap.
 
 ---
 

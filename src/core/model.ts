@@ -131,7 +131,6 @@ export interface ViewSnapshot {
   readonly draw_rect:  Box | null
   readonly position:   number               // 1-based output-page
   readonly total:      number
-  readonly status:     string               // drawn on canvas (spec §3.3)
   readonly is_loading: boolean
 }
 
@@ -530,10 +529,7 @@ export class AppModel {
   // ---------------------------------------------------------------------------
 
   // Shared guard: every mutating/batch command requires a document and a non-empty page
-  // selection before touching undoable state (99_FOUND_ISSUES 6b — was duplicated as an inline
-  // 2-line check across detect_content/apply_crop/rotate_pages/delete_pages, plus a same-shaped
-  // helper scoped to only the three scan-processing toggles below; M4 — set_filter_strength was
-  // missing it entirely, unlike its two siblings, before that helper existed).
+  // selection before touching undoable state.
   private _require_pages(): number[] {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     const pages = this.resolve_pages()
@@ -719,8 +715,6 @@ export class AppModel {
 
   export(filename: string): BatchJob {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
-    const doc = this._doc
-    if (!doc) throw new NoDocumentError('No document loaded')
 
     // Image formats have a second, equally-long phase (encode + zip) after rendering; double the
     // total so the bar keeps advancing through encoding instead of freezing at 100% (bug: progress
@@ -884,7 +878,6 @@ export class AppModel {
         draw_rect:  this._crop.draw_rect,
         position:   this._view_pos,
         total:      this.view_total,
-        status:     this._status_string(p, sz),
         is_loading: this._raster.is_loading,
       }
     }
@@ -898,7 +891,6 @@ export class AppModel {
       draw_rect:  this._crop.draw_rect,
       position:   this._view_pos,
       total:      this.view_total,
-      status:     this._status_string(p, sz),
       is_loading: this._raster.is_loading,
     }
   }
@@ -1071,15 +1063,11 @@ export class AppModel {
 
   private _invalidate_current_bitmap(): void { this._raster.invalidate_current() }
 
-  private _status_string(p: number, sz: PageSize): string {
-    return `${sz.width.toFixed(0)} × ${sz.height.toFixed(0)}  page ${p + 1} / ${this.page_count()}`
-  }
-
   private _synth_snapshot(): ViewSnapshot {
     return {
       image: null, page_w: SYNTH_W, page_h: SYNTH_H, crop_origin: { x: 0, y: 0 },
       overlay: [], draw_rect: null, position: 1, total: 0,
-      status: '', is_loading: false,
+      is_loading: false,
     }
   }
 }

@@ -1,20 +1,4 @@
 // loader.ts — PDF.js loading/rendering (main thread) + imaging/export worker RPC.
-//
-// PDF.js parsing/rendering runs here on the MAIN thread, not in a Worker. This is
-// deliberate, not an oversight: pdfjs-dist's display API (pdf.mjs) references
-// `window`/`document` unconditionally in several places it should guard — e.g.
-// PDFWorker._initialize() reads `window.location.href` to decide same-origin handling
-// before it even tries to spawn its own pdf.worker.mjs worker. Inside any Worker,
-// `window` is undefined, so that call throws, PDF.js silently falls back to its
-// same-thread "fake worker" path, and that path in turn calls `importScripts()` —
-// which is illegal inside an ES-module worker ("format: 'es'" in vite.config.ts) and
-// throws a second, more confusing error. A prior version of this file ran the pdf.js
-// calls inside a dedicated render.worker.ts; that hit exactly this failure for every
-// document load. Running on the main thread sidesteps it entirely and is in fact
-// pdf.js's own supported architecture: pdf.js still offloads the CPU-heavy parsing to
-// its own internally-managed pdf.worker.mjs (a real Worker, spawned from here), so we
-// aren't blocking the UI thread with parsing — only the (cheap) canvas compositing in
-// page.render() runs on this thread, same as pdf.js's documented usage pattern.
 import * as pdfjs from 'pdfjs-dist'
 import { PDFDocument, degrees } from 'pdf-lib'
 import type { DocInfo, RendererAdapter, OutputPage, VectorExportPage, PageSize } from '@core/model'
@@ -54,11 +38,7 @@ async function is_native_page(page: pdfjs.PDFPageProxy): Promise<boolean> {
 }
 
 // Rotate a rendered page raster 90° CW `angle` degrees (0/90/180/270), expanding the
-// canvas so the rotated content isn't clipped — the raster equivalent of desktop
-// model.py's `img.rotate(-ang, expand=True)` (PIL rotates CCW; -ang = clockwise). Bakes
-// the page's current rotation state (core/model.ts's document.rotation map) into the
-// pixels themselves, since AppModel.view_snapshot()/render_output_image() work in the
-// post-rotation page-unit frame (core/model.ts's _page_dims) and never rotate on read.
+// canvas so the rotated content isn't clipped
 function rotate_bitmap_cw(bitmap: ImageBitmap, angle: number): ImageBitmap {
   if (angle === 0) return bitmap
   const { width: w, height: h } = bitmap
@@ -266,9 +246,7 @@ export class PdfRendererAdapter implements RendererAdapter {
     const canvas = new OffscreenCanvas(Math.round(vp.width), Math.round(vp.height))
     const ctx    = canvas.getContext('2d')
     if (!ctx) throw new Error('2d context unavailable')
-    // pdfjs-dist's RenderParameters.canvasContext is typed as CanvasRenderingContext2D only;
-    // it hasn't been updated for OffscreenCanvasRenderingContext2D even though page.render()
-    // only calls the Canvas2D methods the two interfaces share. Cast is required, not a gap.
+
     await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport: vp }).promise
     page.cleanup()
     return rotate_bitmap_cw(canvas.transferToImageBitmap(), rotation)
@@ -279,8 +257,6 @@ export class PdfRendererAdapter implements RendererAdapter {
     intent: PageProcessIntent,
     supersample: number,
   ): Promise<ImageBitmap> {
-    // `source` is already the page raster (rendered once by the model at SRC_DPI, rotation
-    // applied) — no second get_source_image render here (the old double-rasterization, §W2 row 5).
     if (!intent.dewarp && !intent.filter) return source
     return process_page_async(source, intent, supersample)
   }

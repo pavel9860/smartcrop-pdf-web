@@ -138,13 +138,6 @@ export async function process_page_async(
   return process_page(bitmap, intent, supersample)
 }
 
-// Native Float16Array support cannot be assumed even on current-generation engines (empirically
-// absent from this repo's own CI Node runtime despite broad browser-support claims) — do not
-// gate behaviour on `typeof Float16Array`. onnxruntime-web's published types (DataTypeMap.
-// float16 = Uint16Array) are treated as authoritative; the constructor.name check below is
-// defensive only, for the engines where onnxruntime-web itself substitutes a native
-// Float16Array at runtime despite what its own .d.ts promises the caller.
-//
 // Correctly-rounded IEEE 754 binary16 <-> binary32 conversion (round-to-nearest-even). Verified
 // against numpy.float16 as ground truth: 0 mismatches across all 65,536 possible fp16 bit
 // patterns (decode), 0 mismatches across 200,000+ random/edge-case float32 values (encode), 0
