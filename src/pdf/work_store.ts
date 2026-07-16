@@ -9,6 +9,8 @@
 // (put/clear) or null (get), so a storage error never blocks or crashes scan processing — the model
 // simply recomputes on a miss.
 
+import { open_idb, idb_req, idb_tx } from './idb'
+
 const DB_NAME = 'smartcrop-work'
 const STORE = 'rasters'
 
@@ -16,12 +18,7 @@ export class WorkRasterStore {
   private _db: Promise<IDBDatabase> | null = null
 
   private _open(): Promise<IDBDatabase> {
-    this._db ??= new Promise<IDBDatabase>((resolve, reject) => {
-      const req = indexedDB.open(DB_NAME, 1)
-      req.onupgradeneeded = (): void => { req.result.createObjectStore(STORE) }
-      req.onsuccess = (): void => { resolve(req.result) }
-      req.onerror   = (): void => { reject(req.error ?? new Error('IndexedDB open failed')) }
-    })
+    this._db ??= open_idb(DB_NAME, STORE)
     return this._db
   }
 
@@ -40,7 +37,9 @@ export class WorkRasterStore {
     }
     try {
       const db = await this._open()
-      await tx_done(put_value(db, key, blob))
+      const tx = db.transaction(STORE, 'readwrite')
+      tx.objectStore(STORE).put(blob, key)
+      await idb_tx(tx)
     } catch {
       /* best-effort: a full/blocked IndexedDB just means this page recomputes next time */
     }
@@ -49,7 +48,9 @@ export class WorkRasterStore {
   async get(key: string): Promise<ImageBitmap | null> {
     try {
       const db = await this._open()
-      const blob = await req_result<Blob | undefined>(get_value(db, key))
+      const tx = db.transaction(STORE, 'readonly')
+      const req = tx.objectStore(STORE).get(key) as IDBRequest<Blob | undefined>
+      const blob = await idb_req(req)
       if (!blob) return null
       return await createImageBitmap(blob)
     } catch {
@@ -62,35 +63,9 @@ export class WorkRasterStore {
       const db = await this._open()
       const tx = db.transaction(STORE, 'readwrite')
       tx.objectStore(STORE).clear()
-      await tx_done(tx)
+      await idb_tx(tx)
     } catch {
       /* best-effort */
     }
   }
-}
-
-function put_value(db: IDBDatabase, key: string, value: Blob): IDBTransaction {
-  const tx = db.transaction(STORE, 'readwrite')
-  tx.objectStore(STORE).put(value, key)
-  return tx
-}
-
-function get_value(db: IDBDatabase, key: string): IDBRequest<Blob | undefined> {
-  const tx = db.transaction(STORE, 'readonly')
-  return tx.objectStore(STORE).get(key) as IDBRequest<Blob | undefined>
-}
-
-function req_result<T>(req: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = (): void => { resolve(req.result) }
-    req.onerror   = (): void => { reject(req.error ?? new Error('IndexedDB request failed')) }
-  })
-}
-
-function tx_done(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = (): void => { resolve() }
-    tx.onerror    = (): void => { reject(tx.error ?? new Error('IndexedDB transaction failed')) }
-    tx.onabort    = (): void => { reject(tx.error ?? new Error('IndexedDB transaction aborted')) }
-  })
 }

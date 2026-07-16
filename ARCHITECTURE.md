@@ -172,9 +172,16 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               - make_synth_page(idx, w, h) — synthetic placeholder (§14), drawn
                                 directly with Canvas API, no worker involved.
 
-      imaging.ts             OpenCV.js scan processing (detect / filter / ONNX dewarp), main
-                              thread — see §7a for why. Exposes `detect_content_async()` and
-                              `process_page_async()`, called directly by loader.ts (no postMessage).
+      imaging.ts             OpenCV.js scan processing (detect / filter), main thread — see §7a
+                              for why. Exposes `detect_content_async()` and `process_page_async()`,
+                              called directly by loader.ts (no postMessage).
+      cv.ts                  OpenCV.js runtime access point (`cv`, `Mat` type, `ensure_cv()`) —
+                              shared by imaging.ts and dewarp.ts.
+      dewarp.ts              docuwarp/UVDoc ONNX mesh dewarp: model loading + fp16 tensor
+                              plumbing + the two-stage inference pipeline. Called from
+                              imaging.ts's process_page_async()/process_page().
+      idb.ts                 Generic IndexedDB open/request/transaction-wait helpers, shared by
+                              dewarp.ts's model cache and work_store.ts's raster cache.
 
     ui/                     Presentation layer. Imports @core/* and @pdf/*. core/ never imports ui/.
       constants.ts          UI-only tunables: PANEL_WIDTH=320, DETAIL_PANEL_WIDTH=380,
@@ -600,7 +607,7 @@ build. Full build/verification/reproduction steps, and why emsdk `latest` (not t
 2.0.10, which lacks `emscripten/version.h` that `--simd` needs) plus two one-line patches to
 OpenCV's own build files were required, are in `vendor/opencv-js-simd/BUILD.md`. The modern
 emscripten export is an async `Promise<Module>`; a small appended shim bridges it back to the
-stable-object + assignable `onRuntimeInitialized` shape `imaging.ts::ensure_cv` expects, and a
+stable-object + assignable `onRuntimeInitialized` shape `cv.ts::ensure_cv` expects, and a
 `var Module` fix makes OpenCV's UMD wrapper strict-mode/ESM safe. **Key finding:** SIMD alone gave
 only ~1.5–4.5×; it did **not** meet the per-page budget on its own — the architecture fixes (§9a)
 and the downscaled-morphology change (spec-web §16) did the bulk of the work.

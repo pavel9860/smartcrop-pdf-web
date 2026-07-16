@@ -1,123 +1,19 @@
-// imaging.ts — OpenCV.js scan processing (detect / filter / dewarp). Runs on the MAIN
-// thread, not in a Worker — deliberate, not an oversight.
-//
-// This used to run inside a dedicated imaging.worker.ts. Root cause of moving it here:
-// @techstark/opencv-js's own .d.ts re-exports `onRuntimeInitialized` as a NAMED EXPORT
-// (dist/src/types/opencv/_hacks.d.ts), which collides with the runtime property of the
-// same name Emscripten expects the embedder to set. `cvModule.onRuntimeInitialized = fn`
-// is therefore an illegal import-binding reassignment — esbuild rejects it outright
-// ("Cannot assign to import 'onRuntimeInitialized'; imports are immutable") whenever it
-// analyses the import strictly (confirmed via `optimizeDeps.exclude` and via the
-// dedicated-worker bundle, which does its own separate esbuild pass). Where a looser
-// bundling path lets the assignment through silently instead of erroring (Vite's
-// dev-time `optimizeDeps` pre-bundle for a plain main-thread import), the write still
-// doesn't reach the real Emscripten module object, so onRuntimeInitialized never fires
-// and every `cv.Mat`/etc. call throws "cv.Mat is not a constructor" forever. Confirmed
-// with isolated minimal repros in both a Worker and a main-thread script.
-//
-// Fix: go through `cvModule.default` — the actual mutable Emscripten module object at
-// runtime — instead of the namespace import itself. `cv` below is a local const, not an
-// import specifier, so ordinary property assignment on it is legal and actually reaches
-// the runtime object. Confirmed working in both contexts once fixed; kept execution on
-// the main thread anyway (see loader.ts's equivalent pdf.js note) since a Worker-hosted
-// nested esbuild pass for this exact package has its own separate strictness quirks
-// (the "Cannot assign to import" build error above) that are simplest to avoid entirely
-// by not re-bundling this package for a Worker target at all.
-//
-// Trade-off: detect/filter/dewarp now run on the UI thread instead of off it. Each call
-// is a single bounded operation (one page's worth of Sauvola/connected-components work,
-// spec §17 budgets ~150 ms), so this is a UX regression (brief UI block) rather than a
-// correctness one — tracked as follow-up work, not silently accepted as fine.
+// imaging.ts — OpenCV.js scan processing: detect (Sauvola/connected-components) and the B/W and
+// Sharpen filters. Dewarp (ONNX) lives in ./dewarp.ts; the cv.Mat runtime access point (and why
+// this all runs on the main thread, not a Worker) lives in ./cv.ts.
 
-import * as cvModule from '@techstark/opencv-js'
 import type { Box } from '@core/geometry'
 import { FilterMode } from '@core/enums'
 import type { PageProcessIntent } from '@core/document_state'
 import { Mode } from '@core/enums'
-import { MissingDependencyError, CONTEXT_2D_UNAVAILABLE } from '@core/errors'
+import { CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import {
   BORDER_FRAC, MIN_COMP_FRAC, DETECT_MAX_PX, CLEAN_AMOUNT,
   CC_CONNECTIVITY, BG_KERNEL_SIZE, BG_DOWNSCALE, SAUVOLA_WINDOW, SAUVOLA_R,
   BW_STRENGTH, SHARPEN_STRENGTH,
-  DEWARP_MODEL_W, DEWARP_MODEL_H, DEWARP_UVDOC_URL, DEWARP_BILINEAR_URL,
-  DEWARP_UVDOC_CACHE_KEY, DEWARP_BILINEAR_CACHE_KEY,
 } from '@core/constants'
-// Type-only: erased at compile time, so this does NOT defeat the lazy dynamic import() below —
-// onnxruntime-web's real module code is only ever loaded inside ensure_onnx()/apply_dewarp().
-import type { InferenceSession } from 'onnxruntime-web'
-
-const cv = (cvModule as unknown as { default: typeof cvModule }).default
-
-// `cv.Mat` cannot be used as a *type* (cv is a value, not a TS namespace) — alias it via
-// ReturnType<typeof cv.matFromImageData>, as elsewhere in this file.
-type Mat = ReturnType<typeof cv.matFromImageData>
-
-// ONNX sessions for dewarp (pstwh/docuwarp, two-stage) — loaded once on first dewarp call.
-let _uvdoc_session: InferenceSession | null = null
-let _bilinear_session: InferenceSession | null = null
-
-// Cached at module scope so concurrent callers share one init and one onRuntimeInitialized
-// assignment (C3): previously each call installed its own callback, so a second concurrent
-// call clobbered the first's, and the first caller's `resolve` never fired.
-let _cv_init: Promise<void> | null = null
-
-// Exported for tests/pdf/imaging.test.ts only (C3/M3 races need direct unit coverage — jsdom has
-// no WASM cv context to exercise them through detect_content_async/process_page_async).
-export function ensure_cv(): Promise<void> {
-  if (!_cv_init) {
-    // Fast path: some builds' WASM init can complete before this is ever called (e.g. it
-    // finished during module load), in which case onRuntimeInitialized already fired as a
-    // no-op — assigning a new handler here would never be invoked and we'd eat the full 10s
-    // fallback for nothing every time. cv.Mat existing is proof the runtime is already up.
-    // (cv.Mat is typed as an always-present constructor but is genuinely undefined pre-init —
-    // read through an optional view so the runtime guard isn't type-narrowed away.)
-    const cv_ready = (cv as { Mat?: unknown }).Mat != null
-    _cv_init = cv_ready ? Promise.resolve() : new Promise<void>((resolve): void => {
-      cv.onRuntimeInitialized = (): void => { resolve() }
-      // Fallback timeout in case the callback doesn't fire (matches prior behaviour)
-      setTimeout(resolve, 10_000)
-    })
-  }
-  return _cv_init
-}
-
-// Loads both docuwarp ONNX sessions from same-origin /models/ (vite-plugin-static-copy, see
-// vite.config.ts), cached in IndexedDB after the first fetch. Model files are vendored into the
-// repo, not pulled from a CDN — see apply_dewarp()'s header comment for the licensing note.
-async function ensure_onnx(): Promise<void> {
-  if (_uvdoc_session && _bilinear_session) return
-  try {
-    const ort = await import('onnxruntime-web/webgpu')
-    // GH Pages cannot send COOP/COEP, so SharedArrayBuffer (multi-threaded WASM) is
-    // unavailable — force the single-thread WASM build. WebGPU needs no SAB either and is
-    // tried first where the browser exposes it; single-thread WASM+SIMD is the fallback.
-    ort.env.wasm.numThreads = 1
-    // Only request WebGPU when the browser exposes it; otherwise ORT would have to fall back
-    // internally. Explicit selection keeps behaviour deterministic across Firefox/Safari.
-    const has_webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator
-    const execution_providers = has_webgpu ? ['webgpu', 'wasm'] : ['wasm']
-    // One-time diagnostic (TODO §17): dewarp on the 1-thread WASM EP costs seconds/page — this
-    // line lets a user verify in the console whether WebGPU was even requested on their machine.
-    console.info('[smartcrop] ONNX EPs requested:', execution_providers.join(','),
-      '— webgpu available:', has_webgpu)
-    // Prefix with the deployment base so the vendored model weights resolve under a GH Pages
-    // project-page subpath (see vite.config.ts base / constants.ts note). Does not change ORT
-    // execution behaviour — same weights, same providers, only the fetch URL adapts.
-    const base = import.meta.env.BASE_URL
-    const [uvdoc_bytes, bilinear_bytes] = await Promise.all([
-      fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL),
-      fetch_with_idb_cache(DEWARP_BILINEAR_CACHE_KEY, base + DEWARP_BILINEAR_URL),
-    ])
-    const [uvdoc_session, bilinear_session] = await Promise.all([
-      ort.InferenceSession.create(new Uint8Array(uvdoc_bytes), { executionProviders: execution_providers }),
-      ort.InferenceSession.create(new Uint8Array(bilinear_bytes), { executionProviders: execution_providers }),
-    ])
-    _uvdoc_session = uvdoc_session
-    _bilinear_session = bilinear_session
-  } catch (e) {
-    throw new MissingDependencyError(`Failed to load the dewarp model: ${String(e)}`)
-  }
-}
+import { cv, type Mat, ensure_cv } from './cv'
+import { ensure_onnx, apply_dewarp } from './dewarp'
 
 // ---------------------------------------------------------------------------
 // Public entry points (called directly from loader.ts — no postMessage RPC)
@@ -136,79 +32,6 @@ export async function process_page_async(
   await ensure_cv()
   if (intent.dewarp) await ensure_onnx()
   return process_page(bitmap, intent, supersample)
-}
-
-// Correctly-rounded IEEE 754 binary16 <-> binary32 conversion (round-to-nearest-even). Verified
-// against numpy.float16 as ground truth: 0 mismatches across all 65,536 possible fp16 bit
-// patterns (decode), 0 mismatches across 200,000+ random/edge-case float32 values (encode), 0
-// mismatches across a real 1,041,768-element model-input tensor (encode, this model's actual
-// data distribution) — see docs/SmartCrop_PDF_Specification_Web.md §W2 row 1 for the
-// verification method.
-function f32_to_f16_bits(val: number): number {
-  const f32 = new Float32Array(1); f32[0] = val
-  const bits = new Uint32Array(f32.buffer)[0] as number
-  const sign = (bits >>> 16) & 0x8000
-  const mant32 = bits & 0x007fffff
-  const exp = (bits >>> 23) & 0xff
-  if (exp === 0xff) return sign | 0x7c00 | (mant32 ? 0x0200 : 0)   // Inf / NaN
-  if (exp === 0) return sign   // +-0 or subnormal float32 -> 0 in fp16 (magnitude far below fp16 min)
-  const e = exp - 127 + 15
-  if (e >= 0x1f) return sign | 0x7c00                              // overflow -> Inf
-  if (e <= 0) {
-    if (e < -10) return sign                                       // underflow -> 0
-    const m = (mant32 | 0x00800000) >>> (14 - e)                   // implicit leading 1, shift into 10-bit mantissa + guard
-    const rem = (mant32 | 0x00800000) & ((1 << (14 - e)) - 1)
-    const halfway = 1 << (13 - e)
-    let out = sign | m
-    if (rem > halfway || (rem === halfway && (m & 1))) out += 1
-    return out
-  }
-  const m = mant32 >>> 13
-  const rem = mant32 & 0x1fff
-  let out = sign | (e << 10) | m
-  if (rem > 0x1000 || (rem === 0x1000 && (m & 1))) out += 1
-  return out
-}
-
-function f16_bits_to_f32(bits: number): number {
-  const sign = (bits & 0x8000) << 16
-  let exp = (bits >>> 10) & 0x1f
-  let mant = bits & 0x3ff
-  let u32: number
-  if (exp === 0) {
-    if (mant === 0) {
-      u32 = sign
-    } else {
-      exp = 1
-      while ((mant & 0x400) === 0) { mant <<= 1; exp -= 1 }
-      mant &= 0x3ff
-      u32 = sign | ((exp - 15 + 127) << 23) | (mant << 13)
-    }
-  } else if (exp === 0x1f) {
-    u32 = sign | 0x7f800000 | (mant << 13)
-  } else {
-    u32 = sign | ((exp - 15 + 127) << 23) | (mant << 13)
-  }
-  return new Float32Array(new Uint32Array([u32]).buffer)[0] as number
-}
-
-function f32_array_to_f16_bits(data: Float32Array): Uint16Array {
-  const out = new Uint16Array(data.length)
-  for (let i = 0; i < data.length; i++) out[i] = f32_to_f16_bits(data[i] as number)   // noUncheckedIndexedAccess
-  return out
-}
-
-// `data` is typed Uint16Array per onnxruntime-common's DataTypeMap.float16 but MAY be a native
-// Float16Array at runtime on engines that support it (onnxruntime-web prefers Float16Array when
-// the host provides one — its own .d.ts cannot express a runtime-conditional type). Branch on
-// the actual runtime class, not the static type.
-function f16_data_to_f32_array(data: Uint16Array): Float32Array {
-  if (typeof Float16Array !== 'undefined' && data instanceof (Float16Array as unknown as { new (): ArrayLike<number> })) {
-    return Float32Array.from(data as unknown as ArrayLike<number>)
-  }
-  const out = new Float32Array(data.length)
-  for (let i = 0; i < data.length; i++) out[i] = f16_bits_to_f32(data[i] as number)   // noUncheckedIndexedAccess
-  return out
 }
 
 // ---------------------------------------------------------------------------
@@ -469,7 +292,9 @@ async function process_page(
   const img_data = ctx.getImageData(0, 0, w, h)
   let mat = cv.matFromImageData(img_data)
 
-  if (dewarp && _uvdoc_session && _bilinear_session) {
+  // apply_dewarp itself no-ops (returns `mat` unchanged) if the ONNX sessions aren't ready — the
+  // real gate is process_page_async's `await ensure_onnx()` before this function is ever called.
+  if (dewarp) {
     mat = await apply_dewarp(mat, supersample)
   }
 
@@ -531,185 +356,4 @@ function apply_filter_mat(
   cv.cvtColor(sharpened, rgba, Number(cv.COLOR_GRAY2RGBA))
   sharpened.delete()
   return rgba
-}
-
-// Real docuwarp/UVDoc mesh dewarp (spec §10.1) — two ONNX stages, ported from the actual
-// docuwarp package source (github.com/pstwh/docuwarp, unwarp.py Unwarp.prepare_input/
-// inference — same tensor names, dtypes, shapes and call order verified against that source):
-//  1. uvdoc.onnx: a CNN predicts a coarse (1,2,45,31) warp-field grid from the page downscaled
-//     to a FIXED DEWARP_MODEL_W x DEWARP_MODEL_H (a property of the trained weights, not
-//     tunable). Runs in fp16 (the model's native input dtype).
-//  2. bilinear_unwarping.onnx: upsamples that grid to the target resolution (bilinear,
-//     align_corners) and uses it to resample the FULL-resolution source via ONNX GridSample
-//     (bilinear, zero padding, align_corners) — no learned weights in this stage.
-// `supersample` (spec §15 Dewarp-supersample) requests stage 2's output at supersample x the
-// source resolution, then downsamples back via cv.INTER_AREA — this is a deliberate
-// reinterpretation of desktop's "renders the page larger before the mesh remap, downsamples
-// after" (core/imaging.py docstring): the CNN's input is fixed-size regardless of supersample
-// in both ports, so here supersample instead controls the fidelity of stage 2's grid
-// upsampling/resample before the final downscale. Not a literal port of the desktop code path —
-// flagged as a design adaptation, not a verified parity claim.
-//
-// Licensing: pstwh/docuwarp itself ships no LICENSE file; the underlying UVDoc weights are
-// MIT-licensed (github.com/tanguymagne/UVDoc). Desktop's core/imaging.py already depends on
-// this exact PyPI package at runtime — this port carries the same pre-existing exposure
-// forward, not a new one.
-//
-// Numerically cross-checked against a real Python docuwarp reference run on a synthetic test
-// image (same two .onnx files, same tensor plumbing): stage 2 alone reproduces the Python
-// reference bit-for-bit (0.0 max abs diff) when fed the same grid; the full end-to-end path
-// (uvdoc.onnx run under onnxruntime-web/WASM vs Python onnxruntime/CPU) diverges by
-// maxAbsDiff=3.5e-2 / meanAbsDiff=6.5e-6 on a [0,1] scale — consistent with expected benign
-// cross-engine floating-point noise through a 16M-parameter CNN, not an algorithmic error.
-async function apply_dewarp(src: Mat, supersample: number): Promise<Mat> {
-  if (!_uvdoc_session || !_bilinear_session) return src   // caller already gates on this; defensive only
-
-  const ort = await import('onnxruntime-web/webgpu')
-  const w = src.cols, h = src.rows
-
-  // Stage 1: predict the coarse warp-field grid from a fixed-size downscale of the page.
-  // cv.INTER_CUBIC, not canvas smoothing: matches PIL's Image.resize() default filter for
-  // RGB images (Resampling.BICUBIC, verified against the pinned pillow==10.4.0 source) more
-  // closely than a canvas 2D drawImage downscale would.
-  const resized_chw = mat_to_resized_chw_f32(src, DEWARP_MODEL_W, DEWARP_MODEL_H)
-  const input_tensor = new ort.Tensor('float16', f32_array_to_f16_bits(resized_chw),
-    [1, 3, DEWARP_MODEL_H, DEWARP_MODEL_W])
-  const cnn_out = await _uvdoc_session.run({ input: input_tensor })
-  const points_raw = cnn_out['output']
-  if (!points_raw) throw new MissingDependencyError('Dewarp model returned no "output" tensor')
-  // ORT ≥1.19 decodes a float16 output into the new Float16Array (elements are already real
-  // floats); older/other builds return a Uint16Array of raw f16 bits. Handle BOTH — the prior
-  // code accepted only Uint16Array and threw on Float16Array, breaking dewarp entirely (bug 21).
-  const points_bits = points_raw.data
-  let points_f32: Float32Array
-  if (points_bits instanceof Uint16Array) {
-    points_f32 = f16_data_to_f32_array(points_bits)
-  } else if (ArrayBuffer.isView(points_bits) && points_bits.constructor.name === 'Float16Array') {
-    points_f32 = Float32Array.from(points_bits as unknown as ArrayLike<number>)
-  } else {
-    throw new MissingDependencyError(`Dewarp model "output" has unexpected dtype: ${points_raw.type}`)
-  }
-  const points_tensor = new ort.Tensor('float32', points_f32, points_raw.dims)
-
-  // Stage 2: resample the full-resolution source through the (upsampled) grid.
-  const target_w = Math.max(1, Math.round(w * supersample))
-  const target_h = Math.max(1, Math.round(h * supersample))
-  const warped_tensor = new ort.Tensor('float32', mat_to_chw_f32(src), [1, 3, h, w])
-  // img_size is (width, height), matching docuwarp's `np.array(image.size)` (PIL .size order) —
-  // verified against the actual reference source and its ONNX graph's `img_size` consumer.
-  const img_size_tensor = new ort.Tensor('int64',
-    BigInt64Array.from([BigInt(target_w), BigInt(target_h)]), [2])
-
-  const bl_out = await _bilinear_session.run({
-    warped_img: warped_tensor, point_positions: points_tensor, img_size: img_size_tensor,
-  })
-  const out_raw = bl_out['output']
-  if (!out_raw) throw new MissingDependencyError('Unwarp model returned no "output" tensor')
-  const out_data = out_raw.data
-  if (!(out_data instanceof Float32Array)) {
-    throw new MissingDependencyError(`Unwarp model "output" has unexpected dtype: ${out_raw.type}`)
-  }
-
-  let result = chw_f32_to_rgba_mat(out_data, target_w, target_h)
-  if (target_w !== w || target_h !== h) {
-    const downsampled = new cv.Mat()
-    cv.resize(result, downsampled, new cv.Size(w, h), 0, 0, Number(cv.INTER_AREA))
-    result.delete()
-    result = downsampled
-  }
-  src.delete()
-  return result
-}
-
-// RGBA uint8 Mat, native resolution -> planar RGB float32 in [0,1] (mirrors docuwarp's
-// `image_array.transpose(2,0,1)/255` on the ORIGINAL, unresized image — alpha dropped, this
-// pipeline's alpha channel is always opaque filler, never real data).
-function mat_to_chw_f32(mat: Mat): Float32Array {
-  const h = mat.rows, w = mat.cols
-  const src = mat.data
-  const plane = h * w
-  const out = new Float32Array(3 * plane)
-  for (let p = 0; p < plane; p++) {
-    const o = p * 4
-    out[p]             = (src[o]     as number) / 255   // noUncheckedIndexedAccess
-    out[plane + p]      = (src[o + 1] as number) / 255   // noUncheckedIndexedAccess
-    out[2 * plane + p]  = (src[o + 2] as number) / 255   // noUncheckedIndexedAccess
-  }
-  return out
-}
-
-// RGBA uint8 Mat, resized to (target_w, target_h) via bicubic, then -> planar RGB float32 in
-// [0,1]. Mirrors docuwarp's `resized_array.transpose(2,0,1)/255`.
-function mat_to_resized_chw_f32(mat: Mat, target_w: number, target_h: number): Float32Array {
-  const resized = new cv.Mat()
-  cv.resize(mat, resized, new cv.Size(target_w, target_h), 0, 0, Number(cv.INTER_CUBIC))
-  const out = mat_to_chw_f32(resized)
-  resized.delete()
-  return out
-}
-
-// Planar RGB float32 in [0,1] -> RGBA uint8 Mat (alpha fully opaque).
-function chw_f32_to_rgba_mat(data: Float32Array, w: number, h: number): Mat {
-  const plane = w * h
-  const out = new cv.Mat(h, w, Number(cv.CV_8UC4))
-  const dst = out.data
-  for (let p = 0; p < plane; p++) {
-    const o = p * 4
-    dst[o]     = clamp_u8((data[p]            as number) * 255)   // noUncheckedIndexedAccess
-    dst[o + 1] = clamp_u8((data[plane + p]     as number) * 255)   // noUncheckedIndexedAccess
-    dst[o + 2] = clamp_u8((data[2 * plane + p] as number) * 255)   // noUncheckedIndexedAccess
-    dst[o + 3] = 255
-  }
-  return out
-}
-
-function clamp_u8(v: number): number {
-  return v < 0 ? 0 : v > 255 ? 255 : Math.round(v)
-}
-
-// ---------------------------------------------------------------------------
-// IndexedDB cache for ONNX model
-// ---------------------------------------------------------------------------
-
-// Exported for tests/pdf/imaging.test.ts only (see ensure_cv's note above).
-export async function fetch_with_idb_cache(key: string, url: string): Promise<ArrayBuffer> {
-  const db  = await open_idb()
-  const tx  = db.transaction('models', 'readonly')
-  const req = tx.objectStore('models').get(key) as IDBRequest<ArrayBuffer | undefined>
-  const cached = await idb_req(req)
-  if (cached) return cached
-
-  const resp = await fetch(url)
-  // M3: a failed fetch (404/500) must not be cached — caching it would permanently poison the
-  // IDB entry for `key`, since a truthy `cached` short-circuits every future call above.
-  if (!resp.ok) throw new Error(`Fetch failed for ${url}: ${resp.status} ${resp.statusText}`)
-  const bytes = await resp.arrayBuffer()
-
-  const tx2   = db.transaction('models', 'readwrite')
-  tx2.objectStore('models').put(bytes, key)
-  await idb_tx(tx2)
-  return bytes
-}
-
-function open_idb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open('smartcrop-models', 1)
-    req.onupgradeneeded = (): void => { req.result.createObjectStore('models') }
-    req.onsuccess = (): void => { resolve(req.result) }
-    req.onerror   = (): void => { reject(req.error ?? new Error('IndexedDB open failed')) }
-  })
-}
-
-function idb_req<T>(req: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = (): void => { resolve(req.result) }
-    req.onerror   = (): void => { reject(req.error ?? new Error('IndexedDB request failed')) }
-  })
-}
-
-function idb_tx(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = (): void => { resolve() }
-    tx.onerror    = (): void => { reject(tx.error ?? new Error('IndexedDB transaction failed')) }
-  })
 }

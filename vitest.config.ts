@@ -23,16 +23,20 @@ export default defineConfig({
       // and are validated by the Playwright e2e suite (tests/e2e/) instead — matching this
       // repo's pure->unit / boundary->e2e testing rule (CLAUDE.md):
       //   imaging.ts     — OpenCV.js (cv.Mat) runtime; jsdom has no WASM cv context
+      //   dewarp.ts      — ensure_onnx/apply_dewarp need a real ONNX+OpenCV runtime; its fp16
+      //                    conversion + fetch_with_idb_cache ARE unit-tested (dewarp.test.ts),
+      //                    but that's a minority of the file
       //   canvas_view.ts — real Canvas2D paint/drag; jsdom's canvas is a non-rendering stub
       //   app.ts         — top-level controller wiring/boot/shortcuts; integration, not a unit
       //   main.ts        — 3-line bootstrap; workers — run only in a real Worker context
-      //   work_store.ts  — real IndexedDB + OffscreenCanvas; jsdom has neither (no fake-indexeddb
-      //                    dep), so every call falls straight into its own best-effort catch block
-      //                    and "covers" nothing real. loader.ts stays INCLUDED — its pdf.js-mocked
-      //                    tests/pdf/loader.test.ts is real, meaningful coverage, just not yet 90%.
+      //   work_store.ts  — needs a real OffscreenCanvas for put()'s PNG encode; jsdom has none.
+      //                    loader.ts stays INCLUDED — its pdf.js-mocked tests/pdf/loader.test.ts
+      //                    is real, meaningful coverage, just not yet 90%. cv.ts and idb.ts also
+      //                    stay INCLUDED — both are fully exercised under jsdom via a mocked
+      //                    opencv-js / fake IndexedDB (cv.test.ts, idb.test.ts).
       exclude: [
         'src/workers/**', 'src/main.ts',
-        'src/pdf/imaging.ts', 'src/ui/canvas_view.ts', 'src/ui/app.ts',
+        'src/pdf/imaging.ts', 'src/pdf/dewarp.ts', 'src/ui/canvas_view.ts', 'src/ui/app.ts',
         'src/pdf/work_store.ts',
       ],
       thresholds: {
