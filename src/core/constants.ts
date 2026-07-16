@@ -149,6 +149,8 @@ export const UNDO_DEPTH_OPTIONS: readonly number[] = [1, 2, 4, 8]
 export const UNDO_DEPTH_MIN = 1
 export const UNDO_DEPTH_MAX = 50
 export const DEFAULT_DEWARP_SUPERSAMPLE = 2.0
+export const DEWARP_SUPERSAMPLE_MIN = 1.0
+export const DEWARP_SUPERSAMPLE_MAX = 4.0
 
 // Dewarp model (pdf/imaging.ts) — pstwh/docuwarp, a two-stage ONNX pipeline: uvdoc.onnx (a CNN
 // predicting a coarse warp-field grid) + bilinear_unwarping.onnx (GridSample-based resampler).

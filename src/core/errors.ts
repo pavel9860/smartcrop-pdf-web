@@ -20,3 +20,5 @@ export class DocumentLoadError extends SmartCropError {
     super(message, cause !== undefined ? { cause } : undefined)
   }
 }
+
+export const CONTEXT_2D_UNAVAILABLE = '2d context unavailable'

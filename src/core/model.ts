@@ -30,6 +30,7 @@ import {
   SYNTH_W, SYNTH_H, type ExportFormat,
   CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
   PAPER_SIZES, DEFAULT_PAPER, CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
+  DEWARP_SUPERSAMPLE_MIN, DEWARP_SUPERSAMPLE_MAX,
 } from './constants'
 import { resolve_pages } from './parsing'
 import {
@@ -668,7 +669,7 @@ export class AppModel {
   }
   set_output_postfix(postfix: string): void { this.settings.output_postfix = postfix }
   set_dewarp_supersample(factor: number): void {
-    this.settings.dewarp_supersample = Math.max(1.0, Math.min(4.0, factor))
+    this.settings.dewarp_supersample = Math.max(DEWARP_SUPERSAMPLE_MIN, Math.min(DEWARP_SUPERSAMPLE_MAX, factor))
   }
 
   // Resolve the export target LONG-SIDE pixel count (spec-web §W2 row 8): the output page's long

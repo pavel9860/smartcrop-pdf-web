@@ -6,7 +6,7 @@ import type { Box } from '@core/geometry'
 import { to_native_frame } from '@core/geometry'
 import type { PageProcessIntent } from '@core/document_state'
 import { Mode } from '@core/enums'
-import { DocumentLoadError } from '@core/errors'
+import { DocumentLoadError, CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import { WorkRasterStore } from './work_store'
 import {
   JPEG_QUALITY, SYNTH_PAGES, SYNTH_W, SYNTH_H,
@@ -45,7 +45,7 @@ function rotate_bitmap_cw(bitmap: ImageBitmap, angle: number): ImageBitmap {
   const swapped = angle % 180 === 90
   const canvas = new OffscreenCanvas(swapped ? h : w, swapped ? w : h)
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('2d context unavailable')
+  if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
   switch (angle) {
     case 90:  ctx.translate(h, 0); ctx.rotate(Math.PI / 2);  break
     case 180: ctx.translate(w, h); ctx.rotate(Math.PI);      break
@@ -64,7 +64,7 @@ async function reencode_as_png(blob: Blob): Promise<Uint8Array> {
   const bitmap = await createImageBitmap(blob)
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('2d context unavailable')
+  if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
   ctx.drawImage(bitmap, 0, 0)
   bitmap.close()
   const encoded = await canvas.convertToBlob({ type: 'image/png' })
@@ -245,7 +245,7 @@ export class PdfRendererAdapter implements RendererAdapter {
     const vp     = page.getViewport({ scale })
     const canvas = new OffscreenCanvas(Math.round(vp.width), Math.round(vp.height))
     const ctx    = canvas.getContext('2d')
-    if (!ctx) throw new Error('2d context unavailable')
+    if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
 
     await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport: vp }).promise
     page.cleanup()
@@ -291,21 +291,11 @@ export class PdfRendererAdapter implements RendererAdapter {
 
     const canvas = new OffscreenCanvas(Math.max(1, out_w), Math.max(1, out_h))
     const ctx    = canvas.getContext('2d')
-    if (!ctx) throw new Error('2d context unavailable')
+    if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
+    if (greyscale) ctx.filter = 'grayscale(1)'
     ctx.drawImage(src,
       box.x0 * scale, box.y0 * scale, crop_w * scale, crop_h * scale,
       0, 0, out_w, out_h)
-
-    if (greyscale) {
-      const id = ctx.getImageData(0, 0, out_w, out_h)
-      for (let i = 0; i < id.data.length; i += 4) {
-        const g = 0.299 * (id.data[i] ?? 0)
-              + 0.587 * (id.data[i + 1] ?? 0)
-              + 0.114 * (id.data[i + 2] ?? 0)
-        id.data[i] = id.data[i + 1] = id.data[i + 2] = g
-      }
-      ctx.putImageData(id, 0, 0)
-    }
 
     return Promise.resolve(canvas.transferToImageBitmap())
   }
@@ -440,7 +430,7 @@ export class PdfRendererAdapter implements RendererAdapter {
   make_synth_page(_idx: number, w: number, h: number): Promise<ImageBitmap> {
     const canvas = new OffscreenCanvas(w, h)
     const ctx    = canvas.getContext('2d')
-    if (!ctx) throw new Error('2d context unavailable')
+    if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
     ctx.fillStyle = SYNTH_BG_COLOR
     ctx.fillRect(0, 0, w, h)
     ctx.strokeStyle = SYNTH_BORDER_COLOR

@@ -161,4 +161,25 @@ describe('render_output_image sizing (C2, spec-web §W2 row 8)', () => {
     expect(out.width).toBe(400)
     expect(out.height).toBe(600)
   })
+
+  it('greyscale=true sets the canvas grayscale filter before drawing; false leaves it unset', async () => {
+    const seen: string[] = []
+    ;(globalThis as any).OffscreenCanvas = class {
+      width: number; height: number
+      constructor(w: number, h: number) { this.width = w; this.height = h }
+      getContext(): unknown {
+        return {
+          drawImage: () => { /* no-op */ },
+          set filter(v: string) { seen.push(v) },
+        }
+      }
+      transferToImageBitmap(): any { return { width: this.width, height: this.height, close: () => { /* no-op */ } } }
+    }
+    const a = new PdfRendererAdapter()
+    const src = { width: 400, height: 600, close: () => { /* no-op */ } }
+    const box = { x0: 0, y0: 0, x1: 200, y1: 300 }
+    await a.render_output_image(src, box, 200, 300, null, true)
+    await a.render_output_image(src, box, 200, 300, null, false)
+    expect(seen).toEqual(['grayscale(1)'])
+  })
 })

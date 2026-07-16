@@ -4,6 +4,7 @@
 import { PDFDocument } from 'pdf-lib'
 import { zipSync, type Zippable } from 'fflate'
 import type { OutputPage } from '@core/model'
+import { CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import { encode_tiff } from './tiff'
 
 type ImageFormat = 'JPG' | 'PNG' | 'TIFF'
@@ -76,7 +77,7 @@ async function zip_images(
 async function encode_page(p: OutputPage, format: ImageFormat, quality: number): Promise<Uint8Array> {
   const canvas = new OffscreenCanvas(p.width, p.height)
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('2d context unavailable')
+  if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
   ctx.drawImage(p.bitmap, 0, 0)
   try {
     if (format === 'TIFF') {
@@ -94,7 +95,7 @@ async function encode_page(p: OutputPage, format: ImageFormat, quality: number):
 async function bitmap_to_jpeg(bitmap: ImageBitmap, quality: number): Promise<Uint8Array> {
   const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('2d context unavailable')
+  if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
   ctx.drawImage(bitmap, 0, 0)
   const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality })
   return new Uint8Array(await blob.arrayBuffer())

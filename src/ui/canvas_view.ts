@@ -5,6 +5,7 @@
 import type { AppModel, ViewSnapshot, OverlayBox } from '@core/model'
 import type { Box } from '@core/geometry'
 import { CANVAS_MARGIN, HANDLE_R, HANDLE_SLACK, SYNTH_W, SYNTH_H } from '@core/constants'
+import { CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import {
   OVERLAY_DASH, OVERLAY_LINE_WIDTH_SPLIT, OVERLAY_LINE_WIDTH_CROP, HANDLE_LINE_WIDTH,
   SPLIT_BADGE_FONT_SCALE, SPLIT_BADGE_RADIUS_SCALE, RUBBER_BAND_DASH, RUBBER_BAND_LINE_WIDTH,
@@ -46,7 +47,7 @@ export class CanvasView {
     this.el = document.createElement('canvas')
     this.el.className = 'page-canvas'
     const ctx = this.el.getContext('2d')
-    if (!ctx) throw new Error('2d context unavailable')
+    if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
     this._ctx = ctx
 
     this._coords_el = document.createElement('div')

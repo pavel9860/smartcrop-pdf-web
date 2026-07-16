@@ -400,14 +400,19 @@ export function split_rects_grid(n: 1 | 2 | 4, page_w: number, page_h: number): 
 }
 
 // Reindex a per-page map after page deletion.
-// `deleted` is a sorted array of 0-based source indices that were removed.
+// `deleted` is a sorted array of 0-based source indices that were removed. Binary search per key
+// (O(n log d)) instead of a full scan of `deleted` per key (O(n·d)): `lo` lands on the first
+// deleted index >= k, which is both the count of deleted indices below k and the membership check.
 export function reindex_map<V>(map: Map<number, V>, deleted: readonly number[]): Map<number, V> {
   const result = new Map<number, V>()
   for (const [k, v] of map) {
-    const removed_before = deleted.filter(d => d < k).length
-    if (!deleted.includes(k)) {
-      result.set(k - removed_before, v)
+    let lo = 0, hi = deleted.length
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1
+      if ((deleted[mid] ?? Infinity) < k) lo = mid + 1
+      else hi = mid
     }
+    if (deleted[lo] !== k) result.set(k - lo, v)
   }
   return result
 }

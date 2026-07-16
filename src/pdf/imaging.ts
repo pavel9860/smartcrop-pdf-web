@@ -34,7 +34,7 @@ import type { Box } from '@core/geometry'
 import { FilterMode } from '@core/enums'
 import type { PageProcessIntent } from '@core/document_state'
 import { Mode } from '@core/enums'
-import { MissingDependencyError } from '@core/errors'
+import { MissingDependencyError, CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import {
   BORDER_FRAC, MIN_COMP_FRAC, DETECT_MAX_PX, CLEAN_AMOUNT,
   CC_CONNECTIVITY, BG_KERNEL_SIZE, BG_DOWNSCALE, SAUVOLA_WINDOW, SAUVOLA_R,
@@ -372,7 +372,7 @@ function detect_content(bitmap: ImageBitmap, page_w: number, page_h: number): Bo
 
   const canvas = new OffscreenCanvas(dw, dh)
   const ctx    = canvas.getContext('2d')
-  if (!ctx) throw new Error('2d context unavailable')
+  if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
   ctx.drawImage(bitmap, 0, 0, dw, dh)
   const img_data = ctx.getImageData(0, 0, dw, dh)
 
@@ -464,7 +464,7 @@ async function process_page(
 
   const canvas = new OffscreenCanvas(w, h)
   const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error('2d context unavailable')
+  if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
   ctx.drawImage(src_bitmap, 0, 0)
   const img_data = ctx.getImageData(0, 0, w, h)
   let mat = cv.matFromImageData(img_data)
@@ -480,7 +480,7 @@ async function process_page(
 
   const out_canvas = new OffscreenCanvas(mat.cols, mat.rows)
   const out_ctx = out_canvas.getContext('2d')
-  if (!out_ctx) throw new Error('2d context unavailable')
+  if (!out_ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
   // mat.data is a subarray view onto the whole WASM heap, so mat.data.buffer is that ENTIRE heap
   // (length ≠ 4*cols*rows) — `new ImageData(...)` on it threw IndexSizeError and hung dewarp &
   // filters (bug 3). Copy only the mat's own bytes; both filter and dewarp outputs are 8-bit RGBA.
