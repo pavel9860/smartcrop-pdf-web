@@ -386,6 +386,29 @@ export class PdfRendererAdapter implements RendererAdapter {
     for (const entry of pages) {
       const source = this._pages[entry.orig_page]
       if (!source) continue
+
+      // Unsplit case (one output page, no crop-window split): copyPages()+setCropBox() clones the
+      // page's own content stream/resources as-is (still compressed, fonts not re-embedded per
+      // call) instead of decompressing it into a Form XObject via embedPage — avoids the
+      // Form-XObject path's size inflation entirely. Split (N boxes from 1 source page) still
+      // needs embedPage below, since copyPages can only produce one crop per source page.
+      const only_box = entry.boxes.length === 1 ? entry.boxes[0] : undefined
+      if (source.kind === 'pdf' && only_box) {
+        const native  = to_native_frame(only_box, entry.page_w, entry.page_h, entry.rotation)
+        const srcDoc  = await get_pdflib_doc(source.pdf)
+        const [copied] = await outDoc.copyPages(srcDoc, [source.page_num - 1])
+        if (copied) {
+          const outPage = outDoc.addPage(copied)
+          const src_h = outPage.getHeight()
+          outPage.setCropBox(native.x0, src_h - native.y1, native.x1 - native.x0, native.y1 - native.y0)
+          // Always set explicitly, even for 0: a copied page carries the SOURCE's own native
+          // /Rotate, which embedPage's Form-XObject path never did (Form XObjects carry no
+          // rotation) — entry.rotation is the single source of truth for output rotation.
+          outPage.setRotation(degrees(entry.rotation))
+          continue
+        }
+      }
+
       for (const box of entry.boxes) {
         // native frame: the source page's OWN (rotation=0) coordinates — embedPage/drawImage below
         // clip in that frame, with no notion of this app's rotation state (geometry.ts §W9.3).
