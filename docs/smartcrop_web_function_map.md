@@ -111,7 +111,12 @@ main.ts
 
 ---
 
-## 6. `AppModel` (`core/model.ts`, 1529 lines) — the central facade
+## 6. `AppModel` (`core/model.ts`, 600 lines) — the central facade
+
+`model.ts` was decomposed into 8 collaborators (§18) to reach its current 600 lines; the
+sub-sections below (§6.1–6.13) describe the facade's method GROUPS by public signature, which are
+unchanged by that decomposition, not which file each method's body currently lives in — see §18
+for the actual per-file breakdown.
 
 `RendererAdapter` injected via constructor (`pdf/loader.ts`'s `PdfRendererAdapter` is the only implementation). Full interface: `load_files, get_source_image, get_work_image, render_output_image, detect_content_box, detect_text_box?, load_work?/persist_work?/clear_work_cache?, export_pdf, export_pdf_vector?, export_images, make_synth_page, close`. `VectorExportPage` (`orig_page, boxes, page_w, page_h, rotation`) is the payload type for `export_pdf_vector`.
 
@@ -495,25 +500,42 @@ Flat stylesheet, BEM-ish naming 1:1 with each panel's `innerHTML` classes (`.pan
 
 ---
 
-## 18. Proposed `AppModel` decomposition (not yet implemented — design only)
+## 18. `AppModel` decomposition (implemented)
 
-`model.ts` is 1529 lines / ~90 public members / 13 concern groups (§6.1–6.13) in one class. Facade signatures are load-bearing (`ui/` calls only public methods; CLAUDE.md requires every public method to have a test using only the public interface) — a pure internal split behind the same signatures should leave every existing test green. LOC below is logic lines only (blank/comment-stripped), from §6's line ranges.
+`model.ts` was 1085 lines before this decomposition; it is now exactly 600 lines (the project's
+file-size limit) after extracting 8 collaborators. Facade signatures are unchanged throughout —
+`ui/` still calls the same public methods (see ARCHITECTURE.md §5, kept current there and not
+duplicated here), every existing test using AppModel's public interface stayed green through the
+extraction. LOC below is `wc -l` on the current file.
 
 | Collaborator | LOC | Owns (state) | Absorbs (methods) | Depends on |
 |---|---|---|---|---|
-| `PageIndexMap` | ~15 | `_page_map` | index translation, `remove(sorted)`, `reset(count)` | nothing |
-| `PageRasterPipeline` | ~100 | `_source/_work/_output_cache`, `_work_disk_keys`, `_persisted_keys`, `_doc_gen`, `_current_bitmap`, `_is_loading`, `_prefetching` | §6.13 entire + `_prefetch` | adapter, `PageIndexMap`, a `page_dims(p)` fn |
-| `CropController` | ~340 | `_drag`, `_draw_rect`, `_anchor_left/top`, `_keep_ratio`, `_ratio`, `_split_count`, `_same_size` | §6.5 + §6.6 entire (drag state machine + anchors/offsets/ratio/split/same-size) | `document` (r/w `drawn/crop_rects/offsets/detect_cache/union`), `history`, `geometry.ts` |
-| `DetectionService` | ~165 | none new | §6.4 entire (`detect_content`, `apply_crop` + helpers) | adapter, `PageRasterPipeline`, `CropController` (read anchors/ratio/keep_ratio), `history`, `document` |
-| `ScanProcessingService` | ~80 | none new | §6.7 entire | `PageRasterPipeline`, `history`, `document.dewarp_on/filter_*` |
-| `ExportService` | ~110 | `_download_pdf/_download_zip` | §6.11 entire | adapter, `PageRasterPipeline`, `settings`, `document.applied` |
-| `PageOpsService` | ~85 | none new | §6.10 entire (rotate/delete) | `document`, `PageIndexMap`, `PageRasterPipeline` (invalidate), `geometry.ts` |
-| `Settings` (upgrade existing) | ~50 | (already owns settings fields) | §6.9 entire, incl. `_resolved_target_long_px` | none |
+| `PageIndexMap` | 20 | index translation map | `remove(sorted)`, `reset(count)`, `orig(p)` | nothing |
+| `PageRasterPipeline` | 237 | source/work/output caches, disk-tier bookkeeping, current bitmap | raster fetch/cache/prefetch | adapter, `PageIndexMap`, a `page_dims(p)` fn |
+| `CropController` | 465 | drag state machine, anchors/offsets/keep-ratio/split/same-size | anchor/offset/split/drag gesture methods + `compute_crop_boxes_for_page` (crop-commit box resolution — added after the original 7-step plan, to reach the line limit) | `document`, `history`, `geometry.ts`, live detection-state reads |
+| `PageOpsService` | 118 | none new | rotate/delete | `document`, `PageIndexMap`, `PageRasterPipeline`, `geometry.ts` |
+| `DetectionService` | 147 | none new | `detect_content` (Auto-detect) + union aggregation + committed-crop refresh | adapter, `PageRasterPipeline`, `PageIndexMap`, live crop-state reads |
+| `ScanProcessingService` | 94 | none new | dewarp/filter toggles + work-cache warming | `PageRasterPipeline`, `history`, `document.dewarp_on/filter_*` |
+| `ExportService` | 176 | download handlers | `export`/vector export/`suggested_export_name` + target-DPI resolution (`_resolved_target_long_px`, moved in past the original plan) | adapter, `PageRasterPipeline`, `PageIndexMap` |
+| `ViewSnapshotBuilder` | 152 | none new | `view_snapshot`/overlay-building/`live_auto_crop_for` — added after the original 7-step plan (which assumed extracting this wouldn't reduce coupling; it did, once everything else had already moved out) | `PageRasterPipeline`, `CropController`, live detection-state reads |
 
-**Stays on `AppModel`** (too small to justify a file, or inherently needs everything): §6.1 document lifecycle (becomes ~8 lines: call each collaborator's `reset()`), §6.2 navigation, §6.3 pages selection, §6.8 history wrapper, §6.12 view-snapshot assembly (`view_snapshot`/`_build_overlay`/`prepare_current_view` read from every collaborator — extracting a `ViewPresenter` just moves the same coupling into a 6-field constructor, no actual reduction), all plain getters.
+`model_types.ts` (105 lines) holds the pure type contracts (`RendererAdapter`, `DocInfo`,
+`OutputPage`, `VectorExportPage`, `ViewSnapshot`, `OverlayBox`, `PageSize`), re-exported from
+`model.ts` for every existing import site — no behavior, just relocated to stay under the limit.
 
-**Two decisions before implementing:**
-1. `CropController` needs `anchor_left/top`, `keep_ratio`, `ratio`, `split_count`, `same_size` — currently AppModel fields, not `DocumentState` fields (deliberately non-undoable, see model.ts's own header comment on this). Move them into `CropController` (AppModel's getters become 1-line delegations) vs. pass as a param object per call. Recommend: move them in: it's what makes `CropController` self-contained instead of needing a 5-field context object on every call.
-2. `Settings`-as-class means `ui/` could call `model.settings.set_compress_preset(x)` directly instead of `model.set_compress_preset(x)` — smaller `AppModel` surface but touches every `output_panel.ts`/`settings_view.ts` call site. Recommend: keep `AppModel`'s current delegating setters (1-liners) for now; only worth the call-site churn if `Settings` grows further.
+**Stays on `AppModel`**: document lifecycle, navigation, pages selection, `apply_crop` (the
+crop-commit orchestration — calls `CropController.compute_crop_boxes_for_page`), history wrapper,
+output settings, `prepare_current_view` (async cache-warming ahead of a snapshot read), all plain
+getters, and the `detect_cache`/`union`/`auto_active` detection-result fields themselves — read
+live by `CropController`/`PageOpsService`/`DetectionService`/`ViewSnapshotBuilder` through each
+collaborator's own context interface (the same "shared state stays on `AppModel`, exposed live,
+not duplicated" pattern `PageRasterPipeline` established from step 1).
 
-**Extraction order** (each step independently gate-passable — `tsc && eslint && vitest && playwright`, per CLAUDE.md): `PageIndexMap` → `PageRasterPipeline` → `CropController` → `PageOpsService` → `DetectionService` → `ScanProcessingService` → `ExportService` → (optional) `Settings`-as-class. Lowest-coupling/highest-confidence first; `DetectionService` and `ScanProcessingService` are ordered after `CropController`/`PageOpsService` since they read from it.
+`Settings`-as-class (the original plan's optional 8th step) was not done — `AppModel`'s delegating
+setters stayed as 1-liners; the line budget was met without it, and it would have touched every
+`output_panel.ts`/`settings_view.ts` call site for no longer-necessary LOC saving.
+
+The three duplicated context closures the original decomposition left behind (`document()`,
+`page_dims(p)`, `current_page()` — independently re-declared in `CropController`'s and
+`PageOpsService`'s constructor wiring) were unified into one shared object in `AppModel`'s
+constructor, spread into every collaborator's context instead of retyped per collaborator.

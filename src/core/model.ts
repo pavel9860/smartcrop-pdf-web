@@ -12,24 +12,21 @@ import { PageIndexMap } from './page_index_map'
 import { PageRasterPipeline } from './page_raster_pipeline'
 import { CropController } from './crop_controller'
 import { PageOpsService, type DetectionState } from './page_ops_service'
-import {
-  type Box,
-  auto_crop_rect, keep_ratio_normalise,
-  detection_union,
-  box_width, box_height,
-} from './geometry'
-import { type BatchJob, type BatchController, PageBatchJob, Ok, Cancelled, Failed } from './batch'
+import { DetectionService } from './detection_service'
+import { ScanProcessingService } from './scan_processing_service'
+import { ExportService } from './export_service'
+import { ViewSnapshotBuilder } from './view_snapshot_builder'
+import { type Box } from './geometry'
+import { type BatchJob } from './batch'
 import { Mode, FilterMode, PagesMode } from './enums'
-import {
-  NoDocumentError, EmptySelectionError, InvalidSplitError, ImagingError,
-} from './errors'
+import { NoDocumentError, EmptySelectionError, InvalidSplitError } from './errors'
 import {
   NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DPI_PRESETS, EXPORT_FORMATS,
-  DEFAULT_UNDO_DEPTH, FULL_PAGE_FRAC,
-  FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX, UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
+  DEFAULT_UNDO_DEPTH,
+  UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
   SYNTH_W, SYNTH_H, type ExportFormat,
   CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
-  PAPER_SIZES, DEFAULT_PAPER, CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
+  PAPER_SIZES, CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
   DEWARP_SUPERSAMPLE_MIN, DEWARP_SUPERSAMPLE_MAX,
 } from './constants'
 import { resolve_pages } from './parsing'
@@ -37,103 +34,14 @@ import {
   output_page_count, view_to_source,
 } from './viewmodel'
 
-// ---------------------------------------------------------------------------
-// Injected async adapter (keeps core/ DOM-free, fully unit-testable with mocks)
-// ---------------------------------------------------------------------------
-
-export interface PageSize { width: number; height: number }
-
-export interface DocInfo {
-  page_count: number
-  page_sizes: PageSize[]
-  file_names: string[]   // for window title / suggested export name
-  mode: Mode
-  // True only for the no-file-open placeholder document (spec-web §1). Pages of a
-  // synthetic doc have no PageSource; they must render via make_synth_page, not
-  // get_source_image. Omitted (falsy) for every real load.
-  synthetic?: boolean
-}
-
-export interface OutputPage {
-  bitmap: ImageBitmap
-  width:  number
-  height: number
-}
-
-// One source page's vector-export instructions (spec-web §W9.3). `boxes` is normally length 1;
-// a split page (crop_rects committed as N boxes) becomes N output pages from the SAME source.
-// page_w/page_h/rotation are the page's CURRENT (already rotation-adjusted) values, i.e. exactly
-// what _page_dims/document.rotation already carry — the adapter converts back to the source's
-// native frame itself (geometry.ts::to_native_frame), core/ does not need to know that frame exists.
-export interface VectorExportPage {
-  readonly orig_page: number
-  readonly boxes:     readonly Box[]
-  readonly page_w:    number
-  readonly page_h:    number
-  readonly rotation:  number
-}
-
-export interface RendererAdapter {
-  load_files(files: File[]): Promise<DocInfo>
-  get_source_image(page_idx: number, dpi: number, rotation: number): Promise<ImageBitmap>
-  // Scan processing (dewarp/filter) applied to an ALREADY-rendered source bitmap. Taking the
-  // source (not a page index) means the model renders each page exactly once and hands that raster
-  // straight to processing — no second internal rasterization (spec-web §W2 row 5).
-  get_work_image(source: ImageBitmap, intent: PageProcessIntent,
-                 supersample: number): Promise<ImageBitmap>
-  // target_long_px: export sizing — the crop's long side scales to this many pixels
-  // (= dpi × paper height, spec-web §W2 row 8); null = keep source resolution (and preview).
-  render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,
-                      target_long_px: number | null, greyscale: boolean): Promise<ImageBitmap>
-  detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode): Promise<Box>
-  // Fast NORMAL-mode detection from the PDF text layer (desktop detect.py normal_page_box) — no
-  // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
-  detect_text_box?(page_idx: number): Promise<Box | null>
-  // Disk (IndexedDB) tier of the two-tier processed-raster cache (spec-web §W2 row 5). The model
-  // owns the opaque key (page + intent generation). All optional: an adapter without them (test
-  // mocks) simply has no disk tier and the model recomputes on a RAM-cache miss.
-  load_work?(key: string): Promise<ImageBitmap | null>
-  persist_work?(key: string, bitmap: ImageBitmap): Promise<void>
-  clear_work_cache?(): Promise<void>
-  export_pdf(pages: OutputPage[]): Promise<Uint8Array>
-  // Lossless vector PDF export for NORMAL-mode documents (spec-web §W9.3): crops/rotates/splits
-  // via the ORIGINAL PDF page content (pdf-lib embedPage), never rasterizes. Optional — an adapter
-  // without it (test mocks) simply means AppModel falls back to the raster export path.
-  export_pdf_vector?(pages: readonly VectorExportPage[]): Promise<Uint8Array>
-  export_images(
-    pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
-    on_progress?: (done: number, total: number) => void,
-  ): Promise<Uint8Array>
-  make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>
-  close(): void
-}
-
-// ---------------------------------------------------------------------------
-// ViewSnapshot — what canvas_view reads (frozen bundle)
-// ---------------------------------------------------------------------------
-
-export type OverlayKind = 'auto' | 'split' | 'committed'
-
-export interface OverlayBox {
-  readonly kind:  OverlayKind
-  readonly box:   Box
-  readonly idx?:  number   // 1-based split index (split mode)
-}
-
-export interface ViewSnapshot {
-  readonly image:      ImageBitmap | null   // null = loading
-  readonly page_w:     number
-  readonly page_h:     number
-  // Top-left of the coordinate space page_w/page_h/overlay/draw_rect live in, in full-page units.
-  // {0,0} for a full page; the committed box's origin on a committed (cropped) page so canvas_view
-  // can map pointer input and paint overlays into the zoomed cropped view (spec-web §W8).
-  readonly crop_origin: { readonly x: number; readonly y: number }
-  readonly overlay:    readonly OverlayBox[]
-  readonly draw_rect:  Box | null
-  readonly position:   number               // 1-based output-page
-  readonly total:      number
-  readonly is_loading: boolean
-}
+// Public contract types (RendererAdapter, DocInfo, OutputPage, VectorExportPage, ViewSnapshot,
+// OverlayBox, OverlayKind, PageSize) live in model_types.ts — re-exported here so every existing
+// import of these types via this module keeps working unchanged.
+export type {
+  PageSize, DocInfo, OutputPage, VectorExportPage, RendererAdapter,
+  OverlayKind, OverlayBox, ViewSnapshot,
+} from './model_types'
+import type { PageSize, DocInfo, RendererAdapter, ViewSnapshot } from './model_types'
 
 // ---------------------------------------------------------------------------
 // AppModel
@@ -193,6 +101,20 @@ export class AppModel {
   // (detect_cache/union/auto_active) as CropController, exposed the same way — live, not captured.
   private readonly _page_ops: PageOpsService
 
+  // Auto-detect algorithm (§18 DetectionService, step 5/7) — reads/writes the same
+  // detect_cache/union/auto_active state as CropController/PageOpsService above.
+  private readonly _detection: DetectionService
+
+  // Dewarp/filter toggles (§18 ScanProcessingService, step 6/7).
+  private readonly _scan: ScanProcessingService
+
+  // PDF/image export (§18 ExportService, step 7/7).
+  private readonly _export: ExportService
+
+  // ViewSnapshot computation (§18, extra step) — reads _raster/_crop directly (both already
+  // public-surfaced on AppModel itself) plus the same detection state as the services above.
+  private readonly _view: ViewSnapshotBuilder
+
   constructor(private readonly _adapter: RendererAdapter) {
     this._raster = new PageRasterPipeline(_adapter, this._page_index, {
       mode: (): Mode => this._mode,
@@ -202,11 +124,24 @@ export class AppModel {
       process_intent: (p): PageProcessIntent => this._page_process_intent(p),
       dewarp_supersample: (): number => this.settings.dewarp_supersample,
     })
-    this._crop = new CropController(this.history, {
+
+    // Shared by every service context below — document()/page_dims()/current_page() are read
+    // LIVE (never captured: `document` is reassigned wholesale on undo/redo). Previously each
+    // context re-declared these three verbatim (§18 dup — Problems.md #14).
+    const page_ctx = {
       document: (): DocumentState => this.document,
-      has_document: (): boolean => this._doc !== null,
+      page_dims: (p: number): PageSize => this._page_dims(p),
       current_page: (): number => this._current_page,
-      page_dims: (p): PageSize => this._page_dims(p),
+    }
+    const detection_state = (): DetectionState =>
+      ({ cache: this._detect_cache, union: this._union, auto_active: this._auto_active })
+    const set_detection_state = (d: DetectionState): void => {
+      this._detect_cache = d.cache; this._union = d.union; this._auto_active = d.auto_active
+    }
+
+    this._crop = new CropController(this.history, {
+      ...page_ctx,
+      has_document: (): boolean => this._doc !== null,
       detected: (p): Box | null => this._detect_cache.get(p) ?? null,
       union: (): Box | null => this._union,
       auto_active: (): boolean => this._auto_active,
@@ -214,20 +149,58 @@ export class AppModel {
       set_drawn: (box): void => { this._drawn = box },
     })
     this._page_ops = new PageOpsService(this.history, this._page_index, this._raster, {
-      document: (): DocumentState => this.document,
-      page_dims: (p): PageSize => this._page_dims(p),
-      detection: (): DetectionState =>
-        ({ cache: this._detect_cache, union: this._union, auto_active: this._auto_active }),
-      set_detection: (d): void => {
-        this._detect_cache = d.cache; this._union = d.union; this._auto_active = d.auto_active
-      },
-      recompute_union: (cache): Box | null => this._compute_detection_union(cache),
-      current_page: (): number => this._current_page,
+      ...page_ctx,
+      detection: detection_state,
+      set_detection: set_detection_state,
+      recompute_union: (cache): Box | null => this._detection.compute_union(cache),
       set_current_page: (p): void => { this._current_page = p },
       view_pos: (): number => this._view_pos,
       set_view_pos: (pos): void => { this._view_pos = pos },
       view_total: (): number => this.view_total,
       page_count: (): number => this.page_count(),
+    })
+    this._detection = new DetectionService(_adapter, this.history, this._raster, this._page_index, {
+      ...page_ctx,
+      has_document: (): boolean => this._doc !== null,
+      mode: (): Mode => this._mode,
+      detection: detection_state,
+      set_detection: set_detection_state,
+      anchor_left: (): boolean => this._crop.anchor_left,
+      anchor_top: (): boolean => this._crop.anchor_top,
+      keep_ratio: (): boolean => this._crop.keep_ratio,
+      set_ratio: (r): void => { this._crop.set_ratio(r) },
+      outlier_pages: (): number => this.settings.detect_outlier_pages,
+      invalidate_output: (p): void => { this._invalidate_output_cache(p) },
+    })
+    this._scan = new ScanProcessingService(this.history, this._raster, {
+      document: (): DocumentState => this.document,
+      invalidate_output: (p): void => { this._invalidate_output_cache(p) },
+      invalidate_current: (): void => { this._invalidate_current_bitmap() },
+    })
+    this._export = new ExportService(_adapter, this._raster, this._page_index, {
+      ...page_ctx,
+      page_count: (): number => this.page_count(),
+      mode: (): Mode => this._mode,
+      view_total: (): number => this.view_total,
+      file_names: (): string[] => this._doc?.file_names ?? [],
+      output_postfix: (): string => this.settings.output_postfix,
+      export_format: (): ExportFormat => this.settings.export_format,
+      output_colours: (): string => this.settings.output_colours,
+      compress_preset: (): string => this.settings.compress_preset,
+      custom_dpi: (): number => this.settings.custom_dpi,
+      paper_size: (): string => this.settings.paper_size,
+      custom_paper_in: (): number => this.settings.custom_paper_in,
+      live_auto_crop_for: (p): Box | null => this._view.live_auto_crop_for(p),
+    })
+    this._view = new ViewSnapshotBuilder(this._raster, this._crop, {
+      ...page_ctx,
+      view_pos: (): number => this._view_pos,
+      view_total: (): number => this.view_total,
+      page_count: (): number => this.page_count(),
+      drawn: (): Box | null => this._drawn,
+      detected: (p): Box | null => this._detect_cache.get(p) ?? null,
+      union: (): Box | null => this._union,
+      auto_active: (): boolean => this._auto_active,
     })
   }
 
@@ -351,109 +324,10 @@ export class AppModel {
     return this.document.crop_rects.length === this._crop.split_count
   }
 
+  // Auto-detect algorithm lives in DetectionService (§18) — this stays a 1-line delegation so
+  // ui/ keeps calling AppModel's public surface unchanged.
   detect_content(): BatchJob {
-    const pages = this._require_pages()
-
-    const job = new PageBatchJob('Detecting content…', pages.length)
-    void this._run_detect(job, pages)
-    return job
-  }
-
-  private async _run_detect(job: PageBatchJob, pages: number[]): Promise<void> {
-    const ctrl = job.controller
-    const doc = this._doc
-    if (!doc) { ctrl.complete(new Cancelled()); return }
-
-    const per_page_boxes = await this._detect_each_page(ctrl, pages)
-    if (!per_page_boxes) return   // cancelled or failed; ctrl already completed
-
-    const union = this._compute_detection_union(per_page_boxes)
-
-    // detect_cache/union/auto_active are non-undoable working state (spec-web §12). history.push
-    // still runs here — it protects _refresh_committed_crops_after_detect's `applied` writes
-    // below, which remain undoable.
-    this.history.push(this.document)
-    for (const [p, box] of per_page_boxes) this._detect_cache.set(p, box)
-    this._union = union
-    this._auto_active = true
-
-    this._refresh_committed_crops_after_detect(pages, union)
-    // Ratio source is the detection UNION's aspect ratio, not the page's (model.py:375-376
-    // _finish_detect) — keep-ratio locks the crop to the shape of the detected content, not
-    // the whole page. A prior version of this port used _page_dims() here, which is wrong.
-    if (!this._crop.keep_ratio && union && box_height(union) > 0) {
-      this._crop.set_ratio(box_width(union) / box_height(union))
-    }
-
-    ctrl.complete(new Ok())
-  }
-
-  private async _detect_each_page(
-    ctrl: BatchController, pages: number[],
-  ): Promise<Map<number, Box> | null> {
-    const per_page_boxes = new Map<number, Box>()
-    for (const p of pages) {
-      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }
-      try {
-        const size = this._page_dims(p)
-        const orig = this._page_index.orig(p)
-        let box: Box | null
-        if (this._mode === Mode.NORMAL) {
-          // NORMAL: text-layer box ONLY — no rasterisation, no OpenCV, ever (spec-web §5). A page
-          // with no extractable text (rare: vector-art/no-text page, still classified NORMAL by
-          // is_native_page's vector-op check) simply gets no detected box — every downstream
-          // consumer (_compute_crop_boxes_for_page, _live_auto_crop_for, _begin_auto_drag) already
-          // null-checks `detected` and degrades to "no auto-crop for this page" correctly.
-          box = this._adapter.detect_text_box ? await this._adapter.detect_text_box(orig) : null
-        } else {
-          // SCANNED: raster/Sauvola on the RAW source, never the processed work image — running
-          // dewarp+filter first would be pure waste (detect_content_box downscales to
-          // DETECT_MAX_PX and re-binarizes anyway). This is what makes Auto-detect meet its
-          // <0.1 s/page budget (spec-web §16).
-          const img = await this._raster.get_source(p)
-          box = await this._adapter.detect_content_box(img, size.width, size.height, this._mode)
-        }
-        if (box) per_page_boxes.set(p, box)
-      } catch (e) {
-        ctrl.complete(new Failed(new ImagingError(String(e))))
-        return null
-      }
-      ctrl.advance()
-      // Yield between pages so the progress overlay repaints (matches _run_warm/
-      // _render_export_pages — without this the whole detect pass can run as one
-      // paint-less burst: the bar looks frozen, then jumps to done, spec-web §11).
-      await this._yield_to_paint()
-    }
-    return per_page_boxes
-  }
-
-  // Aggregate per-page boxes into the union frame, excluding full-page fallback boxes (spec-web
-  // §5) and applying the outlier tolerance (settings.detect_outlier_pages, spec-web §5) — the
-  // ONE shared aggregation path for every caller (detect, rotate, delete rebuilds).
-  private _compute_detection_union(per_page_boxes: Map<number, Box>): Box | null {
-    const valid: Box[] = []
-    for (const [p, box] of per_page_boxes) {
-      const sz = this._page_dims(p)
-      if (box_width(box) / sz.width < FULL_PAGE_FRAC || box_height(box) / sz.height < FULL_PAGE_FRAC) {
-        valid.push(box)
-      }
-    }
-    return valid.length > 0 ? detection_union(valid, this.settings.detect_outlier_pages) : null
-  }
-
-  // Re-detect refreshes committed crops without dropping them (spec-web §4.5)
-  private _refresh_committed_crops_after_detect(pages: number[], union: Box | null): void {
-    if (!union) return
-    for (const p of pages) {
-      if (!this.document.applied.has(p)) continue
-      const detected = this._detect_cache.get(p)
-      if (!detected || !(this._crop.anchor_left || this._crop.anchor_top)) continue
-      const sz = this._page_dims(p)
-      const rect = auto_crop_rect(detected, union, this.document.offsets,
-        sz.width, sz.height, this._crop.anchor_left, this._crop.anchor_top)
-      this.document.applied.set(p, [rect])
-      this._invalidate_output_cache(p)
-    }
+    return this._detection.detect(this._require_pages())
   }
 
   apply_crop(): void {
@@ -469,7 +343,7 @@ export class AppModel {
     // Export also commits live auto-crop for uncommitted pages (spec-web §10.6)
     for (const p of pages) {
       if (this._crop.split_count === 1) {
-        const boxes = this._compute_crop_boxes_for_page(p)
+        const boxes = this._crop.compute_crop_boxes_for_page(p)
         if (boxes) {
           this.document.applied.set(p, boxes)
           this._invalidate_output_cache(p)
@@ -480,35 +354,6 @@ export class AppModel {
       }
     }
     this._drawn = null   // the drawn window became the crop across all pages (§12.2)
-  }
-
-  private _compute_crop_boxes_for_page(p: number): Box[] | null {
-    const doc = this._doc
-    if (!doc) return null
-    const sz = this._page_dims(p)
-
-    // Hand-drawn window takes precedence — clamp the global window to this page (§12.2).
-    const drawn = this._drawn
-    if (drawn) {
-      return [{
-        x0: Math.max(0, Math.min(drawn.x0, sz.width)),
-        y0: Math.max(0, Math.min(drawn.y0, sz.height)),
-        x1: Math.max(0, Math.min(drawn.x1, sz.width)),
-        y1: Math.max(0, Math.min(drawn.y1, sz.height)),
-      }]
-    }
-
-    const detected  = this._detect_cache.get(p)
-    const union     = this._union
-
-    if (detected && union && this._auto_active
-        && (this._crop.anchor_left || this._crop.anchor_top)) {
-      let rect = auto_crop_rect(detected, union, this.document.offsets,
-        sz.width, sz.height, this._crop.anchor_left, this._crop.anchor_top)
-      if (this._crop.keep_ratio) rect = keep_ratio_normalise(rect, this._crop.ratio, sz.width, sz.height)
-      return [rect]
-    }
-    return null
   }
 
   // Anchors/offsets/keep-ratio/split/same-size, and the full drag gesture state machine
@@ -538,79 +383,18 @@ export class AppModel {
     return pages
   }
 
-  // Scan toggles: the intent flips SYNCHRONOUSLY (undoable — history pushed first), then the
-  // returned BatchJob pre-computes the selection's work rasters under the progress overlay
-  // (spec-web §11), yielding to the event loop between pages so the overlay repaints and Cancel
-  // works. A cancel keeps the intent: unprocessed pages fall back to on-view lazy compute in
-  // _get_work — this avoids the earlier lazy-only design, which deferred ALL processing to view/
-  // detect time and made scanned-mode Auto-detect and navigation pay render+OpenCV(+ONNX) per
-  // page with no progress UI.
+  // Scan toggles (dewarp/filter mode/filter strength) live in ScanProcessingService (§18) — these
+  // stay 1-line delegations so ui/ keeps calling AppModel's public surface unchanged.
   run_dewarp(): BatchJob {
-    const pages = this._require_pages()
-    this.history.push(this.document)   // snapshot BEFORE the toggle so undo reverts it
-    this.document.dewarp_on = !this.document.dewarp_on
-    this._apply_scan_intents(pages)
-    return this._warm_work_cache(pages, 'Dewarping…')
+    return this._scan.run_dewarp(this._require_pages())
   }
 
   set_filter_mode(mode: FilterMode): BatchJob {
-    const pages = this._require_pages()
-    this.history.push(this.document)
-    // Toggle: pressing the active filter turns it off (spec §7.2)
-    this.document.filter_mode = (mode === this.document.filter_mode) ? FilterMode.NONE : mode
-    this._apply_scan_intents(pages)
-    return this._warm_work_cache(pages, 'Applying filter…')
+    return this._scan.set_filter_mode(this._require_pages(), mode)
   }
 
   set_filter_strength(n: number): BatchJob {
-    const pages = this._require_pages()
-    this.history.push(this.document)
-    this.document.filter_strength =
-      Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n))
-    this._apply_scan_intents(pages)
-    return this._warm_work_cache(pages, 'Applying filter…')
-  }
-
-  private _warm_work_cache(pages: number[], title: string): BatchJob {
-    const job = new PageBatchJob(title, pages.length)
-    void this._run_warm(job, pages)
-    return job
-  }
-
-  private async _run_warm(job: PageBatchJob, pages: number[]): Promise<void> {
-    const ctrl = job.controller
-    for (const p of pages) {
-      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return }
-      try {
-        await this._raster.get_work(p)
-      } catch (e) {
-        ctrl.complete(new Failed(new ImagingError(String(e))))
-        return
-      }
-      ctrl.advance()
-      // Yield between pages so the progress overlay repaints (per-page OpenCV/ONNX blocks the
-      // main thread; the yield restores §14's between-page responsiveness).
-      await this._yield_to_paint()
-    }
-    ctrl.complete(new Ok())
-  }
-
-  // Record the CURRENT global scan flags as each selected page's intent and drop its cached
-  // rasters. No image work here — the next _get_work(p) renders that page. (Callers push history
-  // BEFORE mutating the flags, so undo reverts the toggle.)
-  private _apply_scan_intents(pages: number[]): void {
-    const intent: PageProcessIntent = {
-      dewarp: this.document.dewarp_on,
-      filter: this.document.filter_mode === FilterMode.NONE
-        ? null
-        : [this.document.filter_mode, this.document.filter_strength],
-    }
-    for (const p of pages) {
-      this.document.processed.set(p, intent)
-      this._raster.drop_work(p)
-      this._invalidate_output_cache(p)
-    }
-    this._invalidate_current_bitmap()
+    return this._scan.set_filter_strength(this._require_pages(), n)
   }
 
   // ---------------------------------------------------------------------------
@@ -672,22 +456,6 @@ export class AppModel {
     this.settings.dewarp_supersample = Math.max(DEWARP_SUPERSAMPLE_MIN, Math.min(DEWARP_SUPERSAMPLE_MAX, factor))
   }
 
-  // Resolve the export target LONG-SIDE pixel count (spec-web §W2 row 8): the output page's long
-  // side is assumed to be the paper height, so long side = dpi × paper_height_in. 'Custom' compress
-  // preset uses settings.custom_dpi; 'Custom' paper_size uses settings.custom_paper_in; null = keep
-  // source resolution. Export-only, never the preview.
-  private _resolved_target_long_px(): number | null {
-    const dpi = this.settings.compress_preset === CUSTOM_DPI_PRESET
-      ? this.settings.custom_dpi
-      : (DPI_PRESETS[this.settings.compress_preset] ?? null)
-    if (dpi === null) return null
-    const papers: Record<string, { width_in: number; height_in: number }> = PAPER_SIZES
-    const height_in = this.settings.paper_size === CUSTOM_PAPER_PRESET
-      ? this.settings.custom_paper_in
-      : (papers[this.settings.paper_size] ?? PAPER_SIZES[DEFAULT_PAPER]).height_in
-    return Math.round(dpi * height_in)
-  }
-
   get output_postfix(): string { return this.settings.output_postfix }
   get dewarp_supersample(): number { return this.settings.dewarp_supersample }
 
@@ -704,210 +472,32 @@ export class AppModel {
   // Export
   // ---------------------------------------------------------------------------
 
+  // Export (raster + vector) lives in ExportService (§18) — these stay 1-line delegations so ui/
+  // keeps calling AppModel's public surface unchanged.
   suggested_export_name(): string {
-    const doc = this._doc
-    const base = doc?.file_names[0]?.replace(/\.[^.]+$/, '') ?? 'document'
-    const name = base + this.settings.output_postfix
-    const ext  = this.settings.export_format === 'PDF' ? '.pdf'
-               : this.settings.export_format === 'JPG' ? '.jpg'
-               : this.settings.export_format === 'TIFF' ? '.tif' : '.png'
-    return name + ext
+    return this._export.suggested_export_name()
   }
 
   export(filename: string): BatchJob {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
-
-    // Image formats have a second, equally-long phase (encode + zip) after rendering; double the
-    // total so the bar keeps advancing through encoding instead of freezing at 100% (bug: progress
-    // bar completes, then a long invisible zip pass). PDF has no separate per-page encode phase —
-    // true for both the raster and vector PDF paths, so total sizing is unaffected by which runs.
-    const total_views = this.view_total
-    const is_image = this.settings.export_format !== 'PDF'
-    const job = new PageBatchJob(
-      `Exporting ${this.settings.export_format}…`, is_image ? total_views * 2 : total_views)
-    // Vector export (§W9.3): NORMAL document, PDF output, adapter supports it. No rasterization —
-    // crop/rotate/split go straight through pdf-lib embedPage against the original page content.
-    const use_vector = this._mode === Mode.NORMAL && this.settings.export_format === 'PDF'
-      && this._adapter.export_pdf_vector !== undefined
-    void (use_vector ? this._run_export_vector(job, filename) : this._run_export(job, filename))
-    return job
+    return this._export.export(filename)
   }
-
-  private async _run_export(job: PageBatchJob, filename: string): Promise<void> {
-    const ctrl = job.controller
-    const target_long_px = this._resolved_target_long_px()
-    const greyscale  = this.settings.output_colours === 'Grayscale'
-
-    const pages_out = await this._render_export_pages(ctrl, target_long_px, greyscale)
-    if (!pages_out) return
-
-    try {
-      if (this.settings.export_format === 'PDF') {
-        const bytes = await this._adapter.export_pdf(pages_out)
-        this._download_pdf(bytes, filename)
-      } else {
-        // Strip any extension off the suggested name — the archive is `<base>.zip` and entries
-        // are `<base>_NNN.<ext>`; a name like "doc_cropped.png" would yield "doc_cropped.png.zip".
-        const base = filename.replace(/\.[^.]+$/, '')
-        const zip = await this._adapter.export_images(
-          pages_out, this.settings.export_format, base,
-          (done, total) => { if (total > 0) ctrl.advance() })
-        this._download_zip(zip, base)
-      }
-    } catch (e) {
-      ctrl.complete(new Failed(new ImagingError(String(e))))
-      return
-    }
-
-    ctrl.complete(new Ok())
-  }
-
-  // Vector counterpart to _run_export: builds VectorExportPage entries (current-frame box +
-  // rotation per source page — the adapter converts to the source's native frame itself) and
-  // hands off to the adapter in one call. No render_output_image, no OffscreenCanvas here — box
-  // resolution is the only work done on this thread; the adapter defensively falls back to
-  // _run_export if export_pdf_vector is somehow missing (export() already checks this ­— belt and
-  // braces, since this method could in principle be called directly by a future caller).
-  private async _run_export_vector(job: PageBatchJob, filename: string): Promise<void> {
-    const ctrl = job.controller
-    if (!this._adapter.export_pdf_vector) { await this._run_export(job, filename); return }
-
-    const pages: VectorExportPage[] = []
-    for (let p = 0; p < this.page_count(); p++) {
-      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return }
-      const sz = this._page_dims(p)
-      const boxes = this._export_boxes_for_page(p, sz)
-      pages.push({
-        orig_page: this._page_index.orig(p),
-        boxes,
-        page_w: sz.width, page_h: sz.height,
-        rotation: this.document.rotation.get(p) ?? 0,
-      })
-      for (let i = 0; i < boxes.length; i++) ctrl.advance()
-    }
-
-    try {
-      const bytes = await this._adapter.export_pdf_vector(pages)
-      this._download_pdf(bytes, filename)
-    } catch (e) {
-      ctrl.complete(new Failed(new ImagingError(String(e))))
-      return
-    }
-    ctrl.complete(new Ok())
-  }
-
-  private async _render_export_pages(
-    ctrl: BatchController,
-    target_long_px: number | null, greyscale: boolean,
-  ): Promise<OutputPage[] | null> {
-    const pages_out: OutputPage[] = []
-    for (let p = 0; p < this.page_count(); p++) {
-      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }
-      const sz = this._page_dims(p)
-      try {
-        const src   = await this._raster.get_work(p)
-        const boxes = this._export_boxes_for_page(p, sz)
-        for (const box of boxes) {
-          const bitmap = await this._adapter.render_output_image(
-            src, box, sz.width, sz.height, target_long_px, greyscale)
-          pages_out.push({ bitmap, width: bitmap.width, height: bitmap.height })
-          ctrl.advance()
-        }
-      } catch (e) {
-        ctrl.complete(new Failed(new ImagingError(String(e))))
-        return null
-      }
-      // Yield to the event loop between pages so the progress overlay repaints. render_output_image
-      // runs on the main thread (OpenCV/canvas); without this the tab visibly freezes for the whole
-      // export (bug: ~20 s stall with a static bar before the save/download appears).
-      await this._yield_to_paint()
-    }
-    return pages_out
-  }
-
-  // setTimeout(0) — not window/document, so core/ stays platform-agnostic (architecture.test.ts).
-  private _yield_to_paint(): Promise<void> {
-    return new Promise<void>(resolve => { setTimeout(resolve, 0) })
-  }
-
-  private _export_boxes_for_page(p: number, sz: PageSize): Box[] {
-    const committed = this.document.applied.get(p)
-    if (committed) return committed
-    const live = this._live_auto_crop_for(p)
-    if (live) return [live]
-    return [{ x0: 0, y0: 0, x1: sz.width, y1: sz.height }]
-  }
-
-  // These are set by AppController after construction to wire up download handling
-  private _download_pdf: (bytes: Uint8Array, name: string) => void = () => { return }
-  private _download_zip: (bytes: Uint8Array, base: string) => void = () => { return }
 
   set_download_handlers(
     pdf: (bytes: Uint8Array, name: string) => void,
     zip: (bytes: Uint8Array, base: string) => void,
   ): void {
-    this._download_pdf = pdf
-    this._download_zip = zip
+    this._export.set_download_handlers(pdf, zip)
   }
 
   // ---------------------------------------------------------------------------
   // View snapshot (synchronous — reads pre-fetched bitmaps from cache)
   // ---------------------------------------------------------------------------
 
+  // ViewSnapshot computation lives in ViewSnapshotBuilder (§18) — this stays a 1-line delegation
+  // so ui/ keeps calling AppModel's public surface unchanged.
   view_snapshot(): ViewSnapshot {
-    if (!this._doc) return this._synth_snapshot()
-
-    const sz = this._current_page_size()
-    const p  = this._current_page
-    const { split_idx } = view_to_source(this._view_pos, this.page_count(), this.document.applied)
-
-    const committed = this.document.applied.get(p)
-
-    // A committed page STAYS shown cropped — at the CROP box's own dimensions, origin at the box's
-    // top-left (crop_origin, so canvas_view maps pointer/overlay into the cropped view) — even while
-    // a drawn window exists: the new window is an outline OVER the cropped view with no zoom change
-    // (frozen spec §9.3). A plain committed page carries no outline (bug 18); it only appears once a
-    // window is being drawn. The crop unzooms only on Undo or a split-mode switch.
-    if (committed && committed.length > 0) {
-      const box = committed[Math.min(split_idx, committed.length - 1)] ?? committed[0]
-      return {
-        image:  this._raster.output_at(p, split_idx),
-        page_w: box ? box_width(box)  : sz.width,
-        page_h: box ? box_height(box) : sz.height,
-        crop_origin: box ? { x: box.x0, y: box.y0 } : { x: 0, y: 0 },
-        overlay: this._committed_overlay(box),
-        draw_rect:  this._crop.draw_rect,
-        position:   this._view_pos,
-        total:      this.view_total,
-        is_loading: this._raster.is_loading,
-      }
-    }
-
-    return {
-      image:   this._raster.current,
-      page_w:  sz.width,
-      page_h:  sz.height,
-      crop_origin: { x: 0, y: 0 },
-      overlay: this._build_overlay(p),
-      draw_rect:  this._crop.draw_rect,
-      position:   this._view_pos,
-      total:      this.view_total,
-      is_loading: this._raster.is_loading,
-    }
-  }
-
-  // The outline shown over a committed (cropped) page: only the drawn window, clamped to the crop
-  // box so it can never paint outside the cropped view (spec-web §6.3). Empty when no window is
-  // being drawn (a plain committed crop shows no frame — bug 18).
-  private _committed_overlay(box: Box | undefined): OverlayBox[] {
-    const drawn = this._drawn
-    if (!drawn || !box) return []
-    return [{ kind: 'committed', box: {
-      x0: Math.max(box.x0, Math.min(drawn.x0, box.x1)),
-      y0: Math.max(box.y0, Math.min(drawn.y0, box.y1)),
-      x1: Math.max(box.x0, Math.min(drawn.x1, box.x1)),
-      y1: Math.max(box.y0, Math.min(drawn.y1, box.y1)),
-    } }]
+    return this._doc ? this._view.build() : this._view.synth_snapshot()
   }
 
   // Reports the canvas' current physical-pixels-per-page-unit ratio (fit-to-canvas scale ×
@@ -939,7 +529,7 @@ export class AppModel {
     try {
       const work = await this._raster.load_current(p)
       const committed = this.document.applied.get(p)
-      if (committed) await this._raster.prerender_output_views(p, committed, this._current_page_size(), work)
+      if (committed) await this._raster.prerender_output_views(p, committed, this._page_dims(p), work)
     } finally {
       this._raster.is_loading = false
     }
@@ -994,10 +584,6 @@ export class AppModel {
     return rot % 180 === 90 ? { width: sz.height, height: sz.width } : sz
   }
 
-  private _current_page_size(): PageSize {
-    return this._page_dims(this._current_page)
-  }
-
   // Scan intent for a page (dewarp on/off, filter mode+strength) — read by the raster pipeline's
   // RasterContext (get_work/_work_disk_key) to know what to compute/key a page's work raster by.
   private _page_process_intent(p: number): PageProcessIntent {
@@ -1008,67 +594,7 @@ export class AppModel {
     }
   }
 
-  private _live_auto_crop_for(p: number): Box | null {
-    const detected = this._detect_cache.get(p)
-    const union    = this._union
-    if (!detected || !union || !this._auto_active
-        || !(this._crop.anchor_left || this._crop.anchor_top)) return null
-    const sz = this._page_dims(p)
-    let rect = auto_crop_rect(detected, union, this.document.offsets,
-      sz.width, sz.height, this._crop.anchor_left, this._crop.anchor_top)
-    if (this._crop.keep_ratio) rect = keep_ratio_normalise(rect, this._crop.ratio, sz.width, sz.height)
-    return rect
-  }
-
-  private _build_overlay(p: number): OverlayBox[] {
-    const out: OverlayBox[] = []
-
-    if (this._crop.split_count > 1) {
-      for (let i = 0; i < this.document.crop_rects.length; i++) {
-        const box = this.document.crop_rects[i]
-        if (box) out.push({ kind: 'split', box, idx: i + 1 })
-      }
-      return out
-    }
-
-    // Global drawn window (pending crop) — outline on every page, clamped to it; overrides the
-    // auto/committed display until Crop maps it in.
-    const drawn = this._drawn
-    if (drawn) {
-      const sz = this._page_dims(p)
-      out.push({ kind: 'committed', box: {
-        x0: Math.max(0, Math.min(drawn.x0, sz.width)),
-        y0: Math.max(0, Math.min(drawn.y0, sz.height)),
-        x1: Math.max(0, Math.min(drawn.x1, sz.width)),
-        y1: Math.max(0, Math.min(drawn.y1, sz.height)),
-      } })
-      return out
-    }
-
-    const committed = this.document.applied.get(p)
-    if (committed) {
-      for (const box of committed) out.push({ kind: 'committed', box })
-      return out
-    }
-
-    const live = this._live_auto_crop_for(p)
-    if (live) {
-      out.push({ kind: 'auto', box: live })
-      return out
-    }
-
-    return out
-  }
-
   private _invalidate_output_cache(p: number): void { this._raster.invalidate_output(p) }
 
   private _invalidate_current_bitmap(): void { this._raster.invalidate_current() }
-
-  private _synth_snapshot(): ViewSnapshot {
-    return {
-      image: null, page_w: SYNTH_W, page_h: SYNTH_H, crop_origin: { x: 0, y: 0 },
-      overlay: [], draw_rect: null, position: 1, total: 0,
-      is_loading: false,
-    }
-  }
 }

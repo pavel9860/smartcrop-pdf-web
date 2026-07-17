@@ -71,8 +71,37 @@ export class CropController {
 
   // Ratio source after a fresh detect is the detection UNION's aspect ratio, not the page's
   // (model.py:375-376 _finish_detect) — keep-ratio locks the crop to the shape of the detected
-  // content, not the whole page. Caller (AppModel._run_detect) already guards `!keep_ratio`.
+  // content, not the whole page. Caller (DetectionService._run_detect) already guards `!keep_ratio`.
   set_ratio(r: number): void { this._ratio = r }
+
+  // Resolves the crop box(es) to commit for page `p` on Crop (spec-web §4.5, §12.2): a hand-drawn
+  // window takes precedence, clamped to the page; otherwise the live auto-crop from the last
+  // detect, if anchored; null if neither applies (AppModel.apply_crop then leaves that page
+  // uncommitted).
+  compute_crop_boxes_for_page(p: number): Box[] | null {
+    if (!this._ctx.has_document()) return null
+    const sz = this._ctx.page_dims(p)
+
+    const drawn = this._ctx.drawn()
+    if (drawn) {
+      return [{
+        x0: Math.max(0, Math.min(drawn.x0, sz.width)),
+        y0: Math.max(0, Math.min(drawn.y0, sz.height)),
+        x1: Math.max(0, Math.min(drawn.x1, sz.width)),
+        y1: Math.max(0, Math.min(drawn.y1, sz.height)),
+      }]
+    }
+
+    const detected = this._ctx.detected(p)
+    const union    = this._ctx.union()
+    if (detected && union && this._ctx.auto_active() && (this._anchor_left || this._anchor_top)) {
+      let rect = auto_crop_rect(detected, union, this._ctx.document().offsets,
+        sz.width, sz.height, this._anchor_left, this._anchor_top)
+      if (this._keep_ratio) rect = keep_ratio_normalise(rect, this._ratio, sz.width, sz.height)
+      return [rect]
+    }
+    return null
+  }
 
   set_anchor(left: boolean | null, top: boolean | null): void {
     if (left !== null) this._anchor_left = left

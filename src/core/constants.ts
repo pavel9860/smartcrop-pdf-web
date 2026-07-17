@@ -11,6 +11,12 @@ export const NORMAL_DPI = 150.0   // normal-mode baseline/minimum render DPI
 export const NORMAL_DISPLAY_DPI_MAX = 450.0
 export const CACHE_WINDOW = 4   // max pages in each LRU raster cache
 
+// Batch-loop paint yield (model.ts detect/warm/export loops): yield to the event loop only if
+// this much wall time has elapsed since the last yield from the same loop, not once per item
+// unconditionally — a run of many fast items no longer pays the ~4ms setTimeout-clamp floor once
+// per item, while a run of slow items (each already over this) still yields every item.
+export const PAINT_YIELD_INTERVAL_MS = 100
+
 // Crop geometry (canvas-unit / page-unit tunables)
 export const HANDLE_R     = 10    // handle hit-radius px
 export const HANDLE_SLACK = 6     // extra tolerance around handle

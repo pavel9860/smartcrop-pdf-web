@@ -2,7 +2,8 @@
 // Web version: result() returns Promise<BatchResult>; progress via onProgress callback.
 // core/ only defines the interface; concrete implementations live in AppModel methods.
 
-import type { SmartCropError } from './errors'
+import { ImagingError, type SmartCropError } from './errors'
+import { PAINT_YIELD_INTERVAL_MS } from './constants'
 
 export class Ok      { readonly type = 'ok'        as const }
 export class Cancelled { readonly type = 'cancelled' as const }
@@ -70,4 +71,38 @@ export class PageBatchJob implements BatchJob {
   complete = (r: BatchResult): void => { this._resolve(r) }
 
   get controller(): BatchController { return this }
+}
+
+// Creates a BatchJob, fires off its async worker (fire-and-forget — the worker reports progress
+// and completion through the job's own controller), and returns the job immediately so the caller
+// can show progress/wire up Cancel. Every batch-command entry point (detect/dewarp/filter/export)
+// shares this exact "create, kick off, return" shape. Every worker already completes the
+// controller on its own error paths; the .catch here is a safety net only, so a worker that
+// somehow rejects past that still resolves the job instead of becoming an unhandled rejection.
+export function start_batch(
+  title: string, total: number, worker: (job: PageBatchJob) => Promise<void>,
+): PageBatchJob {
+  const job = new PageBatchJob(title, total)
+  worker(job).catch((e: unknown) => { fail_batch(job.controller, e) })
+  return job
+}
+
+// Completes a batch controller with a Failed result wrapping a caught error — the standard
+// catch-block ending shared by every per-page batch loop.
+export function fail_batch(ctrl: BatchController, e: unknown): void {
+  ctrl.complete(new Failed(new ImagingError(String(e))))
+}
+
+// Returns a per-loop yield function gated on elapsed wall time (PAINT_YIELD_INTERVAL_MS) since the
+// last actual yield from THIS call, not on iterating once per item — a fresh instance per batch
+// loop, so concurrent loops never share timing state. setTimeout, not window/document — core/
+// stays platform-agnostic (architecture.test.ts).
+export function make_paint_yielder(): () => Promise<void> {
+  let last = Date.now()
+  return async (): Promise<void> => {
+    const now = Date.now()
+    if (now - last < PAINT_YIELD_INTERVAL_MS) return
+    last = now
+    await new Promise<void>(resolve => { setTimeout(resolve, 0) })
+  }
 }
