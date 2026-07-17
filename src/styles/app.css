@@ -57,6 +57,7 @@ input, select { font: inherit; }
   flex-direction: row;
   height: 100dvh;
   overflow: hidden;
+  position: relative;   /* anchors .detail-panel, which overlays rather than reflowing the canvas */
 }
 
 /* ── Sidebar ── */
@@ -82,20 +83,32 @@ input, select { font: inherit; }
   scrollbar-color: var(--border) transparent;
 }
 
-/* ── Detail panel (Settings / Help) — slides in ── */
+/* ── Detail panel (Settings / Help) — slides in as an overlay, not a layout reflow ──
+   position:absolute takes it out of the flex flow entirely, so .canvas-area's width (and
+   therefore the preview's fit-to-canvas scale/ratio) never changes while this opens or closes —
+   only the panel itself slides, over the canvas's left edge, never the canvas (bug #3/spec-web §3). */
 .detail-panel {
-  width: 0;
-  min-width: 0;
+  position: absolute;
+  top: 0;
+  left: var(--sidebar-w);
+  width: var(--detail-w);
+  height: 100%;
+  z-index: 10;
   overflow: hidden;
   background: var(--bg-chrome);
   border-right: 1px solid var(--border);
-  transition: width 180ms ease, min-width 180ms ease;
+  transform: translateX(-100%);
+  /* Slid out to the left, this box's own footprint still overlaps the sidebar (its width is
+     wider than sidebar-w) — pointer-events:none while closed keeps it from swallowing clicks
+     meant for the sidebar underneath it; .open re-enables them once it's actually on screen. */
+  pointer-events: none;
+  transition: transform 180ms ease;
   display: flex;
   flex-direction: column;
 }
 .detail-panel.open {
-  width: var(--detail-w);
-  min-width: var(--detail-w);
+  transform: translateX(0);
+  pointer-events: auto;
 }
 
 /* When collapsed (width 0) the contents must be fully removed from layout, not just clipped:
@@ -143,7 +156,10 @@ input, select { font: inherit; }
 /* ── Canvas area ── */
 .canvas-area {
   flex: 1;
-  min-width: 400px;   /* never shrinks below this, even with the detail panel open (spec-web §3) */
+  /* Sized only by the sidebar — the detail panel overlays it (position:absolute, see above) and
+     never takes flex space, so this never shrinks regardless of the detail panel's open state
+     (bug #3/spec-web §3). min-width is a floor for a very narrow window, not a detail-panel guard. */
+  min-width: 400px;
   position: relative;
   background: var(--bg-canvas);
   display: flex;

@@ -27,6 +27,39 @@ test('Settings detail panel opens and Esc closes it', async ({ page }) => {
   await expect(page.locator('#sv-undo')).toBeHidden()
 })
 
+test('opening/closing Settings or Help slides the panel over the canvas — the canvas never resizes (bug #3)', async ({ page }) => {
+  const canvas = page.locator('canvas.page-canvas')
+  const panel = page.locator('.detail-panel')
+  // The panel's open/close transition is 180ms (app.css) — settle past it before measuring, or a
+  // mid-animation snapshot could equal box_before by sheer timing coincidence in EITHER the buggy
+  // (width-reflow) or fixed (overlay) layout, making the assertion meaningless either way.
+  const settle = (): Promise<void> => panel.evaluate(
+    el => new Promise<void>(resolve => {
+      const done = (): void => { el.removeEventListener('transitionend', done); resolve() }
+      el.addEventListener('transitionend', done, { once: true })
+    }),
+  )
+
+  const box_before = await canvas.boundingBox()
+  expect(box_before).not.toBeNull()
+
+  await page.click('[data-id="settings"]')
+  await expect(panel).toHaveClass(/open/)
+  await settle()
+  expect(await canvas.boundingBox()).toEqual(box_before)   // same size AND position — no reflow
+
+  await page.keyboard.press('Escape')
+  await expect(panel).not.toHaveClass(/open/)
+  await settle()
+  expect(await canvas.boundingBox()).toEqual(box_before)
+
+  // Help must behave identically (same shared detail-panel/canvas-area mechanism).
+  await page.click('[data-id="help"]')
+  await expect(panel).toHaveClass(/open/)
+  await settle()
+  expect(await canvas.boundingBox()).toEqual(box_before)
+})
+
 test('Ctrl+/Ctrl- zoom stepping always lands exactly on a preset, never an approximation (M1)', async ({ page }) => {
   await page.click('[data-id="settings"]')
   const zoom = page.locator('#sv-zoom')

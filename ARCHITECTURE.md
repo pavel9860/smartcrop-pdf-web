@@ -245,9 +245,10 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               (3 equal buttons); page nav < [n] / total >.
                               Always visible, outside scroll, one instance only.
 
-      detail_panel.ts       The THIRD column — slides in between left sidebar and canvas when
-                              Settings or Help is active (§3.2). Width DETAIL_PANEL_WIDTH.
-                              Renders either SettingsView or HelpView based on active state.
+      detail_panel.ts       Slides in as an overlay above the canvas's left edge (position:absolute
+                              + transform, not a layout reflow — bug #3) when Settings or Help is
+                              active (§3.2). Width DETAIL_PANEL_WIDTH. Renders either SettingsView
+                              or HelpView based on active state.
                               Dismissed by clicking Settings/Help button again, or Esc.
 
       settings_view.ts      Settings content rendered inside detail_panel:
