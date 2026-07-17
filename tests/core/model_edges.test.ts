@@ -3,36 +3,11 @@
 // model.test.ts does not reach, to lift src/core branch coverage to the §19 gate. Behaviour
 // asserted is the WEB model's (e.g. end_drag commits directly), not a literal desktop port.
 import { describe, it, expect } from 'vitest'
-import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
+import { AppModel } from '@core/model'
 import { Mode, FilterMode, PagesMode } from '@core/enums'
 import { NoDocumentError } from '@core/errors'
+import { make_adapter, FILE } from './harness'
 
-function make_bitmap(w = 100, h = 100): ImageBitmap {
-  return { width: w, height: h, close: (): void => { /* no-op */ } }
-}
-function make_adapter(page_count = 4, mode = Mode.NORMAL, page_w = 200, page_h = 300): RendererAdapter {
-  return {
-    load_files: (files: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count,
-      page_sizes: Array.from({ length: page_count }, () => ({ width: page_w, height: page_h })),
-      file_names: files.map(f => f.name),
-      mode,
-    }),
-    get_source_image: () => Promise.resolve(make_bitmap(page_w, page_h)),
-    get_work_image: () => Promise.resolve(make_bitmap(page_w, page_h)),
-    render_output_image: (_s, box) => Promise.resolve(
-      make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
-    detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
-    // NORMAL-mode detect is text-layer only, no raster fallback — mirror detect_content_box's
-    // inset box here so NORMAL-mode detect_content() calls in this file behave as before.
-    detect_text_box: (_i) => Promise.resolve({ x0: 20, y0: 20, x1: page_w - 20, y1: page_h - 20 }),
-    export_pdf: () => Promise.resolve(new Uint8Array([1])),
-    export_images: () => Promise.resolve(new Uint8Array([4])),
-    make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
-    close: (): void => { /* no-op */ },
-  }
-}
-const FILE = (name = 'a.pdf'): File => new File(['x'], name, { type: 'application/pdf' })
 async function loaded(page_count = 4, mode = Mode.NORMAL, w = 200, h = 300): Promise<AppModel> {
   const m = new AppModel(make_adapter(page_count, mode, w, h))
   await m.load_files([FILE()])

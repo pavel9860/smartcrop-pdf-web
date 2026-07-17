@@ -13,14 +13,12 @@ import {
   CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DEFAULT_CUSTOM_PAPER_IN,
   SRC_DPI, NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX,
 } from '@core/constants'
+import { make_bitmap, FILE } from './harness'
 
 // ---------------------------------------------------------------------------
-// Mock adapter
+// Mock adapter — this file needs call-count/arg-tracking instrumentation the shared
+// tests/core/harness.ts adapter doesn't provide, so it keeps its own richer mock.
 // ---------------------------------------------------------------------------
-
-function make_bitmap(w = 100, h = 100): ImageBitmap {
-  return { width: w, height: h, close: (): void => { /* no-op */ } }
-}
 
 interface MockOpts {
   page_count?: number
@@ -96,8 +94,6 @@ function make_mock_adapter(opts: MockOpts = {}): {
   }
   return { adapter, calls, render_args, source_dpis }
 }
-
-const FILE = (name = 'a.pdf'): File => new File(['x'], name, { type: 'application/pdf' })
 
 async function loaded_model(opts: MockOpts = {}): Promise<AppModel> {
   const { adapter } = make_mock_adapter(opts)

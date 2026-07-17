@@ -2,32 +2,13 @@
 // prepare_current_view (scanned + committed prerender), rotate/delete after detect,
 // commit_offsets with anchors off, re-detect refresh, gesture misses. Public interface only.
 import { describe, it, expect } from 'vitest'
-import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
+import { AppModel } from '@core/model'
 import { Mode, PagesMode } from '@core/enums'
 import { Failed, Ok } from '@core/batch'
+import { make_adapter, FILE } from './harness'
 
-function bmp(w = 100, h = 100): ImageBitmap { return { width: w, height: h, close: (): void => {} } }
-function adapter(pc = 4, mode = Mode.NORMAL, w = 200, h = 300): RendererAdapter {
-  return {
-    load_files: (f: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count: pc, page_sizes: Array.from({ length: pc }, () => ({ width: w, height: h })),
-      file_names: f.map(x => x.name), mode }),
-    get_source_image: () => Promise.resolve(bmp(w, h)),
-    get_work_image: () => Promise.resolve(bmp(w, h)),
-    render_output_image: (_s, b) => Promise.resolve(bmp(Math.max(1, Math.round(b.x1 - b.x0)), Math.max(1, Math.round(b.y1 - b.y0)))),
-    detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
-    // NORMAL-mode detect is text-layer only, no raster fallback — mirror detect_content_box's
-    // inset box here so NORMAL-mode detect_content() calls in this file behave as before.
-    detect_text_box: (_i) => Promise.resolve({ x0: 20, y0: 20, x1: w - 20, y1: h - 20 }),
-    export_pdf: () => Promise.resolve(new Uint8Array([1])),
-    export_images: () => Promise.resolve(new Uint8Array([4])),
-    make_synth_page: (_i, w2, h2) => Promise.resolve(bmp(w2, h2)),
-    close: (): void => {},
-  }
-}
-const FILE = (n = 'a.pdf'): File => new File(['x'], n, { type: 'application/pdf' })
 async function loaded(pc = 4, mode = Mode.NORMAL, w = 200, h = 300): Promise<AppModel> {
-  const m = new AppModel(adapter(pc, mode, w, h)); await m.load_files([FILE()]); return m
+  const m = new AppModel(make_adapter(pc, mode, w, h)); await m.load_files([FILE()]); return m
 }
 
 describe('export box variants', () => {
@@ -46,7 +27,7 @@ describe('export box variants', () => {
   })
 
   it('a failing export resolves Failed', async () => {
-    const a = adapter()
+    const a = make_adapter()
     a.export_pdf = () => Promise.reject(new Error('boom'))
     const m = new AppModel(a)
     await m.load_files([FILE()])
@@ -66,7 +47,7 @@ describe('suggested_export_name', () => {
   })
 
   it('falls back to "document" with no loaded file', () => {
-    const m = new AppModel(adapter())
+    const m = new AppModel(make_adapter())
     expect(m.suggested_export_name()).toMatch(/^document/)
   })
 })
@@ -87,7 +68,7 @@ describe('prepare_current_view', () => {
   })
 
   it('prepare is a no-op with no document', async () => {
-    const m = new AppModel(adapter())
+    const m = new AppModel(make_adapter())
     await m.prepare_current_view()
     expect(m.view_snapshot().image).toBeNull()
   })

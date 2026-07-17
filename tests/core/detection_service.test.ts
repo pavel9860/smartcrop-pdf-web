@@ -17,6 +17,7 @@ function setup(opts: {
   page_count?: number
   mode?: Mode
   adapter?: Partial<RendererAdapter>
+  omit_detect_text_box?: boolean
   has_document?: boolean
 } = {}): {
   svc: DetectionService
@@ -29,6 +30,7 @@ function setup(opts: {
 } {
   const page_count = opts.page_count ?? 3
   const adapter: RendererAdapter = { ...make_adapter(page_count, opts.mode ?? Mode.NORMAL), ...opts.adapter }
+  if (opts.omit_detect_text_box) delete adapter.detect_text_box
   const idx = new PageIndexMap()
   idx.reset(page_count)
   const raster = new PageRasterPipeline(adapter, idx, {
@@ -77,7 +79,7 @@ describe('DetectionService.detect — NORMAL mode', () => {
   })
 
   it('without adapter.detect_text_box: no box detected, never falls back to rasterization', async () => {
-    const { svc, detection } = setup({ mode: Mode.NORMAL })
+    const { svc, detection } = setup({ mode: Mode.NORMAL, omit_detect_text_box: true })
     await svc.detect([0]).result()
     expect(detection.cache.has(0)).toBe(false)
   })
