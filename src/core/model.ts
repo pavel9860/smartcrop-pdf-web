@@ -125,9 +125,8 @@ export class AppModel {
       dewarp_supersample: (): number => this.settings.dewarp_supersample,
     })
 
-    // Shared by every service context below — document()/page_dims()/current_page() are read
-    // LIVE (never captured: `document` is reassigned wholesale on undo/redo). Previously each
-    // context re-declared these three verbatim (§18 dup — Problems.md #14).
+    // Shared context pieces below are read LIVE (never captured: `document` is reassigned
+    // wholesale on undo/redo) — each was previously re-declared verbatim per collaborator.
     const page_ctx = {
       document: (): DocumentState => this.document,
       page_dims: (p: number): PageSize => this._page_dims(p),
@@ -138,13 +137,16 @@ export class AppModel {
     const set_detection_state = (d: DetectionState): void => {
       this._detect_cache = d.cache; this._union = d.union; this._auto_active = d.auto_active
     }
+    const detection_accessors = {   // individual-accessor shape (vs. detection_state's object shape)
+      detected: (p: number): Box | null => this._detect_cache.get(p) ?? null,
+      union: (): Box | null => this._union,
+      auto_active: (): boolean => this._auto_active,
+    }
 
     this._crop = new CropController(this.history, {
       ...page_ctx,
+      ...detection_accessors,
       has_document: (): boolean => this._doc !== null,
-      detected: (p): Box | null => this._detect_cache.get(p) ?? null,
-      union: (): Box | null => this._union,
-      auto_active: (): boolean => this._auto_active,
       drawn: (): Box | null => this._drawn,
       set_drawn: (box): void => { this._drawn = box },
     })
@@ -194,13 +196,11 @@ export class AppModel {
     })
     this._view = new ViewSnapshotBuilder(this._raster, this._crop, {
       ...page_ctx,
+      ...detection_accessors,
       view_pos: (): number => this._view_pos,
       view_total: (): number => this.view_total,
       page_count: (): number => this.page_count(),
       drawn: (): Box | null => this._drawn,
-      detected: (p): Box | null => this._detect_cache.get(p) ?? null,
-      union: (): Box | null => this._union,
-      auto_active: (): boolean => this._auto_active,
     })
   }
 
