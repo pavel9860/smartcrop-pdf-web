@@ -35,6 +35,7 @@ function setup(page_count = 3): {
   current_page: { v: number }
   view_pos: { v: number }
   history: History
+  raster: PageRasterPipeline
 } {
   const idx = new PageIndexMap()
   idx.reset(page_count)
@@ -42,6 +43,7 @@ function setup(page_count = 3): {
     mode: () => Mode.NORMAL, display_dpi: () => 96, is_synthetic: () => false,
     rotation: () => 0, process_intent: () => ({ dewarp: false, filter: null }),
     dewarp_supersample: () => 1,
+    undo_depth: () => 2,
   })
   const doc = default_document_state()
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
@@ -69,7 +71,7 @@ function setup(page_count = 3): {
   }
   const history = new History(20)
   const svc = new PageOpsService(history, idx, raster, ctx)
-  return { svc, doc, detection, current_page, view_pos, history }
+  return { svc, doc, detection, current_page, view_pos, history, raster }
 }
 
 describe('PageOpsService.rotate', () => {
@@ -100,11 +102,22 @@ describe('PageOpsService.rotate', () => {
     expect(detection.union).not.toBeNull()
   })
 
-  it('resets offsets and drops the page from every raster cache', () => {
+  it('resets offsets', () => {
     const { svc, doc } = setup()
     doc.offsets = { left: 10, top: 10, right: 10, bottom: 10 }
     svc.rotate([0])
     expect(doc.offsets).toEqual({ left: 0, top: 0, right: 0, bottom: 0 })
+  })
+
+  it('invalidates the page\'s crop/split output preview (rotated box coordinates no longer match it)', async () => {
+    const { svc, raster } = setup()
+    await raster.prerender_output_views(
+      0, [{ x0: 0, y0: 0, x1: 100, y1: 100 }], { width: 200, height: 300 }, bmp())
+    expect(raster.output_at(0, 0)).not.toBeNull()
+
+    svc.rotate([0])
+
+    expect(raster.output_at(0, 0)).toBeNull()
   })
 })
 

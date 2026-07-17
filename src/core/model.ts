@@ -123,6 +123,7 @@ export class AppModel {
       rotation: (p): number => this.document.rotation.get(p) ?? 0,
       process_intent: (p): PageProcessIntent => this._page_process_intent(p),
       dewarp_supersample: (): number => this.settings.dewarp_supersample,
+      undo_depth: (): number => this.settings.undo_depth,
     })
 
     // Shared context pieces below are read LIVE (never captured: `document` is reassigned
@@ -405,7 +406,7 @@ export class AppModel {
     const prev = this.history.undo(this.document)
     if (prev) {
       this.document = prev
-      this._raster.clear_ram()
+      this._raster.clear_output()
     }
   }
 
@@ -413,7 +414,7 @@ export class AppModel {
     const next = this.history.redo(this.document)
     if (next) {
       this.document = next
-      this._raster.clear_ram()
+      this._raster.clear_output()
     }
   }
 
@@ -584,8 +585,7 @@ export class AppModel {
     return rot % 180 === 90 ? { width: sz.height, height: sz.width } : sz
   }
 
-  // Scan intent for a page (dewarp on/off, filter mode+strength) — read by the raster pipeline's
-  // RasterContext (get_work/_work_disk_key) to know what to compute/key a page's work raster by.
+  // Scan intent for a page — read by RasterContext.process_intent to know what to compute/key by.
   private _page_process_intent(p: number): PageProcessIntent {
     return {
       dewarp: this.document.processed.get(p)?.dewarp ?? this.document.dewarp_on,

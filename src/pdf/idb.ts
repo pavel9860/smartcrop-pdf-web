@@ -1,6 +1,5 @@
-// idb.ts — generic IndexedDB open/request/transaction-wait helpers, shared by imaging.ts's ONNX
-// model cache and work_store.ts's processed-raster cache (same open/get/put/tx-wait shape, each
-// keyed by its own db/store name).
+// idb.ts — generic IndexedDB open/request/transaction-wait helpers, used by dewarp.ts's ONNX
+// model-weight cache (the only disk-cached asset — per-page rasters are RAM-only, spec-web §7).
 
 export function open_idb(db_name: string, store_name: string): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {

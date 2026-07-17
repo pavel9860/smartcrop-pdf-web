@@ -41,7 +41,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                             Enforced by architecture test (§7). Pure TypeScript.
 
       constants.ts          All domain tunables:
-                              SRC_DPI=150, NORMAL_DPI=150, CACHE_WINDOW=4,
+                              SRC_DPI=150, NORMAL_DPI=150,
                               HANDLE_R=10, HANDLE_SLACK=6, CANVAS_MARGIN=0, MIN_RECT=5,
                               OFFSET_LIMIT=100, MODE_TEXT_MIN=8, DETECT_MAX_PX=1400,
                               BORDER_FRAC=0.02, MIN_COMP_FRAC=2.5e-4, FULL_PAGE_FRAC=0.97,
@@ -180,8 +180,9 @@ C:/DOCS/Code/SmartCroPDF-Web/
       dewarp.ts              docuwarp/UVDoc ONNX mesh dewarp: model loading + fp16 tensor
                               plumbing + the two-stage inference pipeline. Called from
                               imaging.ts's process_page_async()/process_page().
-      idb.ts                 Generic IndexedDB open/request/transaction-wait helpers, shared by
-                              dewarp.ts's model cache and work_store.ts's raster cache.
+      idb.ts                 Generic IndexedDB open/request/transaction-wait helpers, used by
+                              dewarp.ts's ONNX-model-weight cache (the only disk-cached asset —
+                              per-page rasters are RAM-only, see §7).
 
     ui/                     Presentation layer. Imports @core/* and @pdf/*. core/ never imports ui/.
       constants.ts          UI-only tunables: PANEL_WIDTH=320, DETAIL_PANEL_WIDTH=380,
@@ -743,22 +744,24 @@ goes through it.
 - **Detect on the raw source.** `_detect_each_page` runs `detect_content_box` on `_get_source(p)`, the
   **raw** raster — never the processed work image. Detection was running the full dewarp+filter
   pipeline per page and then discarding most of it by downscaling to `DETECT_MAX_PX`.
-- **Two-tier, write-back processed-raster cache.** `_work_cache` is a small RAM LRU for the viewing
-  window; the disk tier is `pdf/work_store.ts` (IndexedDB, PNG blobs) behind the adapter's optional
-  `load_work`/`persist_work`/`clear_work_cache` (kept in `pdf/` because `core/` may not touch
-  IndexedDB — architecture rule). It is **write-back**: `_work_cache`'s `onCapacityEvict` (a new
-  LRU hook distinct from delete/clear) persists a raster **only when it is evicted for capacity** —
-  never eagerly on compute. Eager persist fired N concurrent PNG-encode+IDB-write jobs per pass that
-  ballooned to hundreds of ms and contended with the next page's OpenCV work (measured). The disk is
-  **read only for a key in `_persisted_keys`** (an in-memory set of what was actually written), so a
-  document that fits in RAM (≤ `CACHE_WINDOW`) does zero IndexedDB I/O on the hot path — a stray read
-  would otherwise serialize behind the load-time `clear` transaction for ~300 ms. The key
-  (`_work_disk_key`) is `_doc_gen` + original page index + full intent + rotation + supersample: a
-  settings change is a new key (never a stale raster), a new document is a new generation (no
-  cross-document collision, so reads need not wait on the fire-and-forget load-time clear).
-  Net effect: each page is processed **at most once per settings-generation**; revisiting an evicted
-  page reloads from disk instead of re-running OpenCV/ONNX. Regression-guarded by
-  `tests/core/work_cache.test.ts`.
+- **RAM-only, per-page, content-addressed processed-raster cache.** Each page owns its OWN small
+  version-history LRU in `_work_versions`/`_source_versions` (`Map<page, LRUCache<key, bitmap>>`),
+  not one cache shared across all pages — a shared capacity would evict OTHER pages' bitmaps just
+  from paging through a long document, so walking through N pages would cost more than walking
+  through 1. Each page's own LRU is capacity `settings.undo_depth + 1` (the current combination
+  plus as many prior ones as Undo can still reach) — there is no separate cache-size constant to
+  keep in sync with the Undo/redo-depth setting. Keyed by rotation (source) / full intent (dewarp,
+  filter mode/strength) + rotation + supersample (work), not bare page number: a settings or
+  rotation change simply resolves to a different key within that page's own history (never a stale
+  raster), and Undo/Redo — which do not touch these caches at all (see History below) — re-hit an
+  already-computed entry when it is still within reach instead of recomputing. An earlier design
+  used one shared, disk-backed (IndexedDB, `pdf/work_store.ts`) cache; both the sharing and the disk
+  tier were removed as unnecessary complexity — a bitmap persisted to disk buys nothing for a
+  RAM-bounded, in-session cache, and a shared capacity actively worked against "walking N pages
+  costs the same as 1." Net effect: each page is processed **at most once per distinct
+  combination**; revisiting a combination past its own page's history is one clean recompute, never
+  a disk read. Regression-guarded by `tests/core/work_cache.test.ts` and
+  `tests/core/scan_orchestration_speed.test.ts`.
 
 Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spec-web §16).
 Regression-guarded by `tests/perf/scan_speed.test.ts` (`npm run test:perf`) and, end-to-end in a real
@@ -790,13 +793,14 @@ The defining rules are preserved:
 - `Settings` fields are those consumed by domain commands; `UIConfig` (theme/font/scale)
   is owned by `AppController`, invisible to `core/`
 - `History.push()` stores a pre-mutation snapshot; `undo()` pushes current to redo, returns
-  the popped snapshot; `AppModel` clears LRU caches on state restore
+  the popped snapshot; `AppModel` drops only the (cheap, unbounded) output-preview cache on state
+  restore — the source/work raster caches are content-addressed per page and deliberately untouched
 - `AppModel` is the single state owner; `ui/` reads only frozen `ViewSnapshot` and plain
   property values
 
-LRU cache holds `ImageBitmap` (source rasters) and processed `ImageBitmap` (work rasters),
-bounded to `CACHE_WINDOW` pages each. Evicted entries are `ImageBitmap.close()`d (releases GPU
-texture memory).
+Each page owns its own small LRU of `ImageBitmap` (source rasters) and processed `ImageBitmap`
+(work rasters), bounded to `undo_depth + 1` entries — not one cache shared across all pages (§9a).
+Evicted entries are `ImageBitmap.close()`d (releases GPU texture memory).
 
 ---
 
@@ -890,8 +894,9 @@ Implemented in `pdf/loader.ts` as a special `SyntheticDoc` path that generates
 ## 15. Performance targets
 
 Targets specified in `docs/SmartCrop_PDF_Specification_Web.md` §16. Implementation levers:
-LRU `CACHE_WINDOW=4` pages bound resident GPU memory; export streams one page at a time;
-`ImageBitmap.close()` is called on LRU eviction to release the GPU texture immediately.
+each page's own `undo_depth + 1`-entry LRU (§9a) bounds resident GPU memory per page; export
+streams one page at a time; `ImageBitmap.close()` is called on LRU eviction to release the GPU
+texture immediately.
 
 ---
 

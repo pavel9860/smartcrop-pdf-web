@@ -63,7 +63,11 @@ export class PageOpsService {
     const rotated_det = det.cache.get(p)
     if (rotated_det) det.cache.set(p, rotate_box_cw(rotated_det, sz.height))
 
-    this._raster.delete_page(p)
+    // Rotation is part of the source/work cache key (spec-web §7) — the new angle simply resolves
+    // to a different entry, computed once, without needing to evict the old angle's. The crop/split
+    // output preview is not content-addressed, so it does need explicit invalidation: the box
+    // coordinates just rotated, and the previously-cached pixels no longer match them.
+    this._raster.invalidate_output(p)
 
     doc.offsets = DEFAULT_OFFSETS
     if (det.union) {

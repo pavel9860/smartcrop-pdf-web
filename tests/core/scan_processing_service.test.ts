@@ -31,6 +31,7 @@ function setup(opts: { adapter?: Partial<RendererAdapter> } = {}): {
       filter: doc.filter_mode === FilterMode.NONE ? null : [doc.filter_mode, doc.filter_strength],
     }),
     dewarp_supersample: () => 1,
+    undo_depth: () => 2,
   })
   const history = new History(20)
   const invalidated_output: number[] = []
@@ -45,12 +46,21 @@ function setup(opts: { adapter?: Partial<RendererAdapter> } = {}): {
 }
 
 describe('ScanProcessingService.run_dewarp', () => {
-  it('toggles dewarp_on and pushes a history checkpoint before the toggle', () => {
+  it('turns dewarp on and pushes a history checkpoint before the flip', () => {
     const { svc, doc, history } = setup()
     expect(doc.dewarp_on).toBe(false)
     svc.run_dewarp([0])
     expect(doc.dewarp_on).toBe(true)
     expect(history.can_undo).toBe(true)
+  })
+
+  it('pressing it again while already on does not push a second history checkpoint (no reverse-by-repress)', () => {
+    const { svc, doc, history } = setup()
+    svc.run_dewarp([0])
+    svc.run_dewarp([0])   // already on — no-op on the toggle itself
+    expect(doc.dewarp_on).toBe(true)
+    history.undo(doc)
+    expect(history.can_undo).toBe(false)   // only one checkpoint was ever pushed
   })
 
   it('records the new intent for every selected page and invalidates their output cache', () => {
@@ -77,11 +87,13 @@ describe('ScanProcessingService.set_filter_mode', () => {
     expect(history.can_undo).toBe(true)
   })
 
-  it('pressing the already-active filter turns it off (toggle, spec §7.2)', () => {
-    const { svc, doc } = setup()
+  it('pressing the already-active filter is a no-op — it persists, no reverse-by-repress (spec §4.3/§7)', () => {
+    const { svc, doc, history } = setup()
     svc.set_filter_mode([0], FilterMode.BW)
     svc.set_filter_mode([0], FilterMode.BW)
-    expect(doc.filter_mode).toBe(FilterMode.NONE)
+    expect(doc.filter_mode).toBe(FilterMode.BW)
+    history.undo(doc)
+    expect(history.can_undo).toBe(false)   // only one checkpoint was ever pushed
   })
 
   it('switching from one filter to another does not toggle off', () => {

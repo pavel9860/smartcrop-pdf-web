@@ -36,7 +36,7 @@ function setup(opts: {
   const raster = new PageRasterPipeline(adapter, idx, {
     mode: () => opts.mode ?? Mode.NORMAL, display_dpi: () => 96, is_synthetic: () => false,
     rotation: () => 0, process_intent: () => ({ dewarp: false, filter: null }),
-    dewarp_supersample: () => 1,
+    dewarp_supersample: () => 1, undo_depth: () => 2,
   })
   const doc = default_document_state()
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }

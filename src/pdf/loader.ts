@@ -7,7 +7,6 @@ import { to_native_frame } from '@core/geometry'
 import type { PageProcessIntent } from '@core/document_state'
 import { Mode } from '@core/enums'
 import { DocumentLoadError, CONTEXT_2D_UNAVAILABLE } from '@core/errors'
-import { WorkRasterStore } from './work_store'
 import {
   JPEG_QUALITY, SYNTH_PAGES, SYNTH_W, SYNTH_H,
   SYNTH_BG_COLOR, SYNTH_BORDER_COLOR, SYNTH_TEXT_COLOR, SYNTH_FONT, SYNTH_PADDING,
@@ -141,9 +140,6 @@ export class PdfRendererAdapter implements RendererAdapter {
   private _export:  RpcWorker | null = null
   private _doc_info: DocInfo | null  = null
   private _files: File[] = []
-  // Disk tier of the model's two-tier work cache (spec-web §W2 row 5). Lives here in pdf/ because
-  // core/ may not touch IndexedDB (architecture rule); the model drives it via load/persist/clear.
-  private _work_store = new WorkRasterStore()
 
   async load_files(files: File[]): Promise<DocInfo> {
     if (files.length === 0 && this._files.length > 0) {
@@ -260,13 +256,6 @@ export class PdfRendererAdapter implements RendererAdapter {
     if (!intent.dewarp && !intent.filter) return source
     return process_page_async(source, intent, supersample)
   }
-
-  // Disk tier of the two-tier processed-raster cache (spec-web §W2 row 5) — delegates to the
-  // IndexedDB-backed WorkRasterStore. Best-effort: a storage error is swallowed there, so the
-  // model just recomputes on a miss.
-  load_work(key: string): Promise<ImageBitmap | null> { return this._work_store.get(key) }
-  persist_work(key: string, bitmap: ImageBitmap): Promise<void> { return this._work_store.put(key, bitmap) }
-  clear_work_cache(): Promise<void> { return this._work_store.clear() }
 
   render_output_image(
     src: ImageBitmap,

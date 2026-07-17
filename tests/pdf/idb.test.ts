@@ -1,6 +1,6 @@
 // Direct unit coverage for the shared IndexedDB open/request/transaction-wait helpers used by
-// both dewarp.ts's model cache and work_store.ts's raster cache. Pure IndexedDB-event plumbing,
-// mockable under jsdom without a real browser.
+// dewarp.ts's ONNX model-weight cache. Pure IndexedDB-event plumbing, mockable under jsdom without
+// a real browser.
 import { describe, it, expect } from 'vitest'
 import { open_idb, idb_req, idb_tx } from '@pdf/idb'
 

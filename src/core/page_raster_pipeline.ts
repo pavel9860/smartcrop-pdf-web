@@ -1,15 +1,17 @@
-// PageRasterPipeline (§18 AppModel decomposition, step 2/7) — owns the three raster caches
-// (source / work / output), the disk-tier bookkeeping, and the currently-displayed bitmap.
-// Every consumer that needs pixels — the NORMAL view, the SCANNED work pipeline, and Auto-detect
-// — funnels through get_source/get_work, so a page is rasterized exactly once per (page,
-// rotation) (spec-web §7).
+// PageRasterPipeline (§18 AppModel decomposition, step 2/7) — owns the RAM-only raster caches
+// (source / work / output) and the currently-displayed bitmap. Every consumer that needs pixels —
+// the NORMAL view, the SCANNED work pipeline, and Auto-detect — funnels through get_source/
+// get_work, so a page is rasterized exactly once per distinct (page, rotation[, dewarp, filter,
+// strength]) combination (spec-web §7). Navigating between pages never evicts anything: each
+// page owns its own small version history, so walking through a 50-page document is exactly as
+// fast as viewing 1 (spec-web §16) — there is no shared page-count window to exhaust.
 import type { Box } from './geometry'
 import type { PageProcessIntent } from './document_state'
 import type { RendererAdapter, PageSize } from './model'
 import type { PageIndexMap } from './page_index_map'
 import { Mode } from './enums'
 import { LRUCache } from './lru'
-import { CACHE_WINDOW, SRC_DPI, SYNTH_W, SYNTH_H, MAX_SPLIT } from './constants'
+import { SRC_DPI, SYNTH_W, SYNTH_H, MAX_SPLIT } from './constants'
 
 // Live reads into AppModel state that the pipeline itself doesn't own (mode/display DPI/rotation
 // are UI- and DocumentState-driven; process_intent is derived from DocumentState's scan flags).
@@ -21,59 +23,39 @@ export interface RasterContext {
   rotation(p: number): number
   process_intent(p: number): PageProcessIntent
   dewarp_supersample(): number
+  // The undo/redo depth setting (spec-web §12) — the ONE number that bounds how many past
+  // processing combinations per page are worth keeping a bitmap for; there is no separate cache
+  // capacity to keep in sync with it.
+  undo_depth(): number
 }
 
 export class PageRasterPipeline {
-  // Eviction closes the bitmap to free memory eagerly — EXCEPT the one currently on screen
+  // Per-page version history: each page gets its OWN small LRU (capacity = undo_depth + 1 — the
+  // current combination plus as many prior ones as Undo can still reach), created lazily on first
+  // use. This is deliberately NOT one shared cache across pages — a shared capacity would evict
+  // OTHER pages' bitmaps just from paging through a long document, forcing a recompute on return
+  // that undoes the point of eager processing. Keyed by rotation (source) / the full processing
+  // intent (work) — content-addressed, so Undo/Redo re-hit an already-computed bitmap when it is
+  // still within reach instead of recomputing, and never serve stale content for a different
+  // combination. Eviction closes the bitmap to free memory — EXCEPT the one currently on screen
   // (_current): closing a displayed/in-flight bitmap detaches it and the next drawImage throws
-  // InvalidStateError ("image source is detached"). This hit hardest during Auto-detect on long
-  // books, which walks every page through get_work and would otherwise evict+close the live page
-  // (bug: site dead).
-  private _source_cache = new LRUCache<number, ImageBitmap>(CACHE_WINDOW,
-    (_, b) => { if (b !== this._current) b.close() })
+  // InvalidStateError ("image source is detached").
+  private _source_versions = new Map<number, LRUCache<string, ImageBitmap>>()
+  private _work_versions   = new Map<number, LRUCache<string, ImageBitmap>>()
 
-  // Processed-raster RAM tier. WRITE-BACK to the disk tier: a raster is persisted to IndexedDB
-  // only when the RAM cache is full and it is genuinely evicted (onCapacityEvict) — NOT eagerly on
-  // every compute. Eager persist made a warm pass fire N concurrent PNG-encode+IDB-write jobs that
-  // piled up (hundreds of ms each) and contended with the next page's OpenCV work; for a document
-  // that fits in RAM (≤ CACHE_WINDOW pages) the disk tier is never even read, so that work was
-  // pure overhead. Delete/clear (intent change, reset) close without a disk write.
-  // `_work_disk_keys` carries each cached page's disk key (the intent it was computed under) so
-  // eviction persists it under the right key even if the current intent has since changed.
-  private _work_disk_keys = new Map<number, string>()
-  // Keys actually written to the disk tier (on capacity eviction). get_work only reads disk for a
-  // key in this set — so a document that fits in RAM does ZERO disk reads and never touches
-  // IndexedDB on the hot path (a stray read would serialize behind the load-time clear transaction
-  // for ~300 ms; this set makes that read never happen). In-memory, cleared on load/reset.
-  private _persisted_keys = new Set<string>()
-  private _work_cache = new LRUCache<number, ImageBitmap>(CACHE_WINDOW,
-    (p, b) => { this._work_disk_keys.delete(p); if (b !== this._current) b.close() },
-    (p, b) => {
-      const key = this._work_disk_keys.get(p)
-      // persist_work snapshots pixels synchronously (drawImage before any await), so closing
-      // right after is safe; a capacity eviction only happens deep into processing, long after
-      // any load-time clear. Record the key so get_work knows this raster is retrievable from disk.
-      if (key && this._adapter.persist_work) { void this._adapter.persist_work(key, b); this._persisted_keys.add(key) }
-      this._work_disk_keys.delete(p)
-      if (b !== this._current) b.close()
-    })
-
-  // Pre-rendered output bitmaps for committed pages (keyed "page:split_idx")
-  private _output_cache = new LRUCache<string, ImageBitmap>(CACHE_WINDOW * 2,
+  // Pre-rendered output bitmaps for committed pages (keyed "page:split_idx"). Cheap to rebuild from
+  // the (separately cached) work bitmap — a crop/split is processing in the same sense as
+  // dewarp/filter (the cached entry is the actual cropped pixels, never a full page + remembered
+  // rectangle) — but unlike source/work it is not content-addressed or version-bounded: it is
+  // small (≤ MAX_SPLIT entries per page) and invalidate_output(p)/clear_output() are called at
+  // every site that can change what it should show (spec-web §7), so nothing here ever goes stale.
+  private _output_cache = new LRUCache<string, ImageBitmap>(Infinity,
     (_, b) => { if (b !== this._current) b.close() })
 
   // Currently displayed bitmap (synchronously available for view_snapshot)
   private _current: ImageBitmap | null = null
   private _loading = false
   private readonly _prefetching = new Set<number>()
-
-  // Monotonic document generation, bumped on every load/reset and baked into each disk-cache key.
-  // This namespaces a document's processed rasters so a disk read can never return a PREVIOUS
-  // document's raster (key collision), which means reads/persists do NOT have to wait for the
-  // load-time IndexedDB clear to finish — that wait added ~300 ms to the first pages of a scan
-  // pass. The clear still runs (fire-and-forget) to bound storage; correctness no longer depends
-  // on it.
-  private _doc_gen = 0
 
   constructor(
     private readonly _adapter: RendererAdapter,
@@ -89,39 +71,36 @@ export class PageRasterPipeline {
     return this._output_cache.get(`${p}:${split_idx}`) ?? null
   }
 
-  // Full reset on document load/reopen: new generation, drop everything (RAM + best-effort disk).
+  // Full reset on document load/reopen: drop everything.
   reset(): void {
-    this._source_cache.clear()
-    this._work_cache.clear()
-    this._work_disk_keys.clear()
-    this._persisted_keys.clear()
+    this._clear_versions(this._source_versions)
+    this._clear_versions(this._work_versions)
     this._output_cache.clear()
-    // New generation → new disk-key namespace. Drop the old generation's rasters from disk to
-    // bound storage, but fire-and-forget: correctness no longer waits on it.
-    this._doc_gen += 1
-    void this._adapter.clear_work_cache?.()
     this._current = null
   }
 
-  // Undo/redo: any undoable field could have changed underneath (rotation, crop, filter, dewarp),
-  // so drop every RAM raster — but disk bookkeeping (_doc_gen, persisted keys) stays valid, since
-  // disk keys are content-addressed by intent/rotation, not doc-generation-invalidated.
+  // Undo/redo (spec-web §12): drop only the cheap crop/split output preview. The source/work
+  // per-page version histories are content-addressed and bounded by undo_depth — whatever state
+  // DocumentState reverted to simply resolves to its own entry (a hit if still within reach, one
+  // clean recompute otherwise) — so they are deliberately left alone.
+  clear_output(): void { this._output_cache.clear() }
+
+  // Delete (spec-web §12): every cache is keyed by LOGICAL page number, and delete shifts every
+  // subsequent page's logical index — every entry's association is now wrong, not just stale, so
+  // (unlike Undo/Redo) a wholesale wipe is the correct behavior here, not a shortcut.
   clear_ram(): void {
-    this._source_cache.clear()
-    this._work_cache.clear()
+    this._clear_versions(this._source_versions)
+    this._clear_versions(this._work_versions)
     this._output_cache.clear()
     this._current = null
   }
 
-  clear_source(): void { this._source_cache.clear() }
+  clear_source(): void { this._clear_versions(this._source_versions) }
 
-  delete_page(p: number): void {
-    this._source_cache.delete(p)
-    this._work_cache.delete(p)
-    this.invalidate_output(p)
+  private _clear_versions(map: Map<number, LRUCache<string, ImageBitmap>>): void {
+    for (const cache of map.values()) cache.clear()
+    map.clear()
   }
-
-  drop_work(p: number): void { this._work_cache.delete(p) }
 
   invalidate_output(p: number): void {
     for (let i = 0; i < MAX_SPLIT; i++) this._output_cache.delete(`${p}:${i}`)
@@ -129,50 +108,56 @@ export class PageRasterPipeline {
 
   invalidate_current(): void { this._current = null }
 
-  // Raw page raster (before scan processing), rendered once per page and cached.
+  private _version_cache(
+    map: Map<number, LRUCache<string, ImageBitmap>>, p: number,
+  ): LRUCache<string, ImageBitmap> {
+    let cache = map.get(p)
+    if (!cache) {
+      cache = new LRUCache<string, ImageBitmap>(this._ctx.undo_depth() + 1,
+        (_, b) => { if (b !== this._current) b.close() })
+      map.set(p, cache)
+    }
+    return cache
+  }
+
+  // Raw page raster (before scan processing), rendered once per (page, rotation) and cached.
   async get_source(p: number): Promise<ImageBitmap> {
-    const cached = this._source_cache.get(p)
+    const rotation = this._ctx.rotation(p)
+    const cache = this._version_cache(this._source_versions, p)
+    const key = String(rotation)
+    const cached = cache.get(key)
     if (cached) return cached
     const dpi = this._ctx.mode() === Mode.SCANNED ? SRC_DPI : this._ctx.display_dpi()
-    const rotation = this._ctx.rotation(p)
     // p is logical (post-delete); the adapter only knows original pdf.js page indices.
     const orig = this._page_index.orig(p)
     const b = !this._ctx.is_synthetic()
       ? await this._adapter.get_source_image(orig, dpi, rotation)
       : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
-    this._source_cache.set(p, b)
+    cache.set(key, b)
     return b
   }
 
   async get_work(p: number): Promise<ImageBitmap> {
-    const cached = this._work_cache.get(p)
-    if (cached) return cached
-
-    const src = await this.get_source(p)
     if (this._ctx.mode() !== Mode.SCANNED) {
-      // NORMAL: the work raster IS the source raster. Do NOT also store it in _work_cache — the
+      // NORMAL: the work raster IS the source raster. Do NOT also store it in the work cache — the
       // same bitmap in two close-on-evict caches gets double-closed, detaching a bitmap the other
-      // cache still serves (root of the "image source is detached" crash). It stays in _source_cache.
-      return src
+      // cache still serves (root of the "image source is detached" crash). It stays in the source cache.
+      return this.get_source(p)
     }
 
     // A no-op intent (no dewarp, no filter) has no work raster distinct from the source — return
     // src directly rather than caching a duplicate (same double-close hazard as NORMAL).
     const intent = this._ctx.process_intent(p)
-    if (!intent.dewarp && !intent.filter) return src
+    if (!intent.dewarp && !intent.filter) return this.get_source(p)
 
-    const key = this._work_disk_key(p, intent)
-    // Only hit the disk tier for a key we actually persisted (see _persisted_keys) — a page that
-    // never left RAM was never written, so skip the IndexedDB round-trip (and its clear-serialized
-    // stall) entirely.
-    const disk = this._persisted_keys.has(key) ? await this._load_work_from_disk(key) : null
-    if (disk) { this._cache_work(p, key, disk); return disk }
+    const cache = this._version_cache(this._work_versions, p)
+    const key = this._work_key(intent, this._ctx.rotation(p))
+    const cached = cache.get(key)
+    if (cached) return cached
 
+    const src = await this.get_source(p)
     const work = await this._adapter.get_work_image(src, intent, this._ctx.dewarp_supersample())
-    // Write-back cache: don't persist here — the disk write happens only if/when this raster is
-    // evicted from RAM (see _work_cache's onCapacityEvict). Small documents never evict, so they
-    // never pay for a disk write they'd never read back.
-    this._cache_work(p, key, work)
+    cache.set(key, work)
     return work
   }
 
@@ -185,33 +170,23 @@ export class PageRasterPipeline {
     return work
   }
 
-  private _cache_work(p: number, key: string, work: ImageBitmap): void {
-    this._work_disk_keys.set(p, key)
-    this._work_cache.set(p, work)
-  }
-
-  // Two-tier work cache — disk (IndexedDB) tier. Key = document generation + original page index +
-  // full intent (dewarp, filter mode/strength), rotation and supersample: any change yields a
-  // different key, so a settings change never returns a stale raster (it re-processes into a new
-  // key instead) and a new document (new _doc_gen) never collides with a prior one's rasters.
-  private _work_disk_key(p: number, intent: PageProcessIntent): string {
-    const orig = this._page_index.orig(p)
+  // Version key within a page's own cache = full intent (dewarp, filter mode/strength) + rotation +
+  // supersample: any change yields a different key, so a settings/rotation change never returns a
+  // stale raster (it re-processes into a new key instead) rather than needing an explicit
+  // invalidation call.
+  private _work_key(intent: PageProcessIntent, rotation: number): string {
     const filt = intent.filter ? `${intent.filter[0]}-${intent.filter[1]}` : 'none'
-    const rot = this._ctx.rotation(p)
-    return `g${this._doc_gen}|${orig}|d${intent.dewarp ? 1 : 0}|f${filt}|r${rot}|s${this._ctx.dewarp_supersample()}`
-  }
-
-  private _load_work_from_disk(key: string): Promise<ImageBitmap | null> {
-    // No wait on the load-time clear: _doc_gen namespaces the key, so there is no cross-document
-    // collision to guard against, and the read just misses (fast) for a never-persisted page.
-    return this._adapter.load_work?.(key) ?? Promise.resolve(null)
+    return `d${intent.dewarp ? 1 : 0}|f${filt}|r${rotation}|s${this._ctx.dewarp_supersample()}`
   }
 
   // Background-warms an adjacent page so next/prev is a cache hit instead of a blank "Loading…"
   // flash while the (potentially heavy, scanned-mode) work raster renders on demand.
   prefetch(p: number): void {
     if (p < 0 || p >= this._page_index.length || this._prefetching.has(p)) return
-    const warm = this._ctx.mode() === Mode.SCANNED ? this._work_cache.has(p) : this._source_cache.has(p)
+    const intent = this._ctx.process_intent(p)
+    const warm = (this._ctx.mode() === Mode.SCANNED && (intent.dewarp || intent.filter))
+      ? (this._work_versions.get(p)?.has(this._work_key(intent, this._ctx.rotation(p))) ?? false)
+      : (this._source_versions.get(p)?.has(String(this._ctx.rotation(p))) ?? false)
     if (warm) return
     this._prefetching.add(p)
     void this.get_work(p).catch(() => { /* best-effort warm */ })

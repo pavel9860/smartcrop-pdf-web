@@ -30,7 +30,7 @@ function setup(page_count = 2): {
   const raster = new PageRasterPipeline(make_adapter(page_count, Mode.NORMAL), idx, {
     mode: () => Mode.NORMAL, display_dpi: () => 96, is_synthetic: () => false,
     rotation: () => 0, process_intent: () => ({ dewarp: false, filter: null }),
-    dewarp_supersample: () => 1,
+    dewarp_supersample: () => 1, undo_depth: () => 2,
   })
   const current_page = { v: 0 }
   const view_pos = { v: 1 }

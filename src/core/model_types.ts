@@ -58,12 +58,6 @@ export interface RendererAdapter {
   // Fast NORMAL-mode detection from the PDF text layer (desktop detect.py normal_page_box) — no
   // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
   detect_text_box?(page_idx: number): Promise<Box | null>
-  // Disk (IndexedDB) tier of the two-tier processed-raster cache (spec-web §W2 row 5). The model
-  // owns the opaque key (page + intent generation). All optional: an adapter without them (test
-  // mocks) simply has no disk tier and the model recomputes on a RAM-cache miss.
-  load_work?(key: string): Promise<ImageBitmap | null>
-  persist_work?(key: string, bitmap: ImageBitmap): Promise<void>
-  clear_work_cache?(): Promise<void>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
   // Lossless vector PDF export for NORMAL-mode documents (spec-web §W9.3): crops/rotates/splits
   // via the ORIGINAL PDF page content (pdf-lib embedPage), never rasterizes. Optional — an adapter

@@ -167,11 +167,12 @@ Processing, Auto-detect, Split-apply, Actions).
 
 | Control | Action |
 |---|---|
-| Dewarp & Deskew (toggle) | Sets the dewarp intent over the Pages selection (§6). |
-| B/W / Sharpen (mutually exclusive toggle) | Sets the filter mode over the Pages selection; pressing the active one turns it off. |
+| Dewarp & Deskew | Turns dewarp on over the Pages selection (§6). Pressing it again while already on is a no-op — it does not toggle back off; Undo is the only way to remove it. |
+| B/W / Sharpen (mutually exclusive) | Sets the filter mode over the Pages selection. Switching to the other filter replaces it in one step. Pressing the already-active one is a no-op — it does not toggle back off; Undo is the only way to remove it. |
 | Strength 1 / 2 / 3 | Always selectable regardless of whether a filter is active; applies once a filter mode is on. |
 
-Nothing here runs automatically — only on a button press.
+Nothing here runs automatically — only on a button press. A processing operation persists until
+explicitly undone; there is no separate "reverse" gesture on the same button (§7).
 
 ### 4.4 Split Each Page Into
 
@@ -462,11 +463,18 @@ rasterized exactly once per (page, rotation) — the source render is never re-r
 Scan toggles are eager: Dewarp/B-W/Sharpen/strength flip their intent instantly (undoable), then
 return a batch job that streams the Pages selection's rasters through the pipeline once under the
 progress overlay (§11) — cancellable; a cancelled pass keeps the new intent, remaining pages compute
-lazily on view. A two-tier, write-back raster cache backs this: a small in-memory LRU
-(`CACHE_WINDOW` pages) for the current viewing window, plus an IndexedDB disk tier keyed by
-document-generation + page + processing-intent — a raster is persisted to disk only when genuinely
-evicted from the RAM tier (write-back, not eager), and the disk is read only for a key that was
-actually persisted, so a document that fits in RAM does zero IndexedDB I/O on the hot path.
+lazily on view. Each page is processed at most once per distinct (page, rotation, dewarp, filter,
+strength) combination, and — critically — walking through a long document costs the same as viewing
+one page: each page owns its OWN small RAM-only version history (plain LRU, oldest dropped first —
+no disk tier, no shared cross-page capacity to exhaust), capacity = the Undo/redo-depth setting + 1
+(the current combination plus as many prior ones as Undo can still reach — no separate cache-size
+number to keep in sync with it). Keyed by the full combination, not by page number alone, so
+Undo/Redo re-hit an already-computed bitmap when it is still within that page's own reach instead of
+recomputing, and never serve a stale bitmap for a different combination. A crop/split (§6) is
+processing in the same sense — the shown and cached bitmap is the actual cropped/split pixels, never
+a full-page bitmap plus a remembered crop rectangle — but its cache entry is cheap to rebuild from
+the (separately cached) processed page, so Undo/Redo simply drop and re-derive it rather than needing
+a version history of its own.
 
 ### 7.1 Dewarp & Deskew
 
@@ -619,12 +627,18 @@ a checkpoint either — only **Crop** (`apply_crop()`) does. Undo continues to f
 - **Undo/Redo** — a bounded stack of `DocumentState` snapshots, depth from the Undo/redo-depth
   setting (preset dropdown, `UNDO_DEPTH_OPTIONS = [1,2,4,8]`, default 2). A snapshot is taken before
   every undoable mutation (Crop, offset commit, a completed drag resize, rotate) — see above for what
-  is deliberately excluded. Restoring a snapshot clears the raster caches so pages re-render.
+  is deliberately excluded. Restoring a snapshot drops only the cheap crop/split output preview (§7);
+  the source and processed-page raster caches are content-addressed by (page, rotation, dewarp,
+  filter, strength) and are left alone, since a reverted combination naturally resolves to its own
+  cache entry — a hit if still resident, one clean recompute if it was evicted. Neither cache is ever
+  wiped wholesale by Undo/Redo (§7).
 - **Reset** — reloads the same input files (or the synthetic placeholder) and re-combines them,
   clearing all crops, rotation, detection, processing and history; returns Split to 1 and clears
   filter/dewarp highlights.
-- **Rotate** — a per-page rotation-angle map (0/90/180/270° CW). Adds 90° and drops only that page's
-  rasters (they re-render at the new angle); the committed crop and the cached detected box are
+- **Rotate** — a per-page rotation-angle map (0/90/180/270° CW). Adds 90°; rotation is part of the
+  source/processed-page cache key (§7), so the new angle simply resolves to a different cache entry
+  (re-rendered once, then cached) without needing to evict the old angle's entry — and drops that
+  page's crop/split output preview, since the committed crop and the cached detected box are
   carried through by rotating their coordinates 90° CW, so cropping survives a rotate. Offsets reset
   to default; the detection union is rebuilt (with the same `FULL_PAGE_FRAC` exclusion §5 applies at
   detect time — never a raw re-aggregate that would readmit an excluded fallback box). With split 2/4
@@ -711,7 +725,8 @@ offline after one online load" requires. No `SharedArrayBuffer`/COOP-COEP depend
 | Operation | Target |
 |---|---|
 | Canvas repaint (non-imaging) | < 16ms (60fps during drag) |
-| Page navigation | < 100ms (RAM cache hit: immediate draw; RAM-miss but disk-hit reloads from IndexedDB, no recompute) |
+| Page navigation | < 100ms (RAM cache hit: immediate draw; RAM-miss recomputes once — no disk tier, §7) |
+| Orchestration overhead (dispatch → cache lookup → batch loop), excluding the mocked adapter's own compute | Dewarp&Deskew < 0.5s, filter apply < 0.3s, over a multi-page selection — regression tests at the AppModel level with an instant-return mock adapter (tests/core/scan_orchestration_speed.test.ts), isolating pipeline/cache overhead from real OpenCV/ONNX cost (which is covered separately above and in tests/perf/scan_speed.test.ts) |
 | B/W or Sharpen filter per page | < 500ms (SIMD WASM opencv.js + downscaled illumination-flatten morphology) |
 | Auto-detect per page | < 100ms (SCANNED: raw source, not the processed work image; NORMAL: text-layer, no raster at all) |
 | Dewarp per page (ONNX stage) | seconds on the 1-thread WASM execution provider; fast on WebGPU where available |
@@ -736,7 +751,8 @@ duplicate values into logic). UI-only tunables live in `src/ui/constants.ts`.
 
 ```
 # DPI / caches
-SRC_DPI = 150.0    NORMAL_DPI = 150.0    NORMAL_DISPLAY_DPI_MAX = 450.0    CACHE_WINDOW = 4
+SRC_DPI = 150.0    NORMAL_DPI = 150.0    NORMAL_DISPLAY_DPI_MAX = 450.0
+# raster cache capacity = Undo/redo-depth setting + 1, per page (§7) — not a separate constant
 # crop geometry
 HANDLE_R = 10    HANDLE_SLACK = 6    CANVAS_MARGIN = 0    OFFSET_LIMIT = 100.0    MIN_RECT = 5.0 (geometry.ts)
 # classification / detection
@@ -841,8 +857,8 @@ state.
 8. Batches run page-by-page with a yield between pages; the overlay reports progress for detect,
    dewarp, filter and export and paints smoothly; Cancel stops before the next page with no partial
    file (§11).
-9. Resident raster memory stays bounded regardless of page count (RAM LRU `CACHE_WINDOW`; disk tier
-   write-back only; export streams).
+9. Resident raster memory per page stays bounded regardless of how many other pages have been
+   visited (each page's own RAM LRU, capacity = Undo/redo-depth + 1, no disk tier; export streams).
 10. NORMAL-mode PDF export never rasterizes (§10.3); every other export path goes through the one
     raster render function (§10.1) — never a second raster path.
 11. A committed 2/4-split page is navigable as N output pages per source page in reading order; the

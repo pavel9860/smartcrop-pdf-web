@@ -504,12 +504,12 @@ describe('scan processing (toggle flips instantly; warm batch behavior in scan_b
     expect(model.dewarp_on).toBe(true)
   })
 
-  it('set_filter_mode sets the mode, and pressing the same mode again turns it off', async () => {
+  it('set_filter_mode sets the mode; pressing the same mode again is a no-op (persists until Undo)', async () => {
     const model = await loaded_model({ mode: Mode.SCANNED })
     model.set_filter_mode(FilterMode.BW)
     expect(model.filter_mode).toBe(FilterMode.BW)
     model.set_filter_mode(FilterMode.BW)
-    expect(model.filter_mode).toBe(FilterMode.NONE)
+    expect(model.filter_mode).toBe(FilterMode.BW)
   })
 
   it('set_filter_strength clamps to [FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX]', async () => {

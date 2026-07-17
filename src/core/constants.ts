@@ -9,7 +9,10 @@ export const NORMAL_DPI = 150.0   // normal-mode baseline/minimum render DPI
 // needs it (spec-web §2) — never below NORMAL_DPI, never above this cap (bounds memory/CPU on an
 // extreme window size or devicePixelRatio).
 export const NORMAL_DISPLAY_DPI_MAX = 450.0
-export const CACHE_WINDOW = 4   // max pages in each LRU raster cache
+// Raster cache capacity is NOT a separate constant: each page's own source/work version history
+// is bounded by (Undo/redo-depth setting + 1) — the current combination plus as many prior ones as
+// Undo can still reach (spec-web §7, §12) — so it never needs to be kept in sync with a second,
+// duplicate "how much history" number.
 
 // Batch-loop paint yield (model.ts detect/warm/export loops): yield to the event loop only if
 // this much wall time has elapsed since the last yield from the same loop, not once per item

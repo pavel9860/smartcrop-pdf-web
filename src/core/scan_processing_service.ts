@@ -26,19 +26,27 @@ export class ScanProcessingService {
     private readonly _ctx: ScanContext,
   ) {}
 
+  // Persists until Undo — pressing it again while already on is a no-op on the toggle itself (no
+  // reverse-by-repress, spec §4.3/§7), but the selection's intent/cache still gets (re)applied so a
+  // newly-widened Pages selection catches up.
   run_dewarp(pages: readonly number[]): BatchJob {
-    this._history.push(this._ctx.document())   // snapshot BEFORE the toggle so undo reverts it
     const doc = this._ctx.document()
-    doc.dewarp_on = !doc.dewarp_on
+    if (!doc.dewarp_on) {
+      this._history.push(doc)   // snapshot BEFORE the flip so undo reverts it
+      doc.dewarp_on = true
+    }
     this._apply_scan_intents(pages)
     return this._warm_work_cache(pages, 'Dewarping…')
   }
 
+  // Persists until Undo — pressing the already-active filter is a no-op on the toggle itself (no
+  // reverse-by-repress, spec §4.3/§7); switching to the other filter replaces it in one step.
   set_filter_mode(pages: readonly number[], mode: FilterMode): BatchJob {
-    this._history.push(this._ctx.document())
     const doc = this._ctx.document()
-    // Toggle: pressing the active filter turns it off (spec §7.2)
-    doc.filter_mode = (mode === doc.filter_mode) ? FilterMode.NONE : mode
+    if (doc.filter_mode !== mode) {
+      this._history.push(doc)
+      doc.filter_mode = mode
+    }
     this._apply_scan_intents(pages)
     return this._warm_work_cache(pages, 'Applying filter…')
   }
@@ -73,9 +81,12 @@ export class ScanProcessingService {
     ctrl.complete(new Ok())
   }
 
-  // Record the CURRENT global scan flags as each selected page's intent and drop its cached
-  // rasters. No image work here — the next get_work(p) renders that page. (Callers push history
-  // BEFORE mutating the flags, so undo reverts the toggle.)
+  // Record the CURRENT global scan flags as each selected page's intent and invalidate its crop
+  // preview. No image work here — the next get_work(p) resolves the (page, rotation, dewarp,
+  // filter, strength) cache key and renders that page only on a genuine miss (§7); an already-
+  // cached raster for this exact combination (e.g. re-applying the same intent, or Undo landing
+  // back on one) is reused, not recomputed. (Callers push history BEFORE mutating the flags, so
+  // undo reverts the toggle.)
   private _apply_scan_intents(pages: readonly number[]): void {
     const doc = this._ctx.document()
     const intent: PageProcessIntent = {
@@ -86,7 +97,6 @@ export class ScanProcessingService {
     }
     for (const p of pages) {
       doc.processed.set(p, intent)
-      this._raster.drop_work(p)
       this._ctx.invalidate_output(p)
     }
     this._ctx.invalidate_current()

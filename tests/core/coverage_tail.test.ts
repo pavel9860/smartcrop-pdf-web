@@ -1,8 +1,7 @@
 // Final branch closes: export render-stage failure path, detection_union with a box that is
 // neither wider nor taller than the running max (both comparison branches taken false), the
 // vector-export orchestration path (export_pdf_vector — happy/fallback/cancel/error), SCANNED-
-// mode detect's raster path + its error branch, output-cache LRU eviction, and the work-raster
-// disk tier's read-back path (_load_work_from_disk).
+// mode detect's raster path + its error branch, and output-cache LRU eviction.
 import { describe, it, expect } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo, type VectorExportPage } from '@core/model'
 import { Mode, PagesMode } from '@core/enums'
@@ -169,11 +168,13 @@ describe('SCANNED-mode detect (raster path)', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Output-cache LRU eviction (double-close guard, §17 "every ImageBitmap not released").
+// Output-cache invalidation (double-close guard, §17 "every ImageBitmap not released"). Unlike
+// source/work, the output cache is not count-bounded (spec-web §7) — it is only ever dropped by
+// explicit invalidation at a site that can change what it should show, e.g. Rotate.
 // ---------------------------------------------------------------------------
 
 describe('output cache eviction', () => {
-  it('evicting a committed-page output bitmap closes it, without closing the on-screen bitmap', async () => {
+  it('invalidating a committed page\'s output previews (via Rotate) closes them, without closing the on-screen bitmap', async () => {
     const closed: string[] = []
     const make = (tag: string): ImageBitmap => ({
       width: 50, height: 50, close: (): void => { closed.push(tag) },
@@ -182,9 +183,7 @@ describe('output cache eviction', () => {
     const a: RendererAdapter = {
       ...adapter(),
       load_files: (f: File[]): Promise<DocInfo> => Promise.resolve({
-        // CACHE_WINDOW is small (4); split=4 on several pages produces enough distinct
-        // "page:split_idx" output-cache keys to force an LRU eviction.
-        page_count: 6, page_sizes: Array.from({ length: 6 }, () => ({ width: 200, height: 300 })),
+        page_count: 1, page_sizes: [{ width: 200, height: 300 }],
         file_names: f.map(x => x.name), mode: Mode.NORMAL,
       }),
       render_output_image: () => Promise.resolve(make(`out${n++}`)),
@@ -192,71 +191,16 @@ describe('output cache eviction', () => {
     const m = new AppModel(a)
     await m.load_files([new File(['x'], 'a.pdf')])
     m.set_split(4)          // seeds crop_rects to exactly 4 rects, matching split_count
-    m.apply_crop()          // commits all 6 pages -> view_snapshot() now reads from _output_cache
-    // Walk through every OUTPUT VIEW (6 pages x 4 splits = 24 view positions, not 6 — each
-    // committed page contributes `split_count` view positions, per view_to_source) to populate
-    // _output_cache well beyond its capacity (CACHE_WINDOW*2 = 8 entries).
+    m.apply_crop()          // commits the page -> view_snapshot() now reads from the output cache
     for (let pos = 1; pos <= m.view_total; pos++) {
       m.jump_to_output_page(pos)
       await m.prepare_current_view()
     }
-    expect(closed.length).toBeGreaterThan(0)   // at least one evicted bitmap was actually closed
-  })
-})
+    expect(closed.length).toBe(0)   // nothing evicted yet — no count-based cap to exhaust
 
-// ---------------------------------------------------------------------------
-// Work-raster disk tier read-back (_load_work_from_disk). _work_cache's capacity is CACHE_WINDOW
-// (4); warming 6 SCANNED pages with a real dewarp intent forces pages 0 and 1 to be evicted (and
-// therefore persisted — see model.ts's _work_cache onCapacityEvict). Re-visiting an evicted page
-// must then read back through adapter.load_work rather than recomputing via get_work_image.
-// ---------------------------------------------------------------------------
+    m.rotate_pages()   // rotated box coordinates invalidate every split slot's stale preview
 
-describe('work-raster disk tier read-back', () => {
-  it('re-visiting an evicted SCANNED page reads its raster back via adapter.load_work', async () => {
-    let load_called = false
-    const disk_bitmap = bmp(77, 88)   // distinct from get_work_image's bmp() default (100x100)
-    const a: RendererAdapter = {
-      ...adapter(),
-      load_files: (f: File[]): Promise<DocInfo> => Promise.resolve({
-        page_count: 6, page_sizes: Array.from({ length: 6 }, () => ({ width: 200, height: 300 })),
-        file_names: f.map(x => x.name), mode: Mode.SCANNED,
-      }),
-      get_work_image: () => Promise.resolve(bmp()),
-      load_work: (_key: string) => { load_called = true; return Promise.resolve(disk_bitmap) },
-      persist_work: () => Promise.resolve(),
-      clear_work_cache: () => Promise.resolve(),
-    }
-    const m = new AppModel(a)
-    await m.load_files([new File(['x'], 'scan.pdf')])
-    await m.run_dewarp().result()   // warms all 6 pages' work rasters; evicts+persists pages 0-1
-
-    m.jump_to_output_page(1)        // back to the first (evicted) page
-    await m.prepare_current_view()
-
-    expect(load_called).toBe(true)
-    expect(m.view_snapshot().image).toEqual(disk_bitmap)
-  })
-
-  it('a persisted key with no adapter.load_work falls back to null, then recomputes (never throws)', async () => {
-    const a: RendererAdapter = {
-      ...adapter(),
-      load_files: (f: File[]): Promise<DocInfo> => Promise.resolve({
-        page_count: 6, page_sizes: Array.from({ length: 6 }, () => ({ width: 200, height: 300 })),
-        file_names: f.map(x => x.name), mode: Mode.SCANNED,
-      }),
-      get_work_image: () => Promise.resolve(bmp()),   // 100x100 default — proves a recompute, not a disk read
-      persist_work: () => Promise.resolve(),
-      clear_work_cache: () => Promise.resolve(),
-      // no load_work: this adapter can write to the disk tier but not read back from it
-    }
-    const m = new AppModel(a)
-    await m.load_files([new File(['x'], 'scan.pdf')])
-    await m.run_dewarp().result()   // warms + evicts + persists pages 0-1
-
-    m.jump_to_output_page(1)
-    await m.prepare_current_view()
-
-    expect(m.view_snapshot().image?.width).toBe(100)
+    expect(closed.length).toBeGreaterThan(0)
   })
 })
 

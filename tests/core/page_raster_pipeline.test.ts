@@ -20,6 +20,7 @@ function ctx(overrides: Partial<RasterContext> = {}): RasterContext {
     rotation: () => 0,
     process_intent: (): PageProcessIntent => ({ dewarp: false, filter: null }),
     dewarp_supersample: () => 1,
+    undo_depth: () => 2,
     ...overrides,
   }
 }
@@ -122,19 +123,34 @@ describe('PageRasterPipeline.load_current / current', () => {
 })
 
 describe('PageRasterPipeline eviction never double-closes the on-screen bitmap', () => {
-  it('a source-cache eviction skips close() for the bitmap currently marked as on-screen', async () => {
-    const closed: number[] = []
+  it('visiting other pages never evicts a page\'s own version history (walking N pages costs the same as 1)', async () => {
+    let calls = 0
+    const a = adapter({ get_source_image: () => { calls++; return Promise.resolve(bmp()) } })
+    const p = pipeline(a, ctx(), 50)
+    await p.get_source(0)
+    for (let i = 1; i < 50; i++) await p.get_source(i)   // visit every other page once
+    expect(calls).toBe(50)
+    await p.get_source(0)                                 // page 0 is untouched by the other 49 visits
+    expect(calls).toBe(50)                                // still a cache hit, not a recompute
+  })
+
+  it('a page\'s own version-history eviction (beyond undo_depth+1 distinct rotations) skips close() for the on-screen bitmap', async () => {
+    const bitmaps: { rot: number; closed: boolean }[] = []
+    let rotation = 0
     const a = adapter({
-      get_source_image: (page_idx: number) => Promise.resolve({
-        width: 10, height: 10, close: (): void => { closed.push(page_idx) },
-      }),
+      get_source_image: () => {
+        const entry = { rot: rotation, closed: false }
+        bitmaps.push(entry)
+        return Promise.resolve({ width: 10, height: 10, close: (): void => { entry.closed = true } } as unknown as ImageBitmap)
+      },
     })
-    const p = pipeline(a, ctx(), 6)   // CACHE_WINDOW=4 -> page 0 would evict on the 5th distinct page
-    await p.load_current(0)           // page 0 becomes "current" -> must never be closed
-    for (let i = 1; i < 6; i++) await p.get_source(i)
-    // page 0 was evicted from the LRU by now, but load_current marked it current -> not closed
-    expect(closed).not.toContain(0)
-    expect(closed.length).toBeGreaterThan(0)   // some other page really was evicted+closed
+    const p = pipeline(a, ctx({ rotation: () => rotation, undo_depth: () => 1 }))   // 2 slots/page
+    await p.load_current(0)                     // rotation 0 becomes "current" -> must never be closed
+    for (rotation = 1; rotation <= 5; rotation++) await p.get_source(0)
+    // rotation 0's bitmap was evicted from its page's own LRU by now, but load_current marked it
+    // current -> not closed; some later rotation really was evicted+closed.
+    expect(bitmaps[0]!.closed).toBe(false)
+    expect(bitmaps.some(b => b.closed)).toBe(true)
   })
 })
 
@@ -150,11 +166,24 @@ describe('PageRasterPipeline.reset / clear_ram', () => {
     expect(calls).toBe(2)
   })
 
-  it('clear_ram() drops every RAM raster but leaves prior disk-tier bookkeeping alone', async () => {
+  it('clear_ram() drops every RAM raster (used by delete, whose page-index shift invalidates every key)', async () => {
     const p = pipeline(adapter(), ctx())
     await p.load_current(0)
     p.clear_ram()
     expect(p.current).toBeNull()
+  })
+
+  it('clear_output() drops only the crop/split preview cache, not source/work (used by undo/redo)', async () => {
+    const p = pipeline(adapter(), ctx())
+    await p.load_current(0)
+    await p.prerender_output_views(0, [{ x0: 0, y0: 0, x1: 100, y1: 100 }],
+      { width: 200, height: 300 }, p.current!)
+    expect(p.output_at(0, 0)).not.toBeNull()
+
+    p.clear_output()
+
+    expect(p.output_at(0, 0)).toBeNull()
+    expect(p.current).not.toBeNull()   // source/work untouched
   })
 })
 
