@@ -366,6 +366,8 @@ export class AppModel {
   set_anchor(left: boolean | null, top: boolean | null): void { this._crop.set_anchor(left, top) }
   set_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_offset(edge, value) }
   commit_offsets(): void { this._crop.commit_offsets() }
+  set_manual_offsets_on(on: boolean): void { this._crop.set_manual_offsets_on(on) }
+  set_manual_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_manual_offset(edge, value) }
   set_keep_ratio(on: boolean, ratio?: number): void { this._crop.set_keep_ratio(on, ratio) }
   set_split(n: 1 | 2 | 4): void { this._crop.set_split(n) }
   set_same_size(on: boolean): void { this._crop.set_same_size(on) }
@@ -520,18 +522,12 @@ export class AppModel {
     if (!this._doc) return
     this._raster.is_loading = true
     const p = this._current_page
-    // Captured before the fetch: get_source() reads rotation synchronously at fetch-start, so
-    // `work` reflects THIS rotation regardless of how long the fetch takes.
-    const rotation = this.document.rotation.get(p) ?? 0
+    const rotation = this.document.rotation.get(p) ?? 0   // captured pre-fetch; work reflects it
 
     try {
       const work = await this._raster.get_work(p)
-      // Fast navigation, or a rotate on the still-current page, can outrun a slow fetch: committing
-      // a resolved-late `work` once the user has moved to a different page, OR rotated this same
-      // page again before the fetch for the OLD rotation resolved, pairs a bitmap with the wrong
-      // dimensions (page_dims reads rotation live) — a different rotation swaps width/height,
-      // showing as a distorted page that can persist until some other event forces a repaint (bug:
-      // fast-scroll or rapid re-rotate). Only commit while both still match.
+      // A resolved-late fetch can outrun page nav OR a same-page re-rotate — commit only if both
+      // still match (bug: distortion on fast-scroll or rapid re-rotate, page_dims reads live).
       if (p === this._current_page && rotation === (this.document.rotation.get(p) ?? 0)) {
         this._raster.current = work
         const committed = this.document.applied.get(p)
@@ -562,6 +558,8 @@ export class AppModel {
   get same_size(): boolean { return this._crop.same_size }
   get anchor_left(): boolean { return this._crop.anchor_left }
   get anchor_top(): boolean { return this._crop.anchor_top }
+  get manual_offsets_on(): boolean { return this._crop.manual_offsets_on }
+  get manual_offsets(): Offsets { return this._crop.manual_offsets() }
   get keep_ratio(): boolean { return this._crop.keep_ratio }
   get ratio(): number { return this._crop.ratio }
   get pages_mode(): PagesMode { return this._pages_mode }

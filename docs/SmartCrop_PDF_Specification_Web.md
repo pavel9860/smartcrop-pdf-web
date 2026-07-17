@@ -112,7 +112,6 @@ accordingly, same as any other window-width change).
 | Scan Processing          pushing the canvas right by      crop frame  |
 | Split Each Page Into     the panel's width.                overlay    |
 | Detect Text Borders                                                   |
-| > Advanced                                                            |
 | Actions                                                               |
 | Output Quality                                                        |
 | Export                  (scrollable stack)                            |
@@ -126,8 +125,9 @@ accordingly, same as any other window-width change).
 **Left sidebar** — scrollable, fixed width. Card order top→bottom: the loaded-document-name card
 (its own card at the very top, above Document & State — hidden entirely when nothing is loaded,
 shows the single file's name or `"first.pdf +N more"`), Document & State, Pages to Process, Scan
-Processing (SCANNED only, no residual gap when hidden), Split Each Page Into, Detect Text Borders,
-Advanced (collapsed by default), Actions, Output Quality, Export. Pinned bottom bar, outside scroll,
+Processing (SCANNED only, no residual gap when hidden), Split Each Page Into, Detect Text Borders
+(includes the Set offsets manual switch and its fields, §4.6), Actions, Output Quality, Export.
+Pinned bottom bar, outside scroll,
 one instance only: Settings/Help row, then Undo/Redo/Reset (3 equal buttons), then page nav
 `< [n] / total >`.
 
@@ -194,17 +194,22 @@ currently on screen when the toggle turns on.
 
 | Control | Action |
 |---|---|
-| Auto-detect | Runs detection over the Pages selection (§6). An action, not a toggle — never highlighted, always re-pressable. Disabled when split > 1, both anchors are off, or a batch is running. |
+| Auto-detect | Runs detection over the Pages selection (§6). An action, not a toggle — never highlighted, always re-pressable. Disabled when split > 1, both anchors are off, Set offsets manual is on, or a batch is running. |
 | Anchor Left / Anchor Top | Left/top edge from this page's own detected content (on) or the shared union edge (off). At least one anchor must be on for a crop to exist. |
+| Set offsets manual | A switch, same style as Anchor Left/Top (§4.5, split = 1 only). See §4.6. |
 
 Re-running Auto-detect refreshes an already-committed page's crop to the fresh box instead of
 dropping it (§4.5, §7.4).
 
-### 4.6 Advanced *(collapsible, split = 1)*
+### 4.6 Set offsets manual *(split = 1)*
 
-Collapsed by default; a header arrow toggles it. Expanded, shows four per-edge percent offset
-fields on one row: `L T R B` (±`OFFSET_LIMIT`, step 0.1). Each moves exactly one edge (§7.2). On
-commit (blur or Enter) an out-of-range value is snapped to the largest the page allows.
+Off by default. Turning it on: seeds the crop window at a predefined 10%-of-page margin on every
+edge; disables Auto-detect and dropping/redrawing the window (clicking outside it is a no-op —
+only its handles can resize/move it, same drag mechanics as any other crop window); shows four
+per-edge percent fields, `L T R B` (±`OFFSET_LIMIT`, step 0.1) — no separate label, the switch's
+own label already says what they are. Positive values shrink the window in from that edge,
+negative expand it. Dragging a handle and editing a field always agree — both describe the same
+window. Turning the switch off drops the window and re-enables Auto-detect.
 
 ### 4.7 Actions
 

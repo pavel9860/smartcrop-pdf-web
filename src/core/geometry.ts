@@ -164,6 +164,30 @@ export function offsets_from_rect(
   }
 }
 
+// Manual-offsets mode (spec-web §4.6): a page-relative inset, not union-relative like
+// auto_crop_rect above — there is no detected content or union to anchor against, only the page
+// edges themselves. Positive offsets inset (shrink) the box, matching auto_crop_rect's sign
+// convention on the same fields.
+export function manual_offset_rect(offsets: Offsets, page_w: number, page_h: number): Box {
+  return clamp_box_shift({
+    x0: (offsets.left / 100) * page_w,
+    y0: (offsets.top / 100) * page_h,
+    x1: page_w - (offsets.right / 100) * page_w,
+    y1: page_h - (offsets.bottom / 100) * page_h,
+  }, page_w, page_h)
+}
+
+// Inverse of manual_offset_rect — back-computes offsets from a dragged rectangle.
+export function offsets_from_manual_rect(rect: Box, page_w: number, page_h: number): Offsets {
+  const clamp = (v: number): number => Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, v))
+  return {
+    left:   clamp(rect.x0 / page_w * 100),
+    top:    clamp(rect.y0 / page_h * 100),
+    right:  clamp((page_w - rect.x1) / page_w * 100),
+    bottom: clamp((page_h - rect.y1) / page_h * 100),
+  }
+}
+
 // Spec-web §5: aggregate detection boxes into the union frame.
 // gL=min(x0), gT=min(y0) — the min corner, always. W/H are the outlier-th LARGEST per-page
 // width/height (independently), not always the max: `outlier` (default 0) is how many of the

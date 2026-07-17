@@ -1,4 +1,4 @@
-// Split + Detect Text Borders + Advanced (offsets) + Actions cards (spec §7.3, §7.4, §7.7).
+// Split + Detect Text Borders (incl. manual-offsets mode) + Actions cards (spec §7.3, §7.4, §7.7).
 
 import type { AppModel } from '@core/model'
 import type { AppController } from '../app'
@@ -15,9 +15,9 @@ export class CropPanel {
   private readonly _anchor_t: HTMLInputElement
   private readonly _keep_ratio_sw: HTMLInputElement
   private readonly _ratio_inp: HTMLInputElement
-  // Advanced
-  private readonly _adv_toggle: HTMLButtonElement
-  private readonly _adv_body: HTMLElement
+  // Manual offsets (spec-web §4.6)
+  private readonly _manual_sw: HTMLInputElement
+  private readonly _offset_body: HTMLElement
   private readonly _offset_l: HTMLInputElement
   private readonly _offset_t: HTMLInputElement
   private readonly _offset_r: HTMLInputElement
@@ -61,23 +61,17 @@ export class CropPanel {
         <label class="toggle-label">
           <input type="checkbox" id="cp-anchor-t" checked title="Pin the top edge to this page's own content instead of the shared union" /> Anchor Top
         </label>
+      </div>
+      <label class="toggle-label">
+        <input type="checkbox" id="cp-manual" title="Set the crop window directly by L/T/R/B page margins — disables auto-detect and drawing a new window" /> Set offsets manual
+      </label>
+      <div class="offset-grid hidden" id="cp-offset-body">
+        <label>L <input class="offset-inp" id="cp-off-l" type="number" step="0.1" value="0" title="Left edge offset, % of page width" /></label>
+        <label>T <input class="offset-inp" id="cp-off-t" type="number" step="0.1" value="0" title="Top edge offset, % of page height" /></label>
+        <label>R <input class="offset-inp" id="cp-off-r" type="number" step="0.1" value="0" title="Right edge offset, % of page width" /></label>
+        <label>B <input class="offset-inp" id="cp-off-b" type="number" step="0.1" value="0" title="Bottom edge offset, % of page height" /></label>
       </div>`
     container.appendChild(detect_card)
-
-    const adv_card = document.createElement('div')
-    adv_card.className = 'panel-card'
-    adv_card.innerHTML = `
-      <button class="advanced-toggle" id="cp-adv-toggle" title="Show per-edge crop offsets"><span class="adv-arrow">▸</span> Advanced</button>
-      <div class="advanced-body hidden" id="cp-adv-body">
-        <div class="offset-title">Set offsets</div>
-        <div class="offset-grid">
-          <label>L <input class="offset-inp" id="cp-off-l" type="number" step="0.1" value="0" title="Left edge offset, % of page width" /></label>
-          <label>T <input class="offset-inp" id="cp-off-t" type="number" step="0.1" value="0" title="Top edge offset, % of page height" /></label>
-          <label>R <input class="offset-inp" id="cp-off-r" type="number" step="0.1" value="0" title="Right edge offset, % of page width" /></label>
-          <label>B <input class="offset-inp" id="cp-off-b" type="number" step="0.1" value="0" title="Bottom edge offset, % of page height" /></label>
-        </div>
-      </div>`
-    container.appendChild(adv_card)
 
     const actions_card = document.createElement('div')
     actions_card.className = 'panel-card'
@@ -98,12 +92,12 @@ export class CropPanel {
     this._anchor_t      = requireEl(detect_card, '#cp-anchor-t')
     this._keep_ratio_sw = requireEl(split_card, '#cp-keep-ratio')
     this._ratio_inp     = requireEl(split_card, '#cp-ratio')
-    this._adv_toggle    = requireEl(adv_card, '#cp-adv-toggle')
-    this._adv_body      = requireEl(adv_card, '#cp-adv-body')
-    this._offset_l      = requireEl(adv_card, '#cp-off-l')
-    this._offset_t      = requireEl(adv_card, '#cp-off-t')
-    this._offset_r      = requireEl(adv_card, '#cp-off-r')
-    this._offset_b      = requireEl(adv_card, '#cp-off-b')
+    this._manual_sw     = requireEl(detect_card, '#cp-manual')
+    this._offset_body   = requireEl(detect_card, '#cp-offset-body')
+    this._offset_l      = requireEl(detect_card, '#cp-off-l')
+    this._offset_t      = requireEl(detect_card, '#cp-off-t')
+    this._offset_r      = requireEl(detect_card, '#cp-off-r')
+    this._offset_b      = requireEl(detect_card, '#cp-off-b')
     this._crop_btn      = requireEl(actions_card, '#cp-crop')
     this._rotate_btn    = requireEl(actions_card, '#cp-rotate')
     this._delete_btn    = requireEl(actions_card, '#cp-delete')
@@ -132,19 +126,14 @@ export class CropPanel {
       if (r > 0) ctrl.dispatch(() => { model.set_keep_ratio(model.keep_ratio, r) })
     })
 
-    // Advanced toggle
-    this._adv_toggle.addEventListener('click', () => {
-      const open = !this._adv_body.classList.toggle('hidden')
-      const arrow = this._adv_toggle.querySelector('.adv-arrow')
-      if (arrow) arrow.textContent = open ? '▾' : '▸'
-    })
+    // Manual offsets (spec-web §4.6)
+    this._manual_sw.addEventListener('change', () =>
+      { ctrl.dispatch(() => { model.set_manual_offsets_on(this._manual_sw.checked) }) })
 
     // Offsets (commit on blur / Enter)
     const commit_offset = (edge: 'L'|'T'|'R'|'B', inp: HTMLInputElement): () => void => () => {
       const v = parseFloat(inp.value)
-      if (!isNaN(v)) {
-        ctrl.dispatch(() => { model.set_offset(edge, v); model.commit_offsets() })
-      }
+      if (!isNaN(v)) ctrl.dispatch(() => { model.set_manual_offset(edge, v) })
     }
     this._offset_l.addEventListener('change', commit_offset('L', this._offset_l))
     this._offset_t.addEventListener('change', commit_offset('T', this._offset_t))
@@ -174,7 +163,8 @@ export class CropPanel {
     this._same_size_sw.disabled = busy
 
     const detect_only = n === 1
-    this._detect_btn.disabled  = busy || !model.can_detect || !detect_only
+    const manual = model.manual_offsets_on
+    this._detect_btn.disabled  = busy || !model.can_detect || !detect_only || manual
     this._anchor_l.checked     = model.anchor_left
     this._anchor_t.checked     = model.anchor_top
     this._anchor_l.disabled    = busy || !detect_only
@@ -185,13 +175,17 @@ export class CropPanel {
       this._ratio_inp.value = model.ratio.toFixed(3)
     }
 
-    const o = model.offsets
+    this._manual_sw.checked  = manual
+    this._manual_sw.disabled = busy || !detect_only
+    this._offset_body.classList.toggle('hidden', !manual)
+
+    const o = model.manual_offsets
     if (document.activeElement !== this._offset_l) this._offset_l.value = o.left.toFixed(1)
     if (document.activeElement !== this._offset_t) this._offset_t.value = o.top.toFixed(1)
     if (document.activeElement !== this._offset_r) this._offset_r.value = o.right.toFixed(1)
     if (document.activeElement !== this._offset_b) this._offset_b.value = o.bottom.toFixed(1)
     this._offset_l.disabled = this._offset_t.disabled =
-    this._offset_r.disabled = this._offset_b.disabled = busy || !detect_only
+    this._offset_r.disabled = this._offset_b.disabled = busy || !manual
 
     // Crop button label changes when split > 1 (spec TODO §16)
     this._crop_btn.textContent = n > 1 ? '✂️  Split & Crop' : '✂️  Crop'

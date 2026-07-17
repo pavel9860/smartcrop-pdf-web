@@ -9,15 +9,14 @@ Status: **implemented (beta), architecture under active correction.**
   above, not here. `docs/smartcrop_web_function_map.md` is the third: the canonical per-file
   function/line-number reference — don't duplicate its tables here.
 
-Where this document and the running code disagree, that is a bug in the document (or a
-regression in the code) — file it as such, not as an acceptable drift.
+Where this document and the running code disagree rise an error and ask what to do. Never guess.
 
 **Technology decisions (locked):**
 - Language: TypeScript (strict mode, zero `any`)
 - UI: Vanilla TS + DOM APIs, no framework runtime
 - Build: Vite 5
-- Image processing: OpenCV.js WASM (lazy-loaded; a faithful box-filter Sauvola port — see §9)
-- Dewarp: ONNX Runtime Web + docuwarp model (lazy-loaded; cached in IndexedDB after first load)
+- Image processing: OpenCV.js WASM (faithful box-filter Sauvola port — see §9)
+- Dewarp: ONNX Runtime Web + docuwarp model  SIMD and Multi-threadin
 - Tests: Vitest (unit) + Playwright (e2e)
 - Deployment: GitHub Pages (static) + Cloudflare CDN
 - TIFF export: supported via a hand-rolled baseline encoder (`src/workers/tiff.ts`, uncompressed
@@ -65,7 +64,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
 
       errors.ts             SmartCropError, NoDocumentError, EmptySelectionError,
                               InvalidSplitError, DeleteAllPagesError, DocumentLoadError,
-                              ImagingError, MissingDependencyError — same taxonomy as Python
+                              ImagingError, MissingDependencyError
 
       geometry.ts           Box type, HandleId; hit_handle(), point_in_box(), clamp_box_shift(),
                               clamp_box_drag(), apply_handle_drag(), auto_crop_rect(),
@@ -82,10 +81,11 @@ C:/DOCS/Code/SmartCroPDF-Web/
       parsing.ts            resolve_pages(pattern, total, mode) → number[]
                               All/Odd/Even + pattern: ranges, slices (1:4, ::2, 10:), mixed
 
-      lru.ts                LRUCache<K, V> — same eviction algorithm; stores ImageBitmap refs
+      lru.ts                LRUCache<K, V> — same eviction algorithm; stores ImageBitmap refs in scanned
+                            mode and metadata of processing in normal mode.
 
       viewmodel.ts          output_page_count(), view_index_to_source(), source_to_view_range()
-                              — committed-split pages expand to N views, same math as Python
+                              — committed-split pages expand to N views
 
       document_state.ts     Offsets (frozen), PageProcessIntent (frozen), DocumentState
                               (8 undoable fields: applied, crop_rects, rotation, processed,
@@ -105,7 +105,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               Web version: result() returns Promise<BatchResult>; progress via
                               onProgress(cb) callback instead of cooperative step()
 
-      model.ts              AppModel — single facade, same public interface as Python.
+      model.ts              AppModel — single facade,
                               Owns: document state, history, settings, drag, LRU caches.
                               All render/imaging calls go through pdf/ and workers/ via injected
                               async adapters (see §5).
@@ -179,8 +179,8 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               - make_synth_page(idx, w, h) — synthetic placeholder (§14), drawn
                                 directly with Canvas API, no worker involved.
 
-      imaging.ts             OpenCV.js scan processing (detect / filter), main thread — see §7a
-                              for why. Exposes `detect_content_async()` and `process_page_async()`,
+      imaging.ts             OpenCV.js scan processing (detect / filter), main thread.
+                             Exposes `detect_content_async()` and `process_page_async()`,
                               called directly by loader.ts (no postMessage).
       cv.ts                  OpenCV.js runtime access point (`cv`, `Mat` type, `ensure_cv()`) —
                               shared by imaging.ts and dewarp.ts.
@@ -231,11 +231,11 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               Mode badge (NORMAL/SCANNED). All/Odd/Even/Selected buttons.
                               Pattern field + Current follow-toggle.
 
-        crop_panel.ts       "Split Each Page Into" + "Detect Text Borders" + "Advanced"
-                              (collapsible offsets) + "Actions" cards.
+        crop_panel.ts       "Split Each Page Into" + "Detect Text Borders" + "Actions" cards.
                               Split 1/2/4 segmented; Same size toggle; Keep ratio + ratio field.
-                              Auto-detect button; Anchor Left/Top toggles.
-                              Advanced collapsed by default (▸/▾ toggle); L/T/R/B offset inputs.
+                              Auto-detect button; Anchor Left/Top toggles; Set offsets manual switch
+                              (spec-web §4.6) + its L/T/R/B fields, all in the Detect Text Borders
+                              card — replaces the old collapsible "Advanced" section.
                               Crop (full-width) + Rotate + Delete action buttons.
 
         scan_panel.ts       "Scan Processing" card — shown only in SCANNED mode.
@@ -336,7 +336,7 @@ no page/size status element. Nothing is painted onto the canvas bitmap.
                            ▲
             document_state  settings  history  drag  batch                 pure
                            ▲
-                        AppModel ◄── public surface (same interface as Python AppModel)
+                        AppModel ◄── public surface
           ─────────────────────────────────────────────────── one direction only
           src/pdf/         (PDF.js + pdf-lib adapters; may use DOM + workers)
           src/workers/     (OpenCV.js, ONNX, pdf-lib — heavy, lazy-loaded, no core import)
@@ -379,7 +379,7 @@ rotate)
 
 ## 5. AppModel — public interface (TypeScript)
 
-One-to-one with the Python `AppModel`. Async only where the operation touches I/O or a worker.
+Async only where the operation touches I/O or a worker.
 Synchronous operations (navigation, offset edits, drag events, undo/redo) stay synchronous.
 
 ```ts
@@ -424,8 +424,13 @@ class AppModel {
                                            // main thread, not a worker (§7a)
   apply_crop(): void                      // raises InvalidSplitError / EmptySelectionError
   set_anchor(left: boolean | null, top: boolean | null): void
-  set_offset(edge: 'L'|'T'|'R'|'B', value: number): void
-  commit_offsets(): void
+  set_offset(edge: 'L'|'T'|'R'|'B', value: number): void   // auto-crop offset (union-relative) —
+  commit_offsets(): void                                   // UI trigger removed (spec-web §4.6 is
+                                                             // now manual-offsets mode below); kept
+                                                             // as a domain method, flagged to the
+                                                             // user as a candidate for full removal
+  set_manual_offsets_on(on: boolean): void   // spec-web §4.6 — page-relative, replaces "Advanced"
+  set_manual_offset(edge: 'L'|'T'|'R'|'B', value: number): void
   set_keep_ratio(on: boolean, ratio?: number): void
   set_split(n: number): void
   set_same_size(on: boolean): void
@@ -487,7 +492,7 @@ dimension-swapped `OffscreenCanvas` via `ctx.translate()`/`ctx.rotate()`.
 rotation angle into `get_source_image()` on every (cache-missed) call; `get_work_image()` takes the
 already-rotated source bitmap, not a separate rotation parameter.
 
-`ViewSnapshot` fields (identical to Python):
+`ViewSnapshot` fields:
 ```ts
 interface ViewSnapshot {
   image: ImageBitmap | null // page raster or committed-crop output image; null = loading
@@ -550,7 +555,7 @@ Single-page jobs (`total === 1`) suppress the overlay.
 
 ---
 
-## 7. Worker protocol and lazy-loading
+## 7. Worker protocol 
 
 **Only `export.worker.ts` remains a real Worker** (see §7a for why pdf.js and OpenCV.js don't
 run in one). It's a Vite `?worker` import, instantiated once on first `export()` call and reused:
@@ -561,69 +566,14 @@ type WorkerMsg = { id: number; type: 'ok'; payload: unknown }
                | { id: number; type: 'error'; message: string }
 ```
 
+// Revise. Should be mo lazy workers. 
 Each request carries a monotonic `id`; responses are matched by id. Pending promises are stored
 in a `Map<number, {resolve, reject}>`. This gives a clean async/await surface with no polling.
 `ImageBitmap`s are transferred (not cloned) via `postMessage(msg, [bitmap, ...])`; the returned
 PDF/JPEG bytes come back as a transferred `ArrayBuffer`.
 
-### 7a. Why pdf.js and OpenCV.js run on the main thread, not in workers
+### 7. OpenCV.js build variant — SIMD, single-thread (?)
 
-Both libraries were originally each given a dedicated Worker (`render.worker.ts`,
-`imaging.worker.ts`, both since deleted). Both hit hard, unfixable-in-a-Worker failures:
-
-**pdf.js.** `pdfjs-dist`'s display API (`pdf.mjs`) references `window`/`document` unconditionally
-in places it should guard — `PDFWorker._initialize()` reads `window.location.href` before it
-even tries to spawn its own internal `pdf.worker.mjs`. Inside any Worker, `window` is undefined,
-so that throws; pdf.js silently falls back to a same-thread "fake worker" path, which then calls
-`importScripts()` — illegal inside an ES-module worker (`worker: {format: 'es'}` in
-`vite.config.ts`) and throws a second, more confusing error. Fix: run `getDocument()`/
-`page.render()` on the main thread (`pdf/loader.ts`). This is in fact pdf.js's own supported
-architecture — it still spawns its own `pdf.worker.mjs` internally for the CPU-heavy parsing, so
-the main thread isn't doing the expensive work, only the cheap canvas compositing.
-
-**OpenCV.js (`@techstark/opencv-js`).** The package's own `.d.ts`
-(`dist/src/types/opencv/_hacks.d.ts`) re-exports `onRuntimeInitialized` as a **named export** of
-the package — which collides with the runtime property of the same name the Emscripten WASM
-module expects the embedder to set. `import * as cv from '@techstark/opencv-js'; cv.
-onRuntimeInitialized = fn` is therefore an illegal import-binding reassignment: esbuild rejects
-it outright ("Cannot assign to import 'onRuntimeInitialized'; imports are immutable") when it
-analyses the import strictly (confirmed via a Worker bundle and via `optimizeDeps.exclude`).
-Where a looser bundling path let the assignment through silently instead of erroring (Vite's
-dev-time main-thread pre-bundle), the write landed on the wrong object and the real Emscripten
-runtime never saw the callback — `onRuntimeInitialized` never fired, so `cv.Mat` stayed
-`undefined` forever and every OpenCV call threw `cv.Mat is not a constructor` (silently, as a
-10-second timeout, not a thrown error — this looked like a hang, not a crash). Fix: go through
-`(cvModule as unknown as { default: typeof cvModule }).default` — a plain mutable runtime
-object, not an import binding — and mutate that instead (`pdf/imaging.ts`). Kept on the main
-thread anyway rather than re-tried in a Worker, since a Worker-hosted bundle of this exact
-package has its own separate esbuild strictness quirk (the build error above) that's simplest to
-avoid by not re-bundling it for a Worker target at all.
-
-Trade-off: detect/filter/dewarp now run on the UI thread instead of off it. Each call is one
-bounded operation (per-page budgets now met, §9a below), so this is a brief-UI-block UX regression,
-not a correctness one — tracked as follow-up, not silently accepted as fine.
-
-### 7b. OpenCV.js build variant — SIMD, single-thread
-
-The vendored `@techstark/opencv-js@4.10.0-release.1` was a **scalar (non-SIMD)** WASM build — a
-straight mirror of `docs.opencv.org/4.10.0/opencv.js`, confirmed by disassembling the shipped
-`.wasm`: **0** `v128`/`i32x4`/`f32x4`/… instructions. It was replaced with a from-source build of
-the **same OpenCV 4.10.0**, compiled `-msimd128`, single-thread (`USE_PTHREADS=0`, no
-`SharedArrayBuffer` — GitHub Pages can't set COOP/COEP), vendored under `vendor/opencv-js-simd/`
-and wired in via a `file:` dependency in `package.json`. **How SIMD was verified (not just "it
-loads"):** the shipped `.wasm` was extracted from the `SINGLE_FILE=1` JS (via a
-`WebAssembly.instantiate` capture hook) and disassembled with `wabt` → **166,485** v128-family
-instructions (vs 0 before); `grep SharedArrayBuffer` → 0 (threads held at 1); and the matched
-pipeline (blur → adaptiveThreshold → morphology → connectedComponents, 1400×1980) measured **~4.5×
-faster** in Node with **identical** output (same CC count, same output-Mat checksum) vs the scalar
-build. Full build/verification/reproduction steps, and why emsdk `latest` (not the tutorial's
-2.0.10, which lacks `emscripten/version.h` that `--simd` needs) plus two one-line patches to
-OpenCV's own build files were required, are in `vendor/opencv-js-simd/BUILD.md`. The modern
-emscripten export is an async `Promise<Module>`; a small appended shim bridges it back to the
-stable-object + assignable `onRuntimeInitialized` shape `cv.ts::ensure_cv` expects, and a
-`var Module` fix makes OpenCV's UMD wrapper strict-mode/ESM safe. **Key finding:** SIMD alone gave
-only ~1.5–4.5×; it did **not** meet the per-page budget on its own — the architecture fixes (§9a)
-and the downscaled-morphology change (spec-web §16) did the bulk of the work.
 
 ---
 
@@ -727,7 +677,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | Spec algorithm | OpenCV.js implementation | Status |
 |---|---|---|
 | Sauvola binarization | `sauvola_ink_mask()`: `cv.boxFilter` on the image and its square to get local mean/std, `T = mean·(1+k·(std/R−1))`, `ink = flat < T` | **Faithful port** of `core/imaging.py _sauvola_threshold` — real formula, not `cv.adaptiveThreshold` (see history note below) |
-| Illumination flatten | `illumination_flatten()`: `cv.morphologyEx(MORPH_CLOSE)` **on a 1/`BG_DOWNSCALE` copy, upscaled** (`morph_close_background`) + divide | Implemented, shared by detect and both filter modes. The large-kernel close is estimated on a downscale then upscaled (spec-web §16): opencv.js's single-thread morphology is O(pixels·kernel²) with no large-kernel optimization and, full-res, dominated everything (0.6–9 s/page). ~36× faster, final bilevel ~95% identical (unchanged vs the opencv.js-vs-opencv-python baseline) |
+| Illumination flatten | `illumination_flatten()`: `cv.morphologyEx(MORPH_CLOSE)` **on a 1/`BG_DOWNSCALE` copy, upscaled** (`morph_close_background`) + divide | Implemented, shared by detect and both filter modes. The large-kernel close is estimated on a downscale then upscaled (spec-web §16): opencv.js's single-thread morphology is O(pixels·kernel²) with no large-kernel optimization and, full-res, dominated everything (0.6–9 s/page). ~36× faster,
 | `clean_document_bilevel` | `clean_document_bilevel()`: flatten → Sauvola → single-pass label-LUT despeckle | Implemented for both `detect_content()` (strength-2 params, downscaled) and the B/W filter (per-strength `k`/`min_area` from `BW_STRENGTH`) — same function backs both, as spec-web §5 requires |
 | Connected-component despeckle | `cv.connectedComponentsWithStats` → per-label keep array → one `O(pixels)` LUT pass (not per-component `cv.compare`, which would be `O(components·pixels)` and miss the spec-web §16 "single-pass despeckle" performance target) | Implemented |
 | `content_box()` | bounding rect of kept components, border-touching fallback | Implemented |
@@ -813,7 +763,7 @@ const session = await ort.InferenceSession.create(modelBytes, { executionProvide
 
 ## 10. State model 
 
-`DocumentState`, `History`, `Settings`, `DragState` map 1:1 from Python to TypeScript.
+`DocumentState`, `History`, `Settings`, `DragState`.
 
 The defining rules are preserved:
 - `DocumentState` holds exactly the 8 undoable fields (`applied`, `crop_rects`, `rotation`,
@@ -834,7 +784,7 @@ Evicted entries are `ImageBitmap.close()`d (releases GPU texture memory).
 
 ---
 
-## 11. Error taxonomy (same as Python)
+## 11. Error taxonomy
 
 ```ts
 class SmartCropError extends Error {}

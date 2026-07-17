@@ -444,24 +444,6 @@ input, select { font: inherit; }
 /* ── Anchor row ── */
 .anchor-row { display: flex; gap: 12px; }
 
-/* ── Advanced toggle ── */
-/* "Advanced" is a card header, not a link — bold primary text like other card titles, not blue
-   (desktop panels.py: text_color=secondary_text, font=bold). */
-.advanced-toggle {
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  font-size: 0.9375rem;
-  font-weight: 700;
-  padding: 2px 0;
-  text-align: left;
-  cursor: pointer;
-}
-.advanced-toggle:hover { color: var(--text-primary); }
-.adv-arrow { font-size: 0.7rem; margin-right: 2px; }
-
-.advanced-body { padding: 6px 0 0; }
-
 /* All four offsets on a single row (L T R B), matching the desktop Advanced/offsets layout
    (docs/app_design_screenshots/1p_splir_dark_theme.png; TODO item 3). */
 .offset-grid {
@@ -498,7 +480,6 @@ input, select { font: inherit; }
 .split-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .split-row__label { width: 90px; font-size: 0.9375rem; color: var(--text-primary); }
 .split-row .toggle-label { flex-shrink: 0; }
-.offset-title { color: var(--text-dim); font-size: 0.9375rem; margin-bottom: 4px; }
 
 /* ── Settings view ── */
 .settings-view { display: flex; flex-direction: column; gap: 16px; }

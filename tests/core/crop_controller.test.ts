@@ -66,6 +66,61 @@ describe('CropController anchors/offsets', () => {
   })
 })
 
+describe('CropController manual offsets (spec-web §4.6, replaces the old Advanced accordion)', () => {
+  function manual_controller(): { c: CropController; drawn: () => Box | null } {
+    let drawn: Box | null = null
+    const { c } = controller({ drawn: () => drawn, set_drawn: (b) => { drawn = b } })
+    return { c, drawn: () => drawn }
+  }
+
+  it('turning on seeds a default 10%-margin window via set_drawn', () => {
+    const { c, drawn } = manual_controller()
+    c.set_manual_offsets_on(true)
+    expect(c.manual_offsets_on).toBe(true)
+    expect(drawn()).toEqual({ x0: 20, y0: 30, x1: 180, y1: 270 })   // 10% of 200x300 each edge
+    expect(c.manual_offsets()).toEqual({ left: 10, top: 10, right: 10, bottom: 10 })
+  })
+
+  it('turning off drops the window', () => {
+    const { c, drawn } = manual_controller()
+    c.set_manual_offsets_on(true)
+    c.set_manual_offsets_on(false)
+    expect(c.manual_offsets_on).toBe(false)
+    expect(drawn()).toBeNull()
+  })
+
+  it('set_manual_offset updates one edge and recomputes the window; a no-op while off', () => {
+    const { c, drawn } = manual_controller()
+    c.set_manual_offset('L', 20)   // off — no window to move, no-op
+    expect(drawn()).toBeNull()
+
+    c.set_manual_offsets_on(true)
+    c.set_manual_offset('L', 20)
+    expect(c.manual_offsets()).toEqual({ left: 20, top: 10, right: 10, bottom: 10 })
+    expect(drawn()!.x0).toBeCloseTo(40)   // 20% of page_w=200
+  })
+
+  it('clicking outside the manual window does not drop it (no free-draw replacement)', () => {
+    const { c, drawn } = manual_controller()
+    c.set_manual_offsets_on(true)
+    const before = drawn()
+    c.begin_drag(1, 1, 5)   // page corner, well outside the 20..180 x 30..270 window
+    c.update_drag(50, 50)
+    c.end_drag()
+    expect(drawn()).toEqual(before)   // untouched — begin_drag was a no-op
+  })
+
+  it('a handle-drag still resizes the manual window', () => {
+    const { c, drawn } = manual_controller()
+    c.set_manual_offsets_on(true)
+    c.begin_drag(20, 30, 5)   // top-left handle of the seeded window
+    c.update_drag(10, 10)
+    c.end_drag()
+    expect(drawn()).not.toBeNull()
+    expect(drawn()!.x0).toBeLessThan(20)
+  })
+})
+
 describe('CropController.set_keep_ratio', () => {
   it('off->on with no explicit ratio pre-populates from _default_ratio (page aspect fallback)', () => {
     const { c } = controller()

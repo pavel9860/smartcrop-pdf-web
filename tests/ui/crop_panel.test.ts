@@ -17,9 +17,10 @@ describe('CropPanel', () => {
   })
   afterEach(() => { vi.restoreAllMocks() })
 
-  it('builds split / detect / advanced / actions controls', () => {
+  it('builds split / detect / manual-offsets / actions controls', () => {
     expect(root.querySelectorAll('#cp-split [data-n]')).toHaveLength(3)
     expect(root.querySelector('#cp-detect')).toBeTruthy()
+    expect(root.querySelector('#cp-manual')).toBeTruthy()
     expect(root.querySelector('#cp-crop')).toBeTruthy()
     expect(root.querySelector('#cp-delete')).toBeTruthy()
     expect(root.querySelectorAll('.offset-inp')).toHaveLength(4)
@@ -33,11 +34,21 @@ describe('CropPanel', () => {
     expect(root.querySelector('#cp-crop')!.textContent).toContain('Split & Crop')
   })
 
-  it('advanced toggle expands the offset body', () => {
-    const body = root.querySelector('#cp-adv-body')!
+  it('manual-offsets switch shows the offset grid and seeds a default 10% window; ' +
+     'turning it off drops the window (bug 16/17: replaces the old Advanced accordion)', () => {
+    const body = root.querySelector('#cp-offset-body')!
+    const sw = root.querySelector<HTMLInputElement>('#cp-manual')!
     expect(body.classList.contains('hidden')).toBe(true)
-    root.querySelector<HTMLButtonElement>('#cp-adv-toggle')!.click()
+    sw.click()   // real user interaction: toggles .checked, then fires 'change'
+    panel.refresh(model, false)
+    expect(model.manual_offsets_on).toBe(true)
+    expect(model.manual_offsets).toEqual({ left: 10, top: 10, right: 10, bottom: 10 })
     expect(body.classList.contains('hidden')).toBe(false)
+    expect(root.querySelector<HTMLButtonElement>('#cp-detect')!.disabled).toBe(true)   // auto-detect disabled while manual is on
+
+    sw.click()
+    panel.refresh(model, false)
+    expect(model.manual_offsets_on).toBe(false)
   })
 
   it('detect button dispatches a job', () => {
@@ -45,13 +56,14 @@ describe('CropPanel', () => {
     expect(fc.calls.some(c => c.kind === 'dispatch_job')).toBe(true)
   })
 
-  it('anchor / keep-ratio / offset changes dispatch through the model', () => {
+  it('anchor / keep-ratio / manual-offset changes dispatch through the model', () => {
     root.querySelector<HTMLInputElement>('#cp-anchor-l')!.dispatchEvent(new Event('change'))
     root.querySelector<HTMLInputElement>('#cp-keep-ratio')!.dispatchEvent(new Event('change'))
+    root.querySelector<HTMLInputElement>('#cp-manual')!.dispatchEvent(new Event('change'))
     const off = root.querySelector<HTMLInputElement>('#cp-off-l')!
     off.value = '5'
     off.dispatchEvent(new Event('change'))
-    expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBeGreaterThanOrEqual(3)
+    expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBeGreaterThanOrEqual(4)
   })
 
   it('crop / rotate dispatch; delete asks for confirmation first (L1: themed dialog, not window.confirm)', async () => {
