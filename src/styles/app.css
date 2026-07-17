@@ -104,6 +104,11 @@ input, select { font: inherit; }
   width: var(--sidebar-w);
   min-width: var(--sidebar-w);
 }
+/* Help is prose + a TOC, not compact rows — give it more room than Settings. */
+.detail-panel.open.help-active {
+  width: calc(var(--sidebar-w) * 1.5);
+  min-width: calc(var(--sidebar-w) * 1.5);
+}
 
 /* When collapsed (width 0) the contents must be fully removed from layout, not just clipped:
    a clipped child <select>/<button> keeps its layout box, so it stays focusable and reads as
@@ -523,6 +528,9 @@ input, select { font: inherit; }
 .settings-label { font-size: 0.9375rem; color: var(--text-label); }
 .settings-row .select,
 .settings-row .text-input { max-width: 110px; }
+/* Colour scheme (Dark/Light/System) is otherwise ~5-7px too wide to share a line with its label
+   at the panel's sidebar width — shrink just this row's buttons rather than wrapping. */
+.settings-row .btn-group .btn { padding: 0 8px; font-size: 0.875rem; }
 
 /* ── Help view ── */
 .help-view { display: flex; flex-direction: column; gap: 16px; }

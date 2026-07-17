@@ -42,6 +42,8 @@ export class DetailPanel {
     title.textContent = panel === 'settings' ? 'Settings' : 'Help'
     this._settings.el.classList.toggle('hidden', panel !== 'settings')
     this._help.el.classList.toggle('hidden', panel !== 'help')
+    // Help gets more room (prose, TOC) than Settings' compact rows — width variant, see app.css.
+    this._el.classList.toggle('help-active', panel === 'help')
   }
 
   hide(): void {

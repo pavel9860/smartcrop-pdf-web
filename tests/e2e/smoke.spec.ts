@@ -74,11 +74,13 @@ test('opening/closing Settings or Help reflows the canvas right by the sidebar w
   await settle()
   expect(await canvas.boundingBox()).toEqual(box_before)   // back to the original position/size
 
-  // Help must behave identically (same shared detail-panel/canvas-area mechanism).
+  // Help shares the same reflow mechanism as Settings, but at 1.5x the width (item 2).
   await page.click('[data-id="help"]')
   await expect(panel).toHaveClass(/open/)
   await settle()
-  expect((await canvas.boundingBox())!.x).toBeCloseTo(box_before!.x + sidebar_box.width, 0)
+  const help_panel_box = (await panel.boundingBox())!
+  expect(help_panel_box.width).toBeCloseTo(sidebar_box.width * 1.5, 0)
+  expect((await canvas.boundingBox())!.x).toBeCloseTo(box_before!.x + sidebar_box.width * 1.5, 0)
 })
 
 test('Ctrl+/Ctrl- zoom stepping always lands exactly on a preset, never an approximation (M1)', async ({ page }) => {

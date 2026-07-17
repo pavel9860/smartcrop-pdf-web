@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 const SCAN_JPG = fileURLToPath(new URL('../assets/test_pdf_distorted_page-0001.jpg', import.meta.url))
 
 test('1-page SCANNED doc: Dewarp&Deskew, then switching filters, completes and renders correctly', async ({ page }) => {
-  test.setTimeout(240_000)   // dewarp alone can take up to 120s under contention (see ceiling below)
+  test.setTimeout(400_000)   // 3 steps, each polled up to 120s under contention (see below)
   await page.goto('/')
   await page.setInputFiles('#pp-file', SCAN_JPG)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
@@ -29,35 +29,28 @@ test('1-page SCANNED doc: Dewarp&Deskew, then switching filters, completes and r
     return s
   })
 
-  const overlay = page.locator('.overlay').first()
+  // display_total===1 (single page) skips the progress overlay entirely (app.ts dispatch_job), so
+  // it can't be used as a completion signal here (it may never appear, or may already be hidden
+  // before the async work finishes) — poll the checksum itself instead, which is both the real
+  // completion signal and the correctness assertion.
   const timed = async (click: () => Promise<void>): Promise<number> => {
     const before = await checksum()
     const t0 = Date.now()
     await click()
-    // display_total===1 (single page) skips the overlay entirely (app.ts dispatch_job) — best
-    // effort wait, real completion is whichever resolves: overlay hidden, or it never showed.
-    await overlay.waitFor({ state: 'visible', timeout: 1_500 }).catch(() => {})
-    await overlay.waitFor({ state: 'hidden', timeout: 120_000 }).catch(() => {})
-    const elapsed = Date.now() - t0
-    expect(await checksum()).not.toBe(before)   // actually changed the rendered page, not a no-op
-    return elapsed
+    await expect.poll(checksum, { timeout: 120_000, intervals: [250] }).not.toBe(before)
+    return Date.now() - t0
   }
 
+  // Each step below either resolves within the 120s poll (dewarp is a real two-stage ONNX model —
+  // CNN + GridSample resample, also lazily fetching+compiling the model on first use, single-digit
+  // seconds of pure inference on CPU/WASM with no WebGPU but observed up to ~60s under
+  // sibling-worker CPU contention) or the poll itself throws a clear timeout — no separate ceiling
+  // assertion needed. This asserts "real compute completed, didn't hang, actually changed the
+  // page" — the tight overhead-only budget lives in tests/core/scan_orchestration_speed.test.ts,
+  // and the exact dewarp-reuse guarantee in tests/core/page_raster_pipeline.test.ts.
   const dewarp_ms = await timed(() => page.click('#sp-dewarp'))
   const filter_ms = await timed(() => page.click('#sp-bw'))
   const filter2_ms = await timed(() => page.click('#sp-sharpen'))
   console.log(`[scan_dewarp_cache] dewarp: ${dewarp_ms}ms, filter after dewarp: ${filter_ms}ms, ` +
     `filter switch: ${filter2_ms}ms`)
-
-  // Generous ceilings, not tight budgets (see header comment): dewarp is a real two-stage ONNX
-  // model (CNN + GridSample resample) that also lazily fetches+compiles the model on first use,
-  // single-digit seconds of pure inference on CPU/WASM with no WebGPU but observed up to ~60s
-  // under sibling-worker CPU contention (Firefox, cold model load, chromium's own dewarp running
-  // concurrently) — 120s leaves real headroom rather than re-tuning this every time CI is busier.
-  // This asserts "real compute completed, didn't hang" — the tight overhead-only budget lives in
-  // tests/core/scan_orchestration_speed.test.ts, and the exact dewarp-reuse guarantee in
-  // tests/core/page_raster_pipeline.test.ts.
-  expect(dewarp_ms).toBeLessThan(120_000)
-  expect(filter_ms).toBeLessThan(60_000)
-  expect(filter2_ms).toBeLessThan(60_000)
 })

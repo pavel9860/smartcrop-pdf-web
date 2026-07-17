@@ -315,10 +315,12 @@ implementation of that behavior only.
 Pinned bottom bar sits outside the scroll container as a sibling, not inside it.
 
 **Detail panel** — a `<div>` between the sidebar and canvas. Collapsed state: `width: 0`. Open
-state: `width: var(--sidebar-w)` — same width as the sidebar, no separate variable — transitioned
-via CSS `transition: width 180ms ease`. Canvas column is `flex: 1` so it fills whatever space
-remains (clamped to a 400px minimum in CSS) and reflows when the panel's width changes.
-No modal, no overlay, no z-index stacking — the panel is a normal DOM sibling.
+state: `width: var(--sidebar-w)` for Settings — same width as the sidebar, no separate variable —
+or `calc(var(--sidebar-w) * 1.5)` for Help (`.detail-panel.open.help-active`, toggled by
+`DetailPanel.show()`), transitioned via CSS `transition: width 180ms ease`. Canvas column is
+`flex: 1` so it fills whatever space remains (clamped to a 400px minimum in CSS) and reflows when
+the panel's width changes. No modal, no overlay, no z-index stacking — the panel is a normal DOM
+sibling.
 
 **Status text** — one DOM overlay owned by `canvas_view.ts`, appended next to the canvas:
 `_coords_el` (`.canvas-coords`, bottom-right cursor read-out), updated on `pointermove`. There is

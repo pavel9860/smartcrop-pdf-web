@@ -55,6 +55,14 @@ export class CanvasView {
   private _last_image: ImageBitmap | null = null
   private _last_bw = -1
   private _last_bh = -1
+  // Last full snapshot painted — lets a live container resize (e.g. the detail-panel slide, spec-
+  // web §3) re-fit the ALREADY-RENDERED bitmap to the new size immediately, on every resize tick,
+  // without waiting for the debounced _resize() below (which exists to gate the separate, real
+  // re-render cost of set_display_scale, not this cheap redraw). Without this, the canvas's CSS
+  // box (width:100%/height:100% of .canvas-area) stretches the stale raster to the live-animating
+  // container every compositor frame until the debounced repaint catches up — visible as the page
+  // image squashing/stretching during the transition instead of tracking it smoothly.
+  private _last_snapshot: ViewSnapshot | null = null
   private _drag_notify_timer: ReturnType<typeof setTimeout> | null = null
   private _drag_notify_pending = false
 
@@ -95,6 +103,7 @@ export class CanvasView {
     // Debounced: a live window/panel drag-resize can fire ResizeObserver many times a second,
     // and each firing may now trigger a display-DPI re-render (spec-web §2) — not just a repaint.
     this._ro = new ResizeObserver(() => {
+      if (this._last_snapshot) this.paint(this._last_snapshot)   // cheap: re-fit, no recompute
       if (this._resize_timer !== null) clearTimeout(this._resize_timer)
       this._resize_timer = setTimeout(() => { this._resize_timer = null; this._resize() }, SCALE_THROTTLE_MS)
     })
@@ -102,6 +111,7 @@ export class CanvasView {
   }
 
   paint(snap: ViewSnapshot): void {
+    this._last_snapshot = snap
     const { el } = this
     // Attach DOM overlays (overlay canvas/coords/nav arrows) once the canvas is in the tree.
     // There is no page/size status element (spec-web §3).

@@ -95,12 +95,13 @@ re-render.
 
 ## 3. Layout
 
-A fixed three-column layout: a scrollable left sidebar, a collapsible detail panel of the *same*
-width as the sidebar, and the page canvas filling the rest (never below 400px). There is no
-floating window, no modal, no OS-level draggable sash — everything is a normal DOM sibling and a
-normal flex participant. The detail panel is collapsed to zero width by default; opening it grows
-its width to match the sidebar, which reflows the canvas column to the right by that same amount
-(the canvas's fit-to-canvas scale/ratio changes accordingly, same as any other window-width change).
+A fixed three-column layout: a scrollable left sidebar, a collapsible detail panel, and the page
+canvas filling the rest (never below 400px). There is no floating window, no modal, no OS-level
+draggable sash — everything is a normal DOM sibling and a normal flex participant. The detail panel
+is collapsed to zero width by default; opening it grows its width — to match the sidebar for
+Settings, to 1.5× the sidebar for Help (more room for prose and the contents list) — which reflows
+the canvas column to the right by that same amount (the canvas's fit-to-canvas scale/ratio changes
+accordingly, same as any other window-width change).
 
 ```
 +--SmartCrop PDF — filename.pdf-----------------------------------------+
@@ -130,11 +131,12 @@ Advanced (collapsed by default), Actions, Output Quality, Export. Pinned bottom 
 one instance only: Settings/Help row, then Undo/Redo/Reset (3 equal buttons), then page nav
 `< [n] / total >`.
 
-**Detail panel** — collapsed to zero width by default, growing to the sidebar's own width when
-open (its fields are laid out to fit that width, wrapping onto a second line where a label + control
-don't both fit). Clicking Settings or Help grows it from the sidebar/canvas boundary, reflowing the
-canvas right by the panel's width; closing it (same button again, or **Esc**) reflows the canvas
-back. Pressing the other button swaps content with no close/reopen animation.
+**Detail panel** — collapsed to zero width by default. Settings grows to the sidebar's own width
+(its rows are laid out to fit that width, wrapping onto a second line where a label + control don't
+both fit); Help grows to 1.5× that width. Clicking Settings or Help grows it from the sidebar/canvas
+boundary, reflowing the canvas right by the panel's width; closing it (same button again, or
+**Esc**) reflows the canvas back. Pressing the other button swaps content (and width) with no
+close/reopen animation.
 
 **Canvas** — carries a bottom-right cursor read-out DOM overlay (`x nn.n% y nn.n%`, percent of the
 page), updated on `pointermove`, empty when the pointer leaves. Nothing else is drawn on the canvas
