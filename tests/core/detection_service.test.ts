@@ -27,6 +27,7 @@ function setup(opts: {
   keep_ratio: { v: boolean }
   ratio: { v: number }
   invalidated: number[]
+  drawn: { v: Box | null }
 } {
   const page_count = opts.page_count ?? 3
   const adapter: RendererAdapter = { ...make_adapter(page_count, opts.mode ?? Mode.NORMAL), ...opts.adapter }
@@ -44,6 +45,7 @@ function setup(opts: {
   const keep_ratio = { v: false }
   const ratio = { v: 1 }
   const invalidated: number[] = []
+  const drawn: { v: Box | null } = { v: null }
   const history = new History(20)
   const ctx: DetectionContext = {
     has_document: () => opts.has_document ?? true,
@@ -58,9 +60,10 @@ function setup(opts: {
     set_ratio: (r) => { ratio.v = r },
     outlier_pages: () => 0,
     invalidate_output: (p) => { invalidated.push(p) },
+    set_drawn: (box) => { drawn.v = box },
   }
   const svc = new DetectionService(adapter, history, raster, idx, ctx)
-  return { svc, doc, detection, anchor, keep_ratio, ratio, invalidated }
+  return { svc, doc, detection, anchor, keep_ratio, ratio, invalidated, drawn }
 }
 
 describe('DetectionService.detect — NORMAL mode', () => {
@@ -162,6 +165,13 @@ describe('DetectionService.detect — guards and error paths', () => {
     const result = await job.result()
     expect(result).toBeInstanceOf(Cancelled)
     expect(detection.auto_active).toBe(false)
+  })
+
+  it('drops a pending hand-drawn window synchronously, not just after the batch resolves (Auto-detect was silently masked by it otherwise)', () => {
+    const { svc, drawn } = setup({ mode: Mode.NORMAL })
+    drawn.v = { x0: 10, y0: 10, x1: 90, y1: 90 }
+    svc.detect([0])   // don't even await — must clear before the async batch does anything
+    expect(drawn.v).toBeNull()
   })
 })
 

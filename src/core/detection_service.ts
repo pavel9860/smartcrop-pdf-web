@@ -32,6 +32,7 @@ export interface DetectionContext {
   set_ratio(r: number): void
   outlier_pages(): number
   invalidate_output(p: number): void
+  set_drawn(box: Box | null): void
 }
 
 export class DetectionService {
@@ -44,6 +45,11 @@ export class DetectionService {
   ) {}
 
   detect(pages: readonly number[]): BatchJob {
+    // A pending hand-drawn window takes precedence over the auto-crop everywhere it's read
+    // (overlay, commit, export) — pressing Auto-detect must drop it immediately, synchronously,
+    // not just compute a fresh union that stays invisible behind it (bug: Auto-detect silently a
+    // no-op after a manual crop-window draw).
+    this._ctx.set_drawn(null)
     return start_batch('Detecting content…', pages.length, job => this._run_detect(job, pages))
   }
 

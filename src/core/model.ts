@@ -143,13 +143,14 @@ export class AppModel {
       union: (): Box | null => this._union,
       auto_active: (): boolean => this._auto_active,
     }
+    const set_drawn = (box: Box | null): void => { this._drawn = box }
 
     this._crop = new CropController(this.history, {
       ...page_ctx,
       ...detection_accessors,
       has_document: (): boolean => this._doc !== null,
       drawn: (): Box | null => this._drawn,
-      set_drawn: (box): void => { this._drawn = box },
+      set_drawn,
     })
     this._page_ops = new PageOpsService(this.history, this._page_index, this._raster, {
       ...page_ctx,
@@ -174,6 +175,7 @@ export class AppModel {
       set_ratio: (r): void => { this._crop.set_ratio(r) },
       outlier_pages: (): number => this.settings.detect_outlier_pages,
       invalidate_output: (p): void => { this._invalidate_output_cache(p) },
+      set_drawn,
     })
     this._scan = new ScanProcessingService(this.history, this._raster, {
       document: (): DocumentState => this.document,
@@ -449,9 +451,7 @@ export class AppModel {
     this.settings.undo_depth = d
     this.history.set_depth(d)
   }
-  set_detect_outlier_pages(n: number): void {
-    this.settings.detect_outlier_pages = Math.max(0, Math.round(n))
-  }
+  set_detect_outlier_pages(n: number): void { this.settings.detect_outlier_pages = Math.max(0, Math.round(n)) }
   set_output_postfix(postfix: string): void { this.settings.output_postfix = postfix }
   set_dewarp_supersample(factor: number): void {
     this.settings.dewarp_supersample = Math.max(DEWARP_SUPERSAMPLE_MIN, Math.min(DEWARP_SUPERSAMPLE_MAX, factor))
