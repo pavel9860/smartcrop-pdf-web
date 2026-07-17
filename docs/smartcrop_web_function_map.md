@@ -178,10 +178,12 @@ Called by `crop_panel.ts`: Auto-detect button (`dispatch_job`), Crop button (`di
 | `commit_offsets()` | 521 | snaps out-of-range offsets to page-limit (spec-web §4.6); recomputes offsets from the resulting rect |
 | `set_keep_ratio(on,ratio?)` | 544 | explicit `ratio` wins; else off→on populates from `_default_ratio()` — comment flags a real prior bug (dead-code branch from checking `_keep_ratio` **after** mutating it) |
 | `_default_ratio()` private | 561 | precedence: `crop_rects[0]` (split>1) → `_drawn` (split=1) → `_union` → current page aspect → `1.0` |
-| `set_split(n)` | 578 | no-op if unchanged; clears `applied` + `drawn` (committed crops belong to the old layout); reseeds `crop_rects` via `split_rects_grid`; re-derives ratio if keep-ratio is on (does NOT carry the old ratio proportionally — deliberate, spec-web §6.7) |
+| `set_split(n)` | 578 | no-op if unchanged; clears `applied` + `drawn` + `manual_offsets_on` (committed crops and the manual-offsets window both belong to the old layout); reseeds `crop_rects` via `split_rects_grid`; re-derives ratio if keep-ratio is on (does NOT carry the old ratio proportionally — deliberate, spec-web §6.7) |
 | `set_same_size(on)` | 605 | turning ON immediately normalizes every window to window[0]'s w×h, capped to each window's own headroom |
+| `set_manual_offsets_on(on)` / `set_manual_offset(edge,value)` / `manual_offsets()` | — | spec-web §4.6, replaces the old "Advanced" accordion. Reuses the `drawn` window (not a new DocumentState field): on seeds it at `MANUAL_OFFSET_DEFAULT`% margin via `manual_offset_rect`; off clears it. `manual_offsets()` is a live view via `offsets_from_manual_rect`, not separately stored. |
 
-Called by `crop_panel.ts` (Split 1/2/4, Same-size toggle, Anchor L/T checkboxes, Keep-ratio toggle + ratio field, offset L/T/R/B inputs on blur/Enter).
+Called by `crop_panel.ts` (Split 1/2/4, Same-size toggle, Anchor L/T checkboxes, Set offsets manual
+switch + L/T/R/B fields, Keep-ratio toggle + ratio field).
 
 ### 6.6 Drag gesture state machine
 
@@ -245,11 +247,14 @@ Called by `output_panel.ts` (sidebar Output Quality card) and `settings_view.ts`
 
 | Method | Line | Notes |
 |---|---|---|
-| `rotate_pages()` | 1024 | history.push once, then `_rotate_page(p)` per selected page |
-| `_rotate_page(p)` private | 1034 | reads `_page_dims(p)` **before** mutating rotation (order matters — box coords are in the pre-step frame); rotates `applied`/`detect_cache` boxes via `rotate_box_cw`; drops source/work/output caches for `p`; resets `offsets` to default; rebuilds `union` via `_compute_detection_union` (same `FULL_PAGE_FRAC` exclusion as initial detect — bug 2a fix) |
-| `delete_pages()` | 1059 | throws `DeleteAllPagesError` if deleting everything; **`history.clear()`**, not push — delete is explicitly non-undoable (comment: `_page_map` lives outside `DocumentState`, so a restored snapshot could reference indices the map no longer has); reindexes `applied/rotation/processed/detect_cache` via `geometry.reindex_map`; rebuilds `_page_map` **before** rebuilding `union` (ordering bug 2a fix — union math reads dims through `_page_map`) |
+| `rotate(pages)` (`page_ops_service.ts`) | 47 | history.push once, then `_rotate_page(p)` per selected page; after the loop, if `split_count>1`, reseeds `crop_rects` via `split_rects_grid` against the current page's now-rotated dims (bug: split windows staying stale after rotate) |
+| `_rotate_page(p)` private | 52 | reads `page_dims(p)` **before** mutating rotation (order matters — box coords are in the pre-step frame); rotates `applied`/`detect_cache` boxes via `rotate_box_cw`; does **not** evict source/work caches — rotation is part of their cache key (§7), so the new angle simply resolves to a different entry; only `invalidate_output(p)` (the crop/split preview) is explicit; resets `offsets` to default; rebuilds `union` |
+| `delete(pages)` (`page_ops_service.ts`) | 81 | throws `DeleteAllPagesError` if deleting everything; **`history.clear()`**, not push — delete is explicitly non-undoable; reindexes `applied/rotation/processed/detect_cache` via `geometry.reindex_map`; rebuilds `_page_map` **before** rebuilding `union` |
 
-Called by `crop_panel.ts` Rotate/Delete buttons (Delete confirms via `window.confirm` in the panel itself, not the model).
+Called by `crop_panel.ts` Rotate/Delete buttons. Delete first checks `resolve_pages().length >=
+page_count()` in the panel itself — deleting everything always throws, so that case shows a plain
+info dialog instead of ever opening the confirm dialog; otherwise confirms via `ctrl.confirm()`
+(`ui/confirm.ts::confirm_dialog`, a themed dialog — never native `window.confirm`).
 
 ### 6.11 Export
 
@@ -388,21 +393,21 @@ Both response paths transfer `ArrayBuffer`s (`[bytes.buffer]`/`[zip.buffer]`), n
 
 ---
 
-## 11. `ui/app.ts` — `AppController` (394 lines)
+## 11. `ui/app.ts` — `AppController` (443 lines)
 
 Owns one `AppModel` + one `PdfRendererAdapter`. **The only error-catch sites in the app** (per CLAUDE.md's hard rule).
 
 | Method | Purpose | Used by |
 |---|---|---|
-| `dispatch(command: () => void)` | try/catch → `_show_error`; always `_persist_output_prefs()` + `_refresh_async()` after | every synchronous panel action (toggles, offset commits, undo/redo, etc.) |
+| `dispatch(command: () => void)` | try/catch → `_show_error`; always `_persist_output_prefs()` + `_refresh_async()` after | every synchronous panel action (toggles, manual-offset edits, undo/redo, etc.) |
 | `dispatch_async(command: () => Promise<void>)` | `.then(refresh)` / `.catch(show_error + refresh)` | `load_files`, `reset` |
 | `dispatch_job(make_job: () => BatchJob)` | pre-flight try/catch on `make_job()` itself (sync errors like `EmptySelectionError`); shows overlay if `job.total > 1`; wires `onProgress` → overlay; on `result()` hides overlay, shows error if `Failed` | `detect_content`, `run_dewarp`, `set_filter_mode/strength`, `export` |
 | `toggle_detail(panel)` / `_open_detail` / `_close_detail` | Settings/Help panel open-close-swap, no animation between the two contents | `nav_bar.ts` Settings/Help buttons |
 | `refresh_all()` / `_refresh_async()` private | awaits `prepare_current_view()` if a doc is loaded, then `view_snapshot()` → `canvas_view.paint` + every panel's `refresh(model,busy)` + `detail_panel.refresh(model,ui_config)` | called after every `dispatch*` |
 | `_wire_drop_zone()` | dragover/dragleave/drop → `dispatch_async(load_files)` | canvas area |
-| `set_theme/set_font_size/set_remember_folder/zoom/set_ui_scale/_apply_scale` | `UIConfig` (presentation-only, invisible to `core/`) | `settings_view.ts` |
+| `set_theme/set_font_size/set_remember_folder/set_offline_enabled/zoom/set_ui_scale/_apply_scale` | `UIConfig` (presentation-only, invisible to `core/`) | `settings_view.ts` |
 | `_restore_output_prefs()` / `_persist_output_prefs()` | bridges `AppModel` output settings ↔ `localStorage` via `persist.ts`, called once at construction / after every `dispatch()` | |
-| `_show_error(e)` | unwraps `DocumentLoadError.cause_error` via `stringify_cause` (module fn) into the toast text, 5s auto-dismiss `<div class="error-toast">` | |
+| `_show_error(e)` | unwraps `DocumentLoadError.cause_error` via `stringify_cause` (module fn), shows via `alert()` → `ui/confirm.ts::alert_dialog` (themed modal, single OK button, user-dismissed — not an auto-timeout toast) | |
 | `_download_blob/_download_pdf/_download_zip` | `URL.createObjectURL` → `<a download>` click → revoke after 10s | wired into `model.set_download_handlers` at construction |
 | `_on_shortcut` | `Escape` always closes detail panel (checked before the Ctrl gate); else `Ctrl+{O,Enter,S,Z,Y,+,-,0}` map to load/apply/export/undo/redo/zoom | `window.keydown` |
 
@@ -438,7 +443,7 @@ All four follow the identical shape: constructor builds `innerHTML` cards + `req
 | Panel | Cards built | Key model calls |
 |---|---|---|
 | `pages_panel.ts` | doc-name card, Document & State, Pages to Process | `load_files` (dispatch_async), `set_pages_mode`, `set_select_pattern`, `set_current_follow` |
-| `crop_panel.ts` | Split, Detect Text Borders, Advanced (offsets, collapsible), Actions | `set_split`, `set_same_size`, `detect_content` (dispatch_job), `set_anchor`×2, `set_keep_ratio`×2 (toggle + ratio field), `set_offset`+`commit_offsets` (on blur/Enter, one closure per edge), `apply_crop`, `rotate_pages`, `delete_pages` (behind `confirm()`) |
+| `crop_panel.ts` | Split, Detect Text Borders (incl. Set offsets manual switch + L/T/R/B fields, spec-web §4.6), Actions | `set_split`, `set_same_size`, `detect_content` (dispatch_job), `set_anchor`×2, `set_keep_ratio`×2 (toggle + ratio field), `set_manual_offsets_on`, `set_manual_offset` (on blur/Enter, one closure per edge), `apply_crop`, `rotate_pages`, `delete_pages` (pre-checked against deleting every page → `ctrl.alert()`, else behind `ctrl.confirm()`) |
 | `scan_panel.ts` | Scan Processing (hidden unless `mode===SCANNED`) | `run_dewarp`, `set_filter_mode`(BW/SHARPEN), `set_filter_strength` — **all three via `dispatch_job`**, not `dispatch`, since the toggle is eager-but-warms-cache under a `BatchJob` |
 | `output_panel.ts` | Output Quality, Export | `set_compress_preset`, `set_custom_dpi`, `set_output_colours`, `set_export_format`, `export` (dispatch_job, via `suggested_export_name()`) |
 
@@ -460,7 +465,7 @@ All four follow the identical shape: constructor builds `innerHTML` cards + `req
 
 ## 15. `app.css` (674 lines) — presentation only, no domain logic reads it
 
-Flat stylesheet, BEM-ish naming 1:1 with each panel's `innerHTML` classes (`.panel-card`, `.card-header/-title`, `.btn/-primary/-secondary/-danger/-toggle/-seg/-group`, `.select/.text-input`, `.toggle-label` pill switches, `.offset-grid`, `.filter-group`, `.mode-badge--{normal,scanned}`, `.settings-*`, `.help-*`, `.overlay*`, `.drop-zone`, `.error-toast`, `.canvas-nav--{left,right}`, `.canvas-coords`). All colors via `var(--*)` custom properties injected by `theme.ts` (`DARK`/`LIGHT` tables) — no hardcoded hex in the component rules themselves except the `:root` structural block (line 1–40, explicitly "never overridden by theme.ts"). No media queries / responsive breakpoints present anywhere in the file.
+Flat stylesheet, BEM-ish naming 1:1 with each panel's `innerHTML` classes (`.panel-card`, `.card-header/-title`, `.btn/-primary/-secondary/-danger/-toggle/-seg/-group`, `.select/.text-input`, `.toggle-label` pill switches, `.offset-grid`, `.filter-group`, `.mode-badge--{normal,scanned}`, `.settings-*`, `.help-*`, `.overlay*`, `.drop-zone`, `.canvas-nav--{left,right}`, `.canvas-coords`) — `.error-toast` was removed (errors go through `.overlay__card` now, same as confirm dialogs). All colors via `var(--*)` custom properties injected by `theme.ts` (`DARK`/`LIGHT` tables) — no hardcoded hex in the component rules themselves except the `:root` structural block (line 1–40, explicitly "never overridden by theme.ts"). No media queries / responsive breakpoints present anywhere in the file.
 
 ---
 
