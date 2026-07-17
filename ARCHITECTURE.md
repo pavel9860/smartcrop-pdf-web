@@ -946,13 +946,22 @@ content-hashed per build, so there's no static precache manifest to generate wit
 plugin dependency; instead the SW caches same-origin GET responses opportunistically (cache-first,
 populate-on-miss) as the running app requests them. `sw_register.ts` registers it only when
 `import.meta.env.PROD` (never under `vite dev` — a dev-mode SW would intercept fetches and serve
-stale cached responses instead of Vite's HMR updates). The manifest's icon `src` values are
-relative, not root-absolute (`public/` files are copied verbatim by Vite, unlike `index.html`'s
-`%BASE_URL%`-templated links — a root-absolute manifest icon path 404s under a GitHub Pages
-project-page subpath). Playwright e2e runs against `vite dev` (playwright.config.ts), where the SW
-deliberately never registers, so there is no automated offline-after-online-load e2e check yet —
-verify that manually against a production build (`vite build && vite preview`) before relying on
-the offline behavior at deploy time.
+stale cached responses instead of Vite's HMR updates; stopping the `npm run dev` process itself is
+unrelated to offline capability either way — it just kills the local server the dev browser talks
+to). The manifest's icon `src` values are relative, not root-absolute (`public/` files are copied
+verbatim by Vite, unlike `index.html`'s `%BASE_URL%`-templated links — a root-absolute manifest
+icon path 404s under a GitHub Pages project-page subpath). Playwright e2e runs against `vite dev`
+(playwright.config.ts), where the SW deliberately never registers, so there is no automated
+offline-after-online-load e2e check yet — verify that manually against a production build
+(`vite build && vite preview`) before relying on the offline behavior at deploy time.
+
+`sw_register.ts::warm_offline_cache()` (spec-web §15) — Settings → "Enable offline mode" (off by
+default). The SW's opportunistic caching above only ever covers what a session actually used, so a
+user who never exercised SCANNED-mode processing online would find dewarp/filters failing offline
+despite the SW being registered and otherwise working. Turning the switch on calls `ensure_cv()`
+(`pdf/cv.ts`) and `ensure_onnx()` (`pdf/dewarp.ts`) directly — the same real init paths SCANNED
+mode already uses — so their same-origin fetches populate the SW's cache as a side effect, with no
+separate hardcoded asset-URL list to keep in sync.
 
 ---
 

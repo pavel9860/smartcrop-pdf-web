@@ -767,6 +767,13 @@ a normal boot plus one scanned-mode run naturally pulls the app shell, OpenCV wa
 pdf.js worker/cmaps/fonts and icons through the cache at least once, which is what "the app works
 offline after one online load" requires. No `SharedArrayBuffer`/COOP-COEP dependency.
 
+Settings → **"Enable offline mode"** — off by default. The passive caching above only covers
+whatever a session actually used, so a user who has only used NORMAL mode online would find
+SCANNED-mode dewarp/filters failing offline despite the app otherwise working offline. Turning the
+switch on runs the real OpenCV/ONNX init paths once (the same ones SCANNED mode itself uses), so
+their downloads populate the cache immediately — every feature works offline right after, not just
+whichever were already used. No install/PWA-add-to-homescreen step is required either way.
+
 ---
 
 ## 16. Performance targets

@@ -1,6 +1,12 @@
 // Offline auto-precache registration (T7). Public interface only.
 import { describe, it, expect, vi } from 'vitest'
-import { register_service_worker } from '@ui/sw_register'
+
+const ensure_cv = vi.fn().mockResolvedValue(undefined)
+const ensure_onnx = vi.fn().mockResolvedValue(undefined)
+vi.mock('@pdf/cv', () => ({ ensure_cv }))
+vi.mock('@pdf/dewarp', () => ({ ensure_onnx }))
+
+const { register_service_worker, warm_offline_cache } = await import('@ui/sw_register')
 
 describe('register_service_worker', () => {
   it('does nothing outside a production build, even when serviceWorker is supported', () => {
@@ -25,5 +31,14 @@ describe('register_service_worker', () => {
     expect(() => { register_service_worker({ prod: true, base_url: '/' }, { register }) }).not.toThrow()
     await Promise.resolve()   // let the rejection's .catch() run
     await Promise.resolve()
+  })
+})
+
+describe('warm_offline_cache (Settings → Enable offline mode)', () => {
+  it('runs the real OpenCV + ONNX init paths so their assets get cached, not a hardcoded URL list', async () => {
+    ensure_cv.mockClear(); ensure_onnx.mockClear()
+    await warm_offline_cache()
+    expect(ensure_cv).toHaveBeenCalledTimes(1)
+    expect(ensure_onnx).toHaveBeenCalledTimes(1)
   })
 })

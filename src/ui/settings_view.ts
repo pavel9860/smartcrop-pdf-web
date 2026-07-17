@@ -27,6 +27,7 @@ export class SettingsView {
 
   // Behaviour
   private readonly _remember_cb: HTMLInputElement
+  private readonly _offline_cb: HTMLInputElement
   private readonly _undo_sel:  HTMLSelectElement
   private readonly _outlier_sel: HTMLSelectElement
 
@@ -101,6 +102,10 @@ export class SettingsView {
           <label class="toggle-label"><input type="checkbox" id="sv-remember" title="Remember the last-used folder between sessions" /></label>
         </div>
         <div class="settings-row">
+          <span class="settings-label">Enable offline mode</span>
+          <label class="toggle-label"><input type="checkbox" id="sv-offline" title="Proactively cache everything needed to work with no connection, including scanned-mode dewarp/filters — off by default, no install required" /></label>
+        </div>
+        <div class="settings-row">
           <span class="settings-label">Undo / redo depth</span>
           <select class="select" id="sv-undo" title="How many steps of history are kept">${undo_opts}</select>
         </div>
@@ -133,6 +138,7 @@ export class SettingsView {
     this._custom_paper_inp = requireEl(this._el, '#sv-custom-paper')
 
     this._remember_cb = requireEl(this._el, '#sv-remember')
+    this._offline_cb  = requireEl(this._el, '#sv-offline')
     this._undo_sel    = requireEl(this._el, '#sv-undo')
     this._outlier_sel = requireEl(this._el, '#sv-outlier')
 
@@ -170,6 +176,8 @@ export class SettingsView {
 
     this._remember_cb.addEventListener('change', () =>
       { ctrl.set_remember_folder(this._remember_cb.checked) })
+    this._offline_cb.addEventListener('change', () =>
+      { ctrl.set_offline_enabled(this._offline_cb.checked) })
     this._undo_sel.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_undo_depth(parseInt(this._undo_sel.value, 10)) }) })
     this._outlier_sel.addEventListener('change', () =>
@@ -200,6 +208,7 @@ export class SettingsView {
       CUSTOM_PAPER_PRESET, String(model.custom_paper_in))
 
     this._remember_cb.checked = ui.remember_folder
+    this._offline_cb.checked = ui.offline_enabled
     this._undo_sel.value = String(model.undo_depth)
     this._outlier_sel.value = String(model.detect_outlier_pages)
 

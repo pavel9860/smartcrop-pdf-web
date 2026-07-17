@@ -73,6 +73,7 @@ export function make_ctrl(): FakeController {
     set_theme(t: unknown): void { rec('set_theme', t) },
     set_font_size(n: unknown): void { rec('set_font_size', n) },
     set_remember_folder(b: unknown): void { rec('set_remember_folder', b) },
+    set_offline_enabled(b: unknown): void { rec('set_offline_enabled', b) },
     zoom(d: unknown): void { rec('zoom', d) },
     set_ui_scale(s: unknown): void { rec('set_ui_scale', s) },
     get busy(): boolean { return false },

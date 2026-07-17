@@ -19,14 +19,21 @@ import type { DetailPanel as DetailPanelType } from './constants'
 import { FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX, ZOOM_PRESETS } from './constants'
 import { requireEl } from './dom'
 import { load_output_prefs, save_output_prefs } from './persist'
+import { warm_offline_cache } from './sw_register'
 
 // UIConfig — presentation-only state that drives NO domain computation (ARCHITECTURE §10);
-// owned here, invisible to core/. theme/font_size/ui_scale/remember_folder.
+// owned here, invisible to core/. theme/font_size/ui_scale/remember_folder/offline_enabled.
 export interface UIConfig {
   theme: 'dark' | 'light' | 'system'
   font_size: number
   ui_scale: number
   remember_folder: boolean
+  // Off by default (spec-web §15) — the service worker (public/sw.js) always registers in
+  // production and passively caches whatever's actually used, but SCANNED-mode assets (OpenCV
+  // wasm, both ONNX dewarp models) are otherwise only cached the first time a user exercises that
+  // mode online. Turning this on proactively runs that same real init path once, so every feature
+  // works offline after, not just whichever ones were already used.
+  offline_enabled: boolean
 }
 
 export class AppController {
@@ -268,6 +275,7 @@ export class AppController {
     font_size: FONT_SIZE_DEFAULT,
     ui_scale: 1.0,
     remember_folder: true,
+    offline_enabled: false,
   }
 
   get ui_config(): Readonly<UIConfig> { return this._ui_config }
@@ -293,6 +301,12 @@ export class AppController {
 
   set_remember_folder(on: boolean): void {
     this._ui_config.remember_folder = on
+    void this._refresh_async()
+  }
+
+  set_offline_enabled(on: boolean): void {
+    this._ui_config.offline_enabled = on
+    if (on) void warm_offline_cache()
     void this._refresh_async()
   }
 

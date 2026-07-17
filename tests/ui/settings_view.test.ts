@@ -8,7 +8,7 @@ import type { UIConfig } from '@ui/app'
 // set_ui_scale() only ever receives a preset from the dropdown) — using a real preset here tests
 // that invariant instead of the old "shows the nearest preset" approximation behavior.
 const UI: Readonly<UIConfig> = {
-  theme: 'light', font_size: 15, ui_scale: 1.15, remember_folder: true,
+  theme: 'light', font_size: 15, ui_scale: 1.15, remember_folder: true, offline_enabled: false,
 }
 
 describe('SettingsView', () => {
@@ -36,6 +36,7 @@ describe('SettingsView', () => {
     expect(root.querySelector<HTMLSelectElement>('#sv-font')!.value).toBe('15')
     expect(root.querySelector<HTMLSelectElement>('#sv-zoom')!.value).toBe('1.15')  // exact match, not approximated (M1)
     expect(root.querySelector<HTMLInputElement>('#sv-remember')!.checked).toBe(true)
+    expect(root.querySelector<HTMLInputElement>('#sv-offline')!.checked).toBe(false)
   })
 
   it('does not duplicate the sidebar output-quality controls, and drops inert confirm-overwrite', () => {
@@ -57,8 +58,10 @@ describe('SettingsView', () => {
     font.value = font.options[0]!.value
     font.dispatchEvent(new Event('change'))
     root.querySelector<HTMLInputElement>('#sv-remember')!.dispatchEvent(new Event('change'))
+    root.querySelector<HTMLInputElement>('#sv-offline')!.dispatchEvent(new Event('change'))
     expect(fc.calls.some(c => c.kind === 'set_font_size')).toBe(true)
     expect(fc.calls.some(c => c.kind === 'set_remember_folder')).toBe(true)
+    expect(fc.calls.some(c => c.kind === 'set_offline_enabled')).toBe(true)
   })
 
   it('Output section has shared-state Custom DPI + Paper size (spec-web §4.8)', () => {
