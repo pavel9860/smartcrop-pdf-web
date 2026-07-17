@@ -43,6 +43,14 @@ export class PageRasterPipeline {
   private _source_versions = new Map<number, LRUCache<string, ImageBitmap>>()
   private _work_versions   = new Map<number, LRUCache<string, ImageBitmap>>()
 
+  // Dewarp-only intermediate (post-Dewarp&Deskew, pre-filter), keyed by rotation+supersample only
+  // (no filter component) — switching the filter while dewarp stays on reuses this instead of
+  // re-running the ONNX dewarp pass, which dominates cost (multi-second CPU inference vs the
+  // filter's own ~200ms). Same version-bounded-per-page shape as _work_versions; an Undo/Redo that
+  // actually flips dewarp_on just resolves _work_key's `d0`/`d1` component to a different entry, no
+  // separate invalidation needed here either.
+  private _dewarped_versions = new Map<number, LRUCache<string, ImageBitmap>>()
+
   // Pre-rendered output bitmaps for committed pages (keyed "page:split_idx"). Cheap to rebuild from
   // the (separately cached) work bitmap — a crop/split is processing in the same sense as
   // dewarp/filter (the cached entry is the actual cropped pixels, never a full page + remembered
@@ -76,6 +84,7 @@ export class PageRasterPipeline {
   reset(): void {
     this._clear_versions(this._source_versions)
     this._clear_versions(this._work_versions)
+    this._clear_versions(this._dewarped_versions)
     this._output_cache.clear()
     this._current = null
   }
@@ -92,6 +101,7 @@ export class PageRasterPipeline {
   clear_ram(): void {
     this._clear_versions(this._source_versions)
     this._clear_versions(this._work_versions)
+    this._clear_versions(this._dewarped_versions)
     this._output_cache.clear()
     this._current = null
   }
@@ -151,15 +161,43 @@ export class PageRasterPipeline {
     const intent = this._ctx.process_intent(p)
     if (!intent.dewarp && !intent.filter) return this.get_source(p)
 
+    const rotation = this._ctx.rotation(p)
+    const supersample = this._ctx.dewarp_supersample()
+
+    // Dewarp&Deskew dominates cost (multi-second CPU ONNX inference vs. the filter's ~200ms OpenCV
+    // pass) — resolve it through its own cache, keyed only by rotation+supersample (no filter
+    // component), so switching the filter while dewarp stays on reuses the dewarped raster instead
+    // of re-running the dewarp pass on every filter change.
+    const base = intent.dewarp ? await this._get_dewarped(p, rotation, supersample) : await this.get_source(p)
+    // Dewarp-only (no filter): the dewarped raster IS the work result — same double-close hazard as
+    // NORMAL's aliasing above, don't also store it in _work_versions.
+    if (!intent.filter) return base
+
     const cache = this._version_cache(this._work_versions, p)
-    const key = this._work_key(intent, this._ctx.rotation(p))
+    const key = this._work_key(intent, rotation)
     const cached = cache.get(key)
     if (cached) return cached
 
-    const src = await this.get_source(p)
-    const work = await this._adapter.get_work_image(src, intent, this._ctx.dewarp_supersample())
+    // dewarp:false — `base` already carries the dewarp step (or never needed one); this call does
+    // filter-only work.
+    const work = await this._adapter.get_work_image(base, { dewarp: false, filter: intent.filter }, supersample)
     cache.set(key, work)
     return work
+  }
+
+  private async _get_dewarped(p: number, rotation: number, supersample: number): Promise<ImageBitmap> {
+    const cache = this._version_cache(this._dewarped_versions, p)
+    const key = this._dewarped_key(rotation, supersample)
+    const cached = cache.get(key)
+    if (cached) return cached
+    const src = await this.get_source(p)
+    const dewarped = await this._adapter.get_work_image(src, { dewarp: true, filter: null }, supersample)
+    cache.set(key, dewarped)
+    return dewarped
+  }
+
+  private _dewarped_key(rotation: number, supersample: number): string {
+    return `r${rotation}|s${supersample}`
   }
 
   // Fetches the page's work raster AND marks it as the on-screen bitmap in one step, so the
@@ -185,9 +223,14 @@ export class PageRasterPipeline {
   prefetch(p: number): void {
     if (p < 0 || p >= this._page_index.length || this._prefetching.has(p)) return
     const intent = this._ctx.process_intent(p)
-    const warm = (this._ctx.mode() === Mode.SCANNED && (intent.dewarp || intent.filter))
-      ? (this._work_versions.get(p)?.has(this._work_key(intent, this._ctx.rotation(p))) ?? false)
-      : (this._source_versions.get(p)?.has(String(this._ctx.rotation(p))) ?? false)
+    const rotation = this._ctx.rotation(p)
+    // Mirrors get_work's own cache routing (dewarp-only aliases to _dewarped_versions, never
+    // duplicated into _work_versions) so an already-warm dewarp-only page isn't reported cold here.
+    const warm = this._ctx.mode() !== Mode.SCANNED || (!intent.dewarp && !intent.filter)
+      ? (this._source_versions.get(p)?.has(String(rotation)) ?? false)
+      : intent.filter
+        ? (this._work_versions.get(p)?.has(this._work_key(intent, rotation)) ?? false)
+        : (this._dewarped_versions.get(p)?.has(this._dewarped_key(rotation, this._ctx.dewarp_supersample())) ?? false)
     if (warm) return
     this._prefetching.add(p)
     void this.get_work(p).catch(() => { /* best-effort warm */ })

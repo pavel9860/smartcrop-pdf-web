@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest'
 import { PageRasterPipeline, type RasterContext } from '@core/page_raster_pipeline'
 import { PageIndexMap } from '@core/page_index_map'
-import { Mode } from '@core/enums'
+import { Mode, FilterMode } from '@core/enums'
 import type { RendererAdapter, DocInfo, PageSize } from '@core/model'
 import type { PageProcessIntent } from '@core/document_state'
 
@@ -103,6 +103,39 @@ describe('PageRasterPipeline.get_source / get_work', () => {
     expect(work_calls).toBe(1)
     expect(w1).toBe(w2)
     expect(w1.width).toBe(9)
+  })
+
+  it('SCANNED: switching filters while dewarp stays on reuses the dewarped intermediate instead ' +
+     'of re-running dewarp (§9a three-tier cache)', async () => {
+    const calls: PageProcessIntent[] = []
+    const a = adapter({
+      get_work_image: (_src, intent) => { calls.push(intent); return Promise.resolve(bmp()) },
+    })
+    let intent: PageProcessIntent = { dewarp: true, filter: [FilterMode.BW, 2] }
+    const p = pipeline(a, ctx({ mode: () => Mode.SCANNED, process_intent: () => intent }))
+
+    await p.get_work(0)
+    intent = { dewarp: true, filter: [FilterMode.SHARPEN, 2] }
+    await p.get_work(0)
+    intent = { dewarp: true, filter: [FilterMode.BW, 2] }
+    await p.get_work(0)   // back to the first filter — a full-intent cache hit, no adapter call
+
+    expect(calls.filter(c => c.dewarp).length).toBe(1)         // dewarp computed exactly once
+    expect(calls.filter(c => !c.dewarp).length).toBe(2)        // one filter-only call per distinct filter
+    expect(calls.every(c => c.dewarp ? c.filter === null : true)).toBe(true)   // dewarp step never also filters
+  })
+
+  it('SCANNED: dewarp-only (no filter) is not duplicated into the filtered-result cache', async () => {
+    let work_calls = 0
+    const a = adapter({ get_work_image: () => { work_calls++; return Promise.resolve(bmp()) } })
+    const p = pipeline(a, ctx({
+      mode: () => Mode.SCANNED,
+      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
+    }))
+    const w1 = await p.get_work(0)
+    const w2 = await p.get_work(0)
+    expect(work_calls).toBe(1)   // one dewarp call, cached — not recomputed, not double-stored
+    expect(w1).toBe(w2)
   })
 })
 

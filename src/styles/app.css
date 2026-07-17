@@ -7,7 +7,6 @@
   --font:       "Roboto", "Segoe UI", system-ui, sans-serif;
   --font-mono:  "Fira Code", "Cascadia Code", monospace;
   --sidebar-w:  288px;
-  --detail-w:   380px;
   --fs:         0.9375rem;   /* 15px = desktop DEFAULT_FONT_SIZE */
 
   /* Color defaults (dark) mirror theme.ts DARK; theme.ts overrides via setProperty() at runtime. */
@@ -57,7 +56,6 @@ input, select { font: inherit; }
   flex-direction: row;
   height: 100dvh;
   overflow: hidden;
-  position: relative;   /* anchors .detail-panel, which overlays rather than reflowing the canvas */
 }
 
 /* ── Sidebar ── */
@@ -83,32 +81,28 @@ input, select { font: inherit; }
   scrollbar-color: var(--border) transparent;
 }
 
-/* ── Detail panel (Settings / Help) — slides in as an overlay, not a layout reflow ──
-   position:absolute takes it out of the flex flow entirely, so .canvas-area's width (and
-   therefore the preview's fit-to-canvas scale/ratio) never changes while this opens or closes —
-   only the panel itself slides, over the canvas's left edge, never the canvas (bug #3/spec-web §3). */
+/* ── Detail panel (Settings / Help) — a normal flex sibling between sidebar and canvas, collapsed
+   to width:0 by default. Opening it grows its width to --sidebar-w, which reflows .canvas-area
+   (flex:1) to the right, exactly like the sidebar itself would (spec-web §3). */
 .detail-panel {
-  position: absolute;
-  top: 0;
-  left: var(--sidebar-w);
-  width: var(--detail-w);
+  width: 0;
+  min-width: 0;
+  flex-shrink: 0;
   height: 100%;
-  z-index: 10;
   overflow: hidden;
   background: var(--bg-chrome);
-  border-right: 1px solid var(--border);
-  transform: translateX(-100%);
-  /* Slid out to the left, this box's own footprint still overlaps the sidebar (its width is
-     wider than sidebar-w) — pointer-events:none while closed keeps it from swallowing clicks
-     meant for the sidebar underneath it; .open re-enables them once it's actually on screen. */
-  pointer-events: none;
-  transition: transform 180ms ease;
+  /* No border while collapsed: border-right still paints at width:0 (box-sizing:border-box only
+     absorbs a border into a NONZERO width), adding a phantom 1px that shifted the canvas even
+     when the panel was supposedly taking zero space. */
+  border-right: 0 solid var(--border);
+  transition: width 180ms ease;
   display: flex;
   flex-direction: column;
 }
 .detail-panel.open {
-  transform: translateX(0);
-  pointer-events: auto;
+  border-right-width: 1px;
+  width: var(--sidebar-w);
+  min-width: var(--sidebar-w);
 }
 
 /* When collapsed (width 0) the contents must be fully removed from layout, not just clipped:
@@ -156,9 +150,8 @@ input, select { font: inherit; }
 /* ── Canvas area ── */
 .canvas-area {
   flex: 1;
-  /* Sized only by the sidebar — the detail panel overlays it (position:absolute, see above) and
-     never takes flex space, so this never shrinks regardless of the detail panel's open state
-     (bug #3/spec-web §3). min-width is a floor for a very narrow window, not a detail-panel guard. */
+  /* Shrinks to make room when the detail panel opens (spec-web §3) — min-width is only a floor
+     for a very narrow window, not a detail-panel guard. */
   min-width: 400px;
   position: relative;
   background: var(--bg-canvas);
@@ -515,17 +508,21 @@ input, select { font: inherit; }
 }
 .settings-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px 8px;
 }
 /* An author display:flex rule beats the UA default [hidden]{display:none} at equal specificity
    (origin wins before specificity) — without this override a hidden .settings-row (e.g. the
    Custom paper-height row, revealed only when Paper size = Custom) still renders as a flex row. */
 .settings-row[hidden] { display: none; }
-.settings-label { font-size: 0.9375rem; color: var(--text-label); flex-shrink: 0; }
+/* No flex-shrink:0 here (unlike most labels): at the panel's now-sidebar width (spec-web §3) a
+   long label + its control no longer both fit on one line, so the label wraps instead of clipping
+   or forcing the control off the edge; flex-wrap above then drops the control to its own line. */
+.settings-label { font-size: 0.9375rem; color: var(--text-label); }
 .settings-row .select,
-.settings-row .text-input { max-width: 160px; }
+.settings-row .text-input { max-width: 110px; }
 
 /* ── Help view ── */
 .help-view { display: flex; flex-direction: column; gap: 16px; }

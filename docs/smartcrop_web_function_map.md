@@ -475,15 +475,22 @@ Flat stylesheet, BEM-ish naming 1:1 with each panel's `innerHTML` classes (`.pan
 | `split` | handle-hit on a `crop_rects[i]` | `apply_handle_drag`→live ratio-anchored→same-size mirror if resize | *(nothing extra)* | restore ALL `rects0` |
 | `drawn` | handle/interior-hit on existing `_drawn` | `apply_handle_drag`→live ratio-anchored | *(nothing extra)* | restore `rect0` |
 
-**16.2 Scan pipeline + two-tier cache** — `_get_work(p)`: RAM hit → return; NORMAL mode or no-op intent → alias to `_get_source(p)` (never double-cached, avoids double-`close()`); else disk hit (only if `_persisted_keys` has the key) → `adapter.load_work` → cache in RAM; else `adapter.get_work_image(src,intent,supersample)` → `imaging.ts::process_page_async` → cache in RAM (disk write deferred to actual LRU capacity eviction, `onCapacityEvict` hook in `model.ts`'s `_work_cache` constructor, not on every compute).
+**16.2 Scan pipeline + three-tier RAM cache** (`page_raster_pipeline.ts::get_work(p)`, no disk tier —
+per-page rasters are RAM-only, §7) — RAM hit → return; NORMAL mode or no-op intent → alias to
+`get_source(p)` (never double-cached, avoids double-`close()`); SCANNED + real intent: resolve
+dewarp and filter as two separate cached steps — a dewarp-only call
+(`get_work_image(src,{dewarp:true,filter:null},supersample)`) cached in `_dewarped_versions`
+(keyed by rotation+supersample only), then, if a filter is also requested, a filter-only call
+on that dewarped bitmap cached in `_work_versions` under the full intent key. Dewarp-only intents
+return the `_dewarped_versions` entry directly rather than double-caching it (§9a).
 
 **16.3 Detect flow** — NORMAL page: `loader.ts::detect_text_box` (text-layer union, no raster) first; only falls back to `_get_source(p)` + `imaging.ts::detect_content_async` (raster/Sauvola) if the text box is null/degenerate. SCANNED page: raster path only, and always against the **raw source**, never the dewarped/filtered work image (detect's `<100ms` budget depends on this — spec-web §16).
 
 **16.4 Export flow** — `export(filename)` → `_render_export_pages` (per page: `_get_work` → boxes → `adapter.render_output_image` at `_resolved_target_long_px()`) → `PDF`: `adapter.export_pdf` → `_download_pdf`; `JPG/PNG/TIFF`: `adapter.export_images` → single zip → `_download_zip`. Both worker calls transfer bitmaps, not clone.
 
-**16.5 Rotate/Delete side effects** — Rotate: undoable (history.push), reads `_page_dims` before mutating rotation, rotates stored boxes, drops that page's 3 raster caches, resets offsets, rebuilds union. Delete: **not** undoable (`history.clear()`), reindexes 4 per-page maps, rebuilds `_page_map` **before** rebuilding union (ordering matters — union math reads dims through `_page_map`).
+**16.5 Rotate/Delete side effects** — Rotate: undoable (history.push), reads `_page_dims` before mutating rotation, rotates stored boxes, invalidates that page's output-preview cache only — rotation is part of every raster cache's key (source/dewarped/work), so the new angle simply resolves to a different, uncomputed entry rather than needing an explicit evict — resets offsets, rebuilds union. Delete: **not** undoable (`history.clear()`), reindexes per-page maps, rebuilds `_page_map` **before** rebuilding union (ordering matters — union math reads dims through `_page_map`), and wholesale-clears every raster cache (`clear_ram()`) since delete shifts logical page numbers and every cache key would otherwise address the wrong page.
 
-**16.6 Undo/Redo** — both always clear all 3 raster caches wholesale (source/work/output) + invalidate `_current_bitmap`, even though most undo steps don't touch imaging — simple/safe over precise invalidation.
+**16.6 Undo/Redo** — both clear only the output-preview cache + invalidate `_current_bitmap`; the source/dewarped/work raster caches are content-addressed per page (keyed by rotation/intent, not by history position) and are deliberately left alone — whatever state Undo/Redo lands on simply resolves to its own entry, a hit if still within `undo_depth` reach.
 
 ---
 

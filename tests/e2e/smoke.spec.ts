@@ -11,6 +11,19 @@ test('three-column layout renders with the synthetic document', async ({ page })
   await expect(page.locator('#nav-total')).toHaveText('/ 1')
 })
 
+test('closed detail panel does not paint over the sidebar (regression)', async ({ page }) => {
+  // .sidebar toBeVisible() alone doesn't catch this: it only checks the sidebar's OWN CSS
+  // visibility, not whether an opaque sibling is stacked on top of it. The detail-panel is a
+  // normal-flow flex sibling collapsed to width:0 while closed (spec-web §3) — width:0 makes
+  // overlapping the sidebar structurally impossible, unlike the earlier position:absolute overlay
+  // this regression test was written against (bug: sidebar looked empty until Settings/Help was
+  // opened once, because that overlay's off-screen translateX fell short of the sidebar's width).
+  const sidebar_box = (await page.locator('.sidebar').boundingBox())!
+  const panel_box = (await page.locator('.detail-panel').boundingBox())!
+  expect(panel_box.width).toBe(0)
+  expect(panel_box.x).toBeGreaterThanOrEqual(sidebar_box.x + sidebar_box.width)
+})
+
 test('primary controls are present', async ({ page }) => {
   for (const id of [
     '#pp-load', '#cp-detect', '#cp-crop', '#cp-rotate', '#cp-delete',
@@ -27,15 +40,15 @@ test('Settings detail panel opens and Esc closes it', async ({ page }) => {
   await expect(page.locator('#sv-undo')).toBeHidden()
 })
 
-test('opening/closing Settings or Help slides the panel over the canvas — the canvas never resizes (bug #3)', async ({ page }) => {
+test('opening/closing Settings or Help reflows the canvas right by the sidebar width (spec-web §3)', async ({ page }) => {
   const canvas = page.locator('canvas.page-canvas')
   const panel = page.locator('.detail-panel')
+  const sidebar_box = (await page.locator('.sidebar').boundingBox())!
   // The panel's open/close transition is 180ms (app.css) — settle past it before measuring, or a
-  // mid-animation snapshot could equal box_before by sheer timing coincidence in EITHER the buggy
-  // (width-reflow) or fixed (overlay) layout, making the assertion meaningless either way. Races
-  // transitionend against a fixed timeout: a backgrounded/CPU-starved tab under parallel test load
-  // can throttle or coalesce the transition enough that the event never fires at all, which would
-  // otherwise hang until the whole test times out (observed under 6-worker parallel runs).
+  // mid-animation snapshot could match box_before by sheer timing coincidence. Races transitionend
+  // against a fixed timeout: a backgrounded/CPU-starved tab under parallel test load can throttle
+  // or coalesce the transition enough that the event never fires at all, which would otherwise
+  // hang until the whole test times out (observed under 6-worker parallel runs).
   const settle = (): Promise<void> => panel.evaluate(
     el => new Promise<void>(resolve => {
       const done = (): void => { el.removeEventListener('transitionend', done); resolve() }
@@ -50,18 +63,22 @@ test('opening/closing Settings or Help slides the panel over the canvas — the 
   await page.click('[data-id="settings"]')
   await expect(panel).toHaveClass(/open/)
   await settle()
-  expect(await canvas.boundingBox()).toEqual(box_before)   // same size AND position — no reflow
+  const panel_box_open = (await panel.boundingBox())!
+  expect(panel_box_open.width).toBe(sidebar_box.width)   // same width as the sidebar (spec-web §3)
+  const box_open = (await canvas.boundingBox())!
+  expect(box_open.x).toBeCloseTo(box_before!.x + sidebar_box.width, 0)   // pushed right by the panel
+  expect(box_open.width).toBeCloseTo(box_before!.width - sidebar_box.width, 0)
 
   await page.keyboard.press('Escape')
   await expect(panel).not.toHaveClass(/open/)
   await settle()
-  expect(await canvas.boundingBox()).toEqual(box_before)
+  expect(await canvas.boundingBox()).toEqual(box_before)   // back to the original position/size
 
   // Help must behave identically (same shared detail-panel/canvas-area mechanism).
   await page.click('[data-id="help"]')
   await expect(panel).toHaveClass(/open/)
   await settle()
-  expect(await canvas.boundingBox()).toEqual(box_before)
+  expect((await canvas.boundingBox())!.x).toBeCloseTo(box_before!.x + sidebar_box.width, 0)
 })
 
 test('Ctrl+/Ctrl- zoom stepping always lands exactly on a preset, never an approximation (M1)', async ({ page }) => {

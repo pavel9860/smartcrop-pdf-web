@@ -192,12 +192,13 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               per-page rasters are RAM-only, see §7).
 
     ui/                     Presentation layer. Imports @core/* and @pdf/*. core/ never imports ui/.
-      constants.ts          UI-only tunables: PANEL_WIDTH=320, DETAIL_PANEL_WIDTH=380,
-                              STATUS_IDLE_MS=2400, SCALE_THROTTLE_MS=80, FONT_SIZE_DEFAULT=15,
-                              THEMES, canvas overlay drawing tunables (dash patterns, line widths,
-                              split-badge scale, status-text offsets — see canvas_view.ts).
-                              CANVAS_MARGIN lives in core/constants.ts only, imported directly by
-                              canvas_view.ts — not redefined here.
+      constants.ts          UI-only tunables: SCALE_THROTTLE_MS=80, FONT_SIZE_DEFAULT=15, THEMES,
+                              canvas overlay drawing tunables (dash patterns, line widths,
+                              split-badge scale, status-text offsets — see canvas_view.ts). Sidebar
+                              and detail-panel width are pure CSS (app.css `--sidebar-w`; the detail
+                              panel matches it directly, no separate variable) — nothing in TS reads
+                              them. CANVAS_MARGIN lives in core/constants.ts only, imported directly
+                              by canvas_view.ts — not redefined here.
 
       dom.ts                 requireEl<E>(root, selector) — throws instead of a silent null;
                               replaces `querySelector(...)!` non-null assertions across every
@@ -252,10 +253,10 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               (3 equal buttons); page nav < [n] / total >.
                               Always visible, outside scroll, one instance only.
 
-      detail_panel.ts       Slides in as an overlay above the canvas's left edge (position:absolute
-                              + transform, not a layout reflow — bug #3) when Settings or Help is
-                              active (§3.2). Width DETAIL_PANEL_WIDTH. Renders either SettingsView
-                              or HelpView based on active state.
+      detail_panel.ts       A normal flex sibling between the sidebar and canvas, collapsed to
+                              width:0 and grown to the sidebar's own width when Settings or Help is
+                              active (§3.2) — reflows the canvas column, does not overlay it.
+                              Renders either SettingsView or HelpView based on active state.
                               Dismissed by clicking Settings/Help button again, or Esc.
 
       settings_view.ts      Settings content rendered inside detail_panel:
@@ -310,12 +311,13 @@ Behavior (card order/content, detail-panel open/close semantics, status-text pla
 specified in `docs/SmartCrop_PDF_Specification_Web.md` spec-web §3 — this section is the CSS/DOM
 implementation of that behavior only.
 
-**Left sidebar** — fixed width `PANEL_WIDTH` (320px), `<div>` with `overflow-y: auto`. Pinned
-bottom bar sits outside the scroll container as a sibling, not inside it.
+**Left sidebar** — fixed width `--sidebar-w` (app.css, 288px), `<div>` with `overflow-y: auto`.
+Pinned bottom bar sits outside the scroll container as a sibling, not inside it.
 
 **Detail panel** — a `<div>` between the sidebar and canvas. Collapsed state: `width: 0`. Open
-state: `width: DETAIL_PANEL_WIDTH` (380px), transitioned via CSS `transition: width 180ms ease`.
-Canvas column is `flex: 1` so it fills whatever space remains (clamped to a 400px minimum in CSS).
+state: `width: var(--sidebar-w)` — same width as the sidebar, no separate variable — transitioned
+via CSS `transition: width 180ms ease`. Canvas column is `flex: 1` so it fills whatever space
+remains (clamped to a 400px minimum in CSS) and reflows when the panel's width changes.
 No modal, no overlay, no z-index stacking — the panel is a normal DOM sibling.
 
 **Status text** — one DOM overlay owned by `canvas_view.ts`, appended next to the canvas:
@@ -737,7 +739,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 for detection with no relationship to the B/W filter's algorithm at all, which was wrong on two
 counts (not Sauvola, and not shared with the filter). Both are fixed.
 
-### 9a. Scan pipeline dataflow and the two-tier work cache
+### 9a. Scan pipeline dataflow and the three-tier work cache
 
 The scan pipeline was ~10–20× too slow; profiling (not the SIMD width — see §7b) found four causes,
 all fixed. The model (`core/model.ts`) rasterizes each page **exactly once** through `_get_source(p)`
@@ -770,6 +772,24 @@ goes through it.
   combination**; revisiting a combination past its own page's history is one clean recompute, never
   a disk read. Regression-guarded by `tests/core/work_cache.test.ts` and
   `tests/core/scan_orchestration_speed.test.ts`.
+- **Dewarped intermediate, cached separately from the filtered result.** Dewarp&Deskew (ONNX,
+  §7.1) costs orders of magnitude more than a filter pass (multi-second CPU inference vs. the
+  filter's own ~200ms OpenCV pass, §16) — re-running it every time the filter changes while dewarp
+  stays on made filter switching as slow as dewarp itself. `PageRasterPipeline._get_work` now
+  resolves dewarp and filter as two separate steps when both are requested: a dewarp-only call
+  (`get_work_image(source, {dewarp:true,filter:null}, supersample)`) cached in its own per-page LRU
+  (`_dewarped_versions`, keyed by rotation+supersample only, no filter component), then a
+  filter-only call (`get_work_image(dewarped, {dewarp:false,filter}, supersample)`) on that cached
+  bitmap, cached in `_work_versions` under the *full* intent key as before — so the addressable
+  cache entry still reflects true state, only the compute path is split. A dewarp-only intent (no
+  filter) returns the dewarped bitmap directly rather than duplicating it into `_work_versions`
+  (same double-close hazard as the NORMAL-mode source/work aliasing above). No separate
+  invalidation logic: like `_work_versions`, a state change (rotation, supersample, or Undo/Redo
+  landing on a different `dewarp_on`) simply resolves to a different key, never a stale entry.
+  Regression-guarded by `tests/core/page_raster_pipeline.test.ts` (exact dewarp-call-count
+  guarantee, mocked adapter) and `tests/e2e/scan_dewarp_cache.spec.ts` (real ONNX/OpenCV, doesn't
+  hang, renders correctly — real wall-clock timing is too noisy under parallel workers for a tight
+  or ratio budget there, see that file's header).
 
 Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spec-web §16).
 Regression-guarded by `tests/perf/scan_speed.test.ts` (`npm run test:perf`) and, end-to-end in a real

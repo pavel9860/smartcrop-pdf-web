@@ -196,9 +196,8 @@ export class AppController {
     this._detail_panel.show(panel)
     this._detail_col.classList.add('open')
     // Not routed through dispatch() — same reason set_theme/set_font_size below refresh
-    // explicitly (§10): with the canvas no longer reflowing when the panel opens (bug #3), there
-    // is no other repaint left to populate the just-shown panel's controls (e.g. the zoom select)
-    // from current state.
+    // explicitly (§10): nothing else would repaint the just-shown panel's controls (e.g. the zoom
+    // select) from current state.
     void this._refresh_async()
   }
 
