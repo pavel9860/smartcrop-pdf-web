@@ -1,21 +1,17 @@
 // LRU cache bounded to `capacity` entries.
-// Evicted entries are passed to an optional onEvict callback (for ImageBitmap.close()).
-// `onCapacityEvict`, if given, is called INSTEAD of onEvict for the one case that matters for a
-// write-back cache: an entry pushed out because the cache is full (not an explicit delete/clear).
-// This lets the work cache persist only genuinely-evicted rasters to disk (spec-web §W2 row 5),
-// while delete()/clear() (intent change, reset) still just close without a wasted disk write.
+// Evicted entries (by capacity, delete(), or clear()) are passed to an optional onEvict callback
+// (for ImageBitmap.close()) — one callback for every eviction reason, no distinct capacity-only
+// variant. (An earlier revision had a second onCapacityEvict callback for a disk write-back tier;
+// removed with that tier — every raster cache is RAM-only now, spec-web §7.)
 
 export class LRUCache<K, V> {
   private readonly _map = new Map<K, V>()
   private readonly _capacity: number
   private readonly _onEvict: ((key: K, value: V) => void) | undefined
-  private readonly _onCapacityEvict: ((key: K, value: V) => void) | undefined
 
-  constructor(capacity: number, onEvict?: (key: K, value: V) => void,
-              onCapacityEvict?: (key: K, value: V) => void) {
+  constructor(capacity: number, onEvict?: (key: K, value: V) => void) {
     this._capacity = capacity
     this._onEvict  = onEvict
-    this._onCapacityEvict = onCapacityEvict
   }
 
   get(key: K): V | undefined {
@@ -57,8 +53,7 @@ export class LRUCache<K, V> {
     if (!first.done) {
       const [k, v] = first.value
       this._map.delete(k)
-      const cb = this._onCapacityEvict ?? this._onEvict
-      cb?.(k, v)
+      this._onEvict?.(k, v)
     }
   }
 }

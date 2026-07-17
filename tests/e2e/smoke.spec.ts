@@ -32,11 +32,15 @@ test('opening/closing Settings or Help slides the panel over the canvas — the 
   const panel = page.locator('.detail-panel')
   // The panel's open/close transition is 180ms (app.css) — settle past it before measuring, or a
   // mid-animation snapshot could equal box_before by sheer timing coincidence in EITHER the buggy
-  // (width-reflow) or fixed (overlay) layout, making the assertion meaningless either way.
+  // (width-reflow) or fixed (overlay) layout, making the assertion meaningless either way. Races
+  // transitionend against a fixed timeout: a backgrounded/CPU-starved tab under parallel test load
+  // can throttle or coalesce the transition enough that the event never fires at all, which would
+  // otherwise hang until the whole test times out (observed under 6-worker parallel runs).
   const settle = (): Promise<void> => panel.evaluate(
     el => new Promise<void>(resolve => {
       const done = (): void => { el.removeEventListener('transitionend', done); resolve() }
       el.addEventListener('transitionend', done, { once: true })
+      setTimeout(done, 1000)
     }),
   )
 

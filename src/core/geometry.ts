@@ -127,6 +127,19 @@ export function auto_crop_rect(
   return clamp_box_shift({ x0: left, y0: top, x1: right, y1: bottom }, page_w, page_h)
 }
 
+// Fallback auto-crop for a page with no detected content (spec §5: a NORMAL page with no
+// extractable text, or a SCANNED page with no ink) — there is no per-page anchor point to derive
+// left_base/top_base from, so instead of leaving the page uncropped, center the shared union's
+// W×H on the page (bug #8/#9). Offsets don't apply here for the same reason: they nudge away from
+// an anchor corner this page doesn't have.
+export function centered_crop_rect(union: Box, page_w: number, page_h: number): Box {
+  const W = union.x1 - union.x0
+  const H = union.y1 - union.y0
+  const x0 = (page_w - W) / 2
+  const y0 = (page_h - H) / 2
+  return clamp_box_shift({ x0, y0, x1: x0 + W, y1: y0 + H }, page_w, page_h)
+}
+
 // Back-compute offsets from a dragged/drawn rectangle (spec §9.3 offset formula).
 export function offsets_from_rect(
   rect: Box,

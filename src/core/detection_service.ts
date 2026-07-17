@@ -5,7 +5,7 @@
 // service owns the ALGORITHM (run detect over a page set, aggregate the union, refresh committed
 // crops), not the data.
 import type { Box } from './geometry'
-import { auto_crop_rect, box_width, box_height, detection_union } from './geometry'
+import { auto_crop_rect, centered_crop_rect, box_width, box_height, detection_union } from './geometry'
 import type { DocumentState } from './document_state'
 import type { History } from './history'
 import { FULL_PAGE_FRAC } from './constants'
@@ -128,18 +128,21 @@ export class DetectionService {
     return per_page_boxes
   }
 
-  // Re-detect refreshes committed crops without dropping them (spec-web §4.5)
+  // Re-detect refreshes committed crops without dropping them (spec-web §4.5). A page with no
+  // detected content of its own still refreshes to the centered fallback (bug #8/#9), not skipped.
   private _refresh_committed_crops_after_detect(pages: readonly number[], union: Box | null): void {
     if (!union) return
     const doc = this._ctx.document()
     const det = this._ctx.detection()
+    if (!this._ctx.anchor_left() && !this._ctx.anchor_top()) return
     for (const p of pages) {
       if (!doc.applied.has(p)) continue
       const detected = det.cache.get(p)
-      if (!detected || !(this._ctx.anchor_left() || this._ctx.anchor_top())) continue
       const sz = this._ctx.page_dims(p)
-      const rect = auto_crop_rect(detected, union, doc.offsets,
-        sz.width, sz.height, this._ctx.anchor_left(), this._ctx.anchor_top())
+      const rect = detected
+        ? auto_crop_rect(detected, union, doc.offsets,
+            sz.width, sz.height, this._ctx.anchor_left(), this._ctx.anchor_top())
+        : centered_crop_rect(union, sz.width, sz.height)
       doc.applied.set(p, [rect])
       this._ctx.invalidate_output(p)
     }

@@ -3,7 +3,7 @@
 // §W8). Synchronous; reads only pre-fetched bitmaps from the raster cache (prepare_current_view()
 // must run first, still owned by AppModel, since it's async cache-warming, not view computation).
 import type { Box } from './geometry'
-import { box_width, box_height, auto_crop_rect, keep_ratio_normalise } from './geometry'
+import { box_width, box_height, auto_crop_rect, centered_crop_rect, keep_ratio_normalise } from './geometry'
 import type { DocumentState } from './document_state'
 import { view_to_source } from './viewmodel'
 import { SYNTH_W, SYNTH_H } from './constants'
@@ -129,15 +129,19 @@ export class ViewSnapshotBuilder {
   }
 
   // Exposed (not just an internal helper): ExportService's _export_boxes_for_page needs the SAME
-  // live-auto-crop resolution for the vector/raster export path.
+  // live-auto-crop resolution for the vector/raster export path. A page with no detected content
+  // of its own still gets the shared union's W×H, centered on the page (bug #8/#9), matching
+  // CropController.compute_crop_boxes_for_page's commit-time fallback.
   live_auto_crop_for(p: number): Box | null {
-    const detected = this._ctx.detected(p)
-    const union    = this._ctx.union()
-    if (!detected || !union || !this._ctx.auto_active()
+    const union = this._ctx.union()
+    if (!union || !this._ctx.auto_active()
         || !(this._crop.anchor_left || this._crop.anchor_top)) return null
     const sz = this._ctx.page_dims(p)
-    let rect = auto_crop_rect(detected, union, this._ctx.document().offsets,
-      sz.width, sz.height, this._crop.anchor_left, this._crop.anchor_top)
+    const detected = this._ctx.detected(p)
+    let rect = detected
+      ? auto_crop_rect(detected, union, this._ctx.document().offsets,
+          sz.width, sz.height, this._crop.anchor_left, this._crop.anchor_top)
+      : centered_crop_rect(union, sz.width, sz.height)
     if (this._crop.keep_ratio) rect = keep_ratio_normalise(rect, this._crop.ratio, sz.width, sz.height)
     return rect
   }

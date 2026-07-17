@@ -243,13 +243,20 @@ the crop rectangle. Per page over the Pages selection:
 - **NORMAL:** the union of the page's text-run bounding boxes, read directly from the PDF's text
   layer (`page.getTextContent()`) — no rasterization, no OpenCV, ever. A page with no extractable
   text (an image page inside a mixed document, or a degenerate box) simply gets **no detected box**;
-  there is no raster fallback. Downstream consumers already null-check a missing detected box and
-  degrade to "no auto-crop for this page."
+  there is no raster fallback.
 - **SCANNED:** `content_box` over a real Sauvola-filtered binarization of the page (§6), downscaled
   to `DETECT_MAX_PX` for speed, run on the **raw source raster** — never the dewarped/filtered work
   image (dewarp's small geometric shift is not reflected in the detected bounds — an accepted
   fidelity tradeoff; this is also what keeps detection within its <100ms/page budget, §16). No ink →
   no detected box for that page.
+
+A page with no detected box of its own is **not** left uncropped (bug #8/#9): it has no per-page
+anchor point, so instead of `auto_crop_rect`'s anchor-based placement it gets the shared union's
+own W×H, **centered** on the page — `centered_crop_rect` (geometry.ts). This applies everywhere the
+per-page auto-crop is resolved: committing (Crop), the live preview overlay, export of an
+uncommitted page, and refreshing an already-committed page after a re-detect. Still gated on the
+same "auto-detect is active and at least one anchor is on" condition as every other auto-crop —
+with both anchors off, such a page stays uncropped like before.
 
 Then aggregate across the selection to fix one constant crop size for the whole document:
 
@@ -334,6 +341,11 @@ top    = top_base  − T%·h                       bottom = top_base + H + B%·h
 Each offset moves exactly one edge — right/bottom are anchored to `left_base+W`/`top_base+H`, not to
 the moved left/top, so dragging one edge never drags its opposite. Width/height stay the constant
 `W,H`, so the box is the same size on every page.
+
+This formula needs `B_p` (this page's own detected box) whenever an anchor is on. A page with no
+`B_p` (§5) instead gets `W,H` centered on the page — `x0=(w−W)/2, y0=(h−H)/2` — with no anchor/offset
+applied (bug #8/#9): there is no per-page point for `left_base`/`top_base` to be, or for an offset
+to nudge away from.
 
 ### 6.3 Mouse gestures (single crop, split = 1)
 

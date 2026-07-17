@@ -236,3 +236,73 @@ describe('settings.detect_outlier_pages routes into the union (spec-web §5, #11
     expect(model.detect_outlier_pages).toBe(3)
   })
 })
+
+describe('a page with no detected content still gets cropped, centered (bug #8/#9)', () => {
+  it('Crop commits the shared union box, centered, for a page with no usable text layer', async () => {
+    const sizes = [{ width: 200, height: 300 }, { width: 200, height: 300 }]
+    const { adapter } = make_adapter(sizes, [])
+    const text_boxes: Record<number, Box | null> = {
+      0: { x0: 20, y0: 20, x1: 120, y1: 280 },   // page 0: 100×260, has content
+      1: null,                                    // page 1: no usable text layer
+    }
+    const with_text: RendererAdapter & { detect_text_box?: (i: number) => Promise<Box | null> } = {
+      ...adapter,
+      detect_text_box: (i: number): Promise<Box | null> => Promise.resolve(text_boxes[i] ?? null),
+    }
+    const model = new AppModel(with_text)
+    await model.load_files([FILE()])
+    model.set_detect_outlier_pages(0)
+    await model.detect_content().result()
+    expect(model.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })   // W=100, H=260, from page 0 only
+
+    model.apply_crop()   // default selection = All
+
+    expect(model.document.applied.has(0)).toBe(true)
+    expect(model.document.applied.has(1)).toBe(true)   // was left uncropped before the fix
+
+    const box1 = model.document.applied.get(1)![0]!
+    // page 1 is 200×300; union W=100 H=260 -> centered: x0=(200-100)/2=50, y0=(300-260)/2=20
+    expect(box1).toEqual({ x0: 50, y0: 20, x1: 150, y1: 280 })
+  })
+
+  it('the live preview overlay for a not-yet-committed no-content page shows the same centered box', async () => {
+    const sizes = [{ width: 200, height: 300 }, { width: 200, height: 300 }]
+    const { adapter } = make_adapter(sizes, [])
+    const text_boxes: Record<number, Box | null> = {
+      0: { x0: 20, y0: 20, x1: 120, y1: 280 },
+      1: null,
+    }
+    const with_text: RendererAdapter & { detect_text_box?: (i: number) => Promise<Box | null> } = {
+      ...adapter,
+      detect_text_box: (i: number): Promise<Box | null> => Promise.resolve(text_boxes[i] ?? null),
+    }
+    const model = new AppModel(with_text)
+    await model.load_files([FILE()])
+    model.set_detect_outlier_pages(0)
+    await model.detect_content().result()
+
+    model.jump_to_output_page(2)   // page 1 (1-indexed view position)
+    await model.prepare_current_view()
+    const overlay = model.view_snapshot().overlay
+    expect(overlay).toEqual([{ kind: 'auto', box: { x0: 50, y0: 20, x1: 150, y1: 280 } }])
+  })
+
+  it('turning both anchors off still leaves the no-content page uncropped (no anchor = no auto-crop at all)', async () => {
+    const sizes = [{ width: 200, height: 300 }, { width: 200, height: 300 }]
+    const { adapter } = make_adapter(sizes, [])
+    const text_boxes: Record<number, Box | null> = { 0: { x0: 20, y0: 20, x1: 120, y1: 280 }, 1: null }
+    const with_text: RendererAdapter & { detect_text_box?: (i: number) => Promise<Box | null> } = {
+      ...adapter,
+      detect_text_box: (i: number): Promise<Box | null> => Promise.resolve(text_boxes[i] ?? null),
+    }
+    const model = new AppModel(with_text)
+    await model.load_files([FILE()])
+    model.set_detect_outlier_pages(0)
+    await model.detect_content().result()
+    model.set_anchor(false, false)
+
+    model.apply_crop()
+
+    expect(model.document.applied.has(1)).toBe(false)
+  })
+})

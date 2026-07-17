@@ -7,7 +7,7 @@
 // CropContext rather than duplicated here.
 import type { Box } from './geometry'
 import {
-  hit_handle, apply_handle_drag, auto_crop_rect,
+  hit_handle, apply_handle_drag, auto_crop_rect, centered_crop_rect,
   offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
   split_rects_grid, edge_deltas, apply_edge_deltas, clamp_edge_deltas,
   MIN_RECT, box_width, box_height,
@@ -76,8 +76,9 @@ export class CropController {
 
   // Resolves the crop box(es) to commit for page `p` on Crop (spec-web §4.5, §12.2): a hand-drawn
   // window takes precedence, clamped to the page; otherwise the live auto-crop from the last
-  // detect, if anchored; null if neither applies (AppModel.apply_crop then leaves that page
-  // uncommitted).
+  // detect, if anchored — a page with no detected content of its own still gets the shared union's
+  // W×H, centered on the page rather than left uncropped (bug #8/#9); null only if auto-detect
+  // itself isn't active/anchored.
   compute_crop_boxes_for_page(p: number): Box[] | null {
     if (!this._ctx.has_document()) return null
     const sz = this._ctx.page_dims(p)
@@ -94,9 +95,11 @@ export class CropController {
 
     const detected = this._ctx.detected(p)
     const union    = this._ctx.union()
-    if (detected && union && this._ctx.auto_active() && (this._anchor_left || this._anchor_top)) {
-      let rect = auto_crop_rect(detected, union, this._ctx.document().offsets,
-        sz.width, sz.height, this._anchor_left, this._anchor_top)
+    if (union && this._ctx.auto_active() && (this._anchor_left || this._anchor_top)) {
+      let rect = detected
+        ? auto_crop_rect(detected, union, this._ctx.document().offsets,
+            sz.width, sz.height, this._anchor_left, this._anchor_top)
+        : centered_crop_rect(union, sz.width, sz.height)
       if (this._keep_ratio) rect = keep_ratio_normalise(rect, this._ratio, sz.width, sz.height)
       return [rect]
     }
