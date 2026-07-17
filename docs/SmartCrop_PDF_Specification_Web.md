@@ -266,8 +266,8 @@ re-applied identically whenever the union is rebuilt after a rotate or a delete 
 `_compute_detection_union` helper, no separate re-implementation. Per-page boxes and the union are
 cached (non-undoable AppModel state — §13).
 
-**Outlier tolerance** (opt-in, default off): Settings → Behaviour → "Ignore N outlier pages"
-(`DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]`, default 0). When N > 0, `W`/`H` are each the
+**Outlier tolerance**: Settings → Behaviour → "Ignore N outlier pages"
+(`DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]`, default 2). When N > 0, `W`/`H` are each the
 `(N+1)`-th *largest* per-page width/height — sorted independently, so the page contributing `W`
 need not be the same page contributing `H` — instead of always the maximum; `gL`/`gT` (the min
 corner) are unaffected. This lets a handful of oversized pages (e.g. a few fold-out or
@@ -673,7 +673,7 @@ Output
 Behaviour
   Remember last folder     [ on  ]
   Undo / redo depth        [ 2   v ]           preset dropdown, [1,2,4,8]
-  Ignore N outlier pages   [ Off v ]           preset dropdown, [0,1,2,5,10] (auto-crop sizing, §5)
+  Ignore N outlier pages   [ 2   v ]           preset dropdown, [0,1,2,5,10], default 2 (auto-crop sizing, §5)
 Scan
   Dewarp supersample       [ 2.0 ]             quality lever for dewarp (§7.1); 1.0 = off
 ```

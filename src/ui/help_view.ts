@@ -63,7 +63,7 @@ const SECTIONS: readonly HelpSection[] = [
       + 'Out-of-range values snap to the page border automatically.\n\n'
       + "If a few pages have unusually large content (e.g. a fold-out), Settings → "
       + '"Ignore N outlier pages" excludes that many of the largest pages when sizing the shared '
-      + 'crop, so they stop inflating the crop on every other page. Off by default.',
+      + 'crop, so they stop inflating the crop on every other page. Defaults to 2.',
   },
   {
     id: 'split', title: '7. Split pages',

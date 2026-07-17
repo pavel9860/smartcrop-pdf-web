@@ -84,6 +84,7 @@ describe('NORMAL-mode detection source (spec-web §W2 row 13)', () => {
     }
     const model = new AppModel(with_text)
     await model.load_files([FILE()])
+    model.set_detect_outlier_pages(0)   // this test is about the text-layer path, not outlier tolerance
     await model.detect_content().result()
 
     expect(text_calls.n).toBe(2)                    // text layer consulted for both NORMAL pages
@@ -132,6 +133,7 @@ describe('union rebuild keeps FULL_PAGE_FRAC exclusion (spec §8)', () => {
     const { adapter } = make_adapter(sizes, boxes)
     const model = new AppModel(adapter)
     await model.load_files([FILE()])
+    model.set_detect_outlier_pages(0)   // this test is about FULL_PAGE_FRAC exclusion, not outlier tolerance
     await model.detect_content().result()
     // sanity: detect-time union excludes the fallback: gL=20 gT=20 W=100 H=260
     expect(model.union).toEqual({ x0: 20, y0: 20, x1: 120, y1: 280 })
@@ -158,6 +160,7 @@ describe('union rebuild keeps FULL_PAGE_FRAC exclusion (spec §8)', () => {
     const { adapter } = make_adapter(sizes, boxes)
     const model = new AppModel(adapter)
     await model.load_files([FILE()])
+    model.set_detect_outlier_pages(0)   // this test is about the post-reindex rebuild, not outlier tolerance
     await model.detect_content().result()
     // sanity: p3 excluded at detect time: gL=10 gT=10 W=max(100,100) H=max(260,200)
     expect(model.union).toEqual({ x0: 10, y0: 10, x1: 110, y1: 270 })
@@ -214,6 +217,13 @@ describe('settings.detect_outlier_pages routes into the union (spec-web §5, #11
     // Recomputing this correctly after rotate (not just carrying the old picks forward) is the
     // point of routing rotate's union rebuild through the same _compute_detection_union.
     expect(model.union).toEqual({ x0: 0, y0: 0, x1: 180, y1: 100 })
+  })
+
+  it('defaults to 2, not Off (bug #4)', () => {
+    const model = new AppModel(make_adapter([{ width: 100, height: 100 }], [
+      { x0: 0, y0: 0, x1: 10, y1: 10 },
+    ]).adapter)
+    expect(model.detect_outlier_pages).toBe(2)
   })
 
   it('set_detect_outlier_pages clamps to a non-negative integer', () => {
