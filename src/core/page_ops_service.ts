@@ -5,7 +5,7 @@
 // — see PageOpsContext below, the same "shared state stays on AppModel, exposed live" pattern
 // PageRasterPipeline/CropController already established).
 import type { Box } from './geometry'
-import { rotate_box_cw, reindex_map } from './geometry'
+import { rotate_box_cw, reindex_map, split_rects_grid } from './geometry'
 import type { DocumentState } from './document_state'
 import type { History } from './history'
 import { DEFAULT_OFFSETS } from './document_state'
@@ -34,6 +34,7 @@ export interface PageOpsContext {
   set_view_pos(pos: number): void
   view_total(): number
   page_count(): number
+  split_count(): 1 | 2 | 4
 }
 
 export class PageOpsService {
@@ -47,6 +48,17 @@ export class PageOpsService {
   rotate(pages: readonly number[]): void {
     this._history.push(this._ctx.document())
     for (const p of pages) this._rotate_page(p)
+
+    // Split windows (crop_rects) are a live template sized for the CURRENT page's dims, not a
+    // per-page map like applied/detect_cache above — rotating doesn't rotate them, it invalidates
+    // their sizing (a 90° swap changes page_w/page_h). Reseed a fresh even grid against the current
+    // page's now-rotated dims, same as set_split() does when first turning split on — any prior
+    // manual window positioning was sized for the pre-rotation page anyway.
+    const n = this._ctx.split_count()
+    if (n > 1) {
+      const sz = this._ctx.page_dims(this._ctx.current_page())
+      this._ctx.document().crop_rects = split_rects_grid(n, sz.width, sz.height)
+    }
   }
 
   private _rotate_page(p: number): void {

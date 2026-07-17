@@ -162,6 +162,7 @@ export class AppModel {
       set_view_pos: (pos): void => { this._view_pos = pos },
       view_total: (): number => this.view_total,
       page_count: (): number => this.page_count(),
+      split_count: (): 1 | 2 | 4 => this._crop.split_count,
     })
     this._detection = new DetectionService(_adapter, this.history, this._raster, this._page_index, {
       ...page_ctx,
@@ -519,14 +520,19 @@ export class AppModel {
     if (!this._doc) return
     this._raster.is_loading = true
     const p = this._current_page
+    // Captured before the fetch: get_source() reads rotation synchronously at fetch-start, so
+    // `work` reflects THIS rotation regardless of how long the fetch takes.
+    const rotation = this.document.rotation.get(p) ?? 0
 
     try {
       const work = await this._raster.get_work(p)
-      // Fast navigation can outrun a slow fetch: committing a resolved-late `work` once the user
-      // has already moved to a different page pairs page p's bitmap with the NOW-current page's
-      // dimensions — a different rotation swaps width/height, showing as a brief distorted page
-      // (bug: fast-scroll after rotating). Only commit while p is still the current page.
-      if (p === this._current_page) {
+      // Fast navigation, or a rotate on the still-current page, can outrun a slow fetch: committing
+      // a resolved-late `work` once the user has moved to a different page, OR rotated this same
+      // page again before the fetch for the OLD rotation resolved, pairs a bitmap with the wrong
+      // dimensions (page_dims reads rotation live) — a different rotation swaps width/height,
+      // showing as a distorted page that can persist until some other event forces a repaint (bug:
+      // fast-scroll or rapid re-rotate). Only commit while both still match.
+      if (p === this._current_page && rotation === (this.document.rotation.get(p) ?? 0)) {
         this._raster.current = work
         const committed = this.document.applied.get(p)
         if (committed) await this._raster.prerender_output_views(p, committed, this._page_dims(p), work)

@@ -2,6 +2,7 @@
 // delete, independent of AppModel (which exercises it indirectly through its own suite).
 import { describe, it, expect } from 'vitest'
 import { PageOpsService, type PageOpsContext, type DetectionState } from '@core/page_ops_service'
+import { split_rects_grid } from '@core/geometry'
 import { PageIndexMap } from '@core/page_index_map'
 import { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { History } from '@core/history'
@@ -34,6 +35,7 @@ function setup(page_count = 3): {
   detection: DetectionState
   current_page: { v: number }
   view_pos: { v: number }
+  split_count: { v: 1 | 2 | 4 }
   history: History
   raster: PageRasterPipeline
 } {
@@ -49,6 +51,7 @@ function setup(page_count = 3): {
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
   const current_page = { v: 0 }
   const view_pos = { v: 1 }
+  const split_count: { v: 1 | 2 | 4 } = { v: 1 }
   const ctx: PageOpsContext = {
     document: () => doc,
     page_dims: (): PageSize => ({ width: 200, height: 300 }),
@@ -68,10 +71,11 @@ function setup(page_count = 3): {
     set_view_pos: (p) => { view_pos.v = p },
     view_total: () => idx.length,
     page_count: () => idx.length,
+    split_count: () => split_count.v,
   }
   const history = new History(20)
   const svc = new PageOpsService(history, idx, raster, ctx)
-  return { svc, doc, detection, current_page, view_pos, history, raster }
+  return { svc, doc, detection, current_page, view_pos, split_count, history, raster }
 }
 
 describe('PageOpsService.rotate', () => {
@@ -118,6 +122,23 @@ describe('PageOpsService.rotate', () => {
     svc.rotate([0])
 
     expect(raster.output_at(0, 0)).toBeNull()
+  })
+
+  it('reseeds crop_rects to a fresh grid sized for the current page when split > 1 (bug: stayed stale after rotate)', () => {
+    const { svc, doc, split_count, current_page } = setup()
+    split_count.v = 2
+    current_page.v = 0
+    doc.crop_rects = [{ x0: 999, y0: 999, x1: 1000, y1: 1000 }, { x0: 0, y0: 0, x1: 1, y1: 1 }]
+    svc.rotate([0])
+    expect(doc.crop_rects).toEqual(split_rects_grid(2, 200, 300))
+  })
+
+  it('leaves crop_rects untouched when split === 1', () => {
+    const { svc, doc } = setup()
+    const rects = [{ x0: 1, y0: 2, x1: 3, y1: 4 }]
+    doc.crop_rects = rects
+    svc.rotate([0])
+    expect(doc.crop_rects).toBe(rects)
   })
 })
 

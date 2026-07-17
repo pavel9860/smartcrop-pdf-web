@@ -684,7 +684,9 @@ a checkpoint either — only **Crop** (`apply_crop()`) does. Undo continues to f
   carried through by rotating their coordinates 90° CW, so cropping survives a rotate. Offsets reset
   to default; the detection union is rebuilt (with the same `FULL_PAGE_FRAC` exclusion §5 applies at
   detect time — never a raw re-aggregate that would readmit an excluded fallback box). With split 2/4
-  active, the windows re-lay out automatically to the rotated page. Fully undoable.
+  active, the windows reset to a fresh even grid sized for the rotated page (any prior manual window
+  positioning was sized for the pre-rotation page and is discarded, same as first turning split on).
+  Fully undoable.
 - **Delete** — removes the Pages selection, refuses to delete every page, confirms first. Reindexes
   every per-page map (`applied`, `rotation`, `processed`, the detection cache) so surviving pages'
   adjustments are preserved; the page-index map is rebuilt *before* the union rebuild, since the

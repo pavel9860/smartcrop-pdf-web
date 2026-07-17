@@ -95,6 +95,30 @@ describe('prepare_current_view', () => {
     // The late page-0 resolution must not have clobbered the bitmap for the page actually shown.
     expect(m.view_snapshot().image).toBe(page1_bitmap)
   })
+
+  it('a slow-resolving fetch for the pre-rotation angle never overwrites the bitmap once the ' +
+     'page has been re-rotated (bug: distortion after rotate then scroll)', async () => {
+    const w = 200, h = 300
+    let resolve_rot0!: (b: ImageBitmap) => void
+    const rot0_promise = new Promise<ImageBitmap>(res => { resolve_rot0 = res })
+    const adapter = make_adapter(3, Mode.NORMAL, w, h)
+    adapter.get_source_image = (_page_idx, _dpi, rotation): Promise<ImageBitmap> =>
+      rotation === 0 ? rot0_promise : Promise.resolve(make_bitmap(w, h))
+    const m = new AppModel(adapter)
+    await m.load_files([FILE()])
+
+    const p_old = m.prepare_current_view()   // starts fetching rotation 0 for page 0 (slow)
+    m.rotate_pages()                          // rotates page 0 to 90° before that fetch resolves
+    const p_new = m.prepare_current_view()   // starts fetching rotation 90 (resolves immediately)
+    await p_new
+    const new_bitmap = m.view_snapshot().image
+
+    resolve_rot0(make_bitmap(w, h))          // NOW let the stale rotation-0 fetch resolve
+    await p_old
+
+    // The late, pre-rotation resolution must not have clobbered the bitmap for the current angle.
+    expect(m.view_snapshot().image).toBe(new_bitmap)
+  })
 })
 
 describe('rotate / delete after detect', () => {
