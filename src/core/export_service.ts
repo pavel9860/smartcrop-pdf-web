@@ -64,9 +64,11 @@ export class ExportService {
 
   export(filename: string): BatchJob {
     // Image formats have a second, equally-long phase (encode + zip) after rendering; double the
-    // total so the bar keeps advancing through encoding instead of freezing at 100% (bug: progress
+    // BAR's total so it keeps advancing through encoding instead of freezing at 100% (bug: progress
     // bar completes, then a long invisible zip pass). PDF has no separate per-page encode phase —
     // true for both the raster and vector PDF paths, so total sizing is unaffected by which runs.
+    // display_total stays the real page count either way — the doubled total is bar-smoothing
+    // bookkeeping only, and must never surface as "2x more pages" in the counter text (bug).
     const total_views = this._ctx.view_total()
     const is_image = this._ctx.export_format() !== 'PDF'
     const total = is_image ? total_views * 2 : total_views
@@ -76,7 +78,8 @@ export class ExportService {
     const use_vector = this._ctx.mode() === Mode.NORMAL && this._ctx.export_format() === 'PDF'
       && this._adapter.export_pdf_vector !== undefined
     return start_batch(`Exporting ${this._ctx.export_format()}…`, total, job =>
-      use_vector ? this._run_export_vector(job, filename) : this._run_export(job, filename))
+      use_vector ? this._run_export_vector(job, filename) : this._run_export(job, filename),
+      total_views)
   }
 
   private async _run_export(job: PageBatchJob, filename: string): Promise<void> {

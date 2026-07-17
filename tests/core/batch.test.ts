@@ -24,6 +24,13 @@ describe('PageBatchJob', () => {
     expect(await job.result()).toBeInstanceOf(Cancelled)
     expect(job.controller.is_cancelled).toBe(true)
   })
+
+  it('display_total defaults to total; a distinct value stays independent of it', () => {
+    expect(new PageBatchJob('t', 5).display_total).toBe(5)
+    const job = new PageBatchJob('t', 20, 10)   // e.g. image export: total doubled, display_total real
+    expect(job.total).toBe(20)
+    expect(job.display_total).toBe(10)
+  })
 })
 
 describe('start_batch', () => {

@@ -17,7 +17,13 @@ export type ProgressCallback = (done: number, total: number) => void
 
 export interface BatchJob {
   readonly title: string
+  // `total` is the internal step count driving the progress BAR — image exports double it
+  // (render phase + encode phase) so the bar keeps moving instead of stalling at 100% during zip
+  // encoding (spec-web §11). `display_total` is the real, user-facing count (e.g. page count) the
+  // overlay's COUNTER text shows — equal to `total` unless a caller passes a distinct one, so a
+  // doubled internal total never reads as "2x more pages" to the user (bug: export progress).
   readonly total: number
+  readonly display_total: number
   readonly done:  number   // updated as work progresses
   cancel(): void
   onProgress(cb: ProgressCallback): void
@@ -35,6 +41,7 @@ export interface BatchController {
 export class PageBatchJob implements BatchJob {
   readonly title: string
   readonly total: number
+  readonly display_total: number
   get done(): number { return this._done }
   private _done = 0
 
@@ -43,9 +50,10 @@ export class PageBatchJob implements BatchJob {
   private _resolve!: (r: BatchResult) => void
   private readonly _promise: Promise<BatchResult>
 
-  constructor(title: string, total: number) {
+  constructor(title: string, total: number, display_total = total) {
     this.title = title
     this.total = total
+    this.display_total = display_total
     this._promise = new Promise<BatchResult>(res => { this._resolve = res })
   }
 
@@ -80,9 +88,9 @@ export class PageBatchJob implements BatchJob {
 // controller on its own error paths; the .catch here is a safety net only, so a worker that
 // somehow rejects past that still resolves the job instead of becoming an unhandled rejection.
 export function start_batch(
-  title: string, total: number, worker: (job: PageBatchJob) => Promise<void>,
+  title: string, total: number, worker: (job: PageBatchJob) => Promise<void>, display_total?: number,
 ): PageBatchJob {
-  const job = new PageBatchJob(title, total)
+  const job = new PageBatchJob(title, total, display_total)
   worker(job).catch((e: unknown) => { fail_batch(job.controller, e) })
   return job
 }

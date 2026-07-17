@@ -90,6 +90,20 @@ describe('ExportService.export — raster path', () => {
     expect(zip_bytes).toHaveLength(1)
   })
 
+  it('doubles total for the progress bar (render+encode phases) but keeps display_total the real page count (bug: export progress showing 2x pages)', () => {
+    const { svc } = setup({ page_count: 3, export_format: 'PNG' })
+    const job = svc.export('out.png')
+    expect(job.total).toBe(6)           // 3 pages x 2 phases
+    expect(job.display_total).toBe(3)   // real page count, what the counter should show
+  })
+
+  it('PDF (no separate encode phase) has display_total equal to total', () => {
+    const { svc } = setup({ page_count: 3, export_format: 'PDF' })
+    const job = svc.export('out.pdf')
+    expect(job.total).toBe(3)
+    expect(job.display_total).toBe(3)
+  })
+
   it('strips the extension before handing the base name to export_images', async () => {
     const export_images = vi.fn(() => Promise.resolve(new Uint8Array([1])))
     const { svc } = setup({ export_format: 'PNG', adapter: { export_images } })

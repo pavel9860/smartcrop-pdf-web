@@ -639,10 +639,16 @@ of earlier single-crop state.
 Long operations (detect on scans, dewarp, filter, export) show a centred card on the canvas —
 message, determinate bar, page counter, Cancel — not a separate window. A worker or the main-thread
 event loop drives the batch page-by-page, yielding between pages so the overlay repaints and Cancel
-is honored. A single-page job (`total === 1`) skips the overlay and runs synchronously. Cancel sets
-a flag checked before each page and stops promptly with no partial file. While a batch is busy,
-controls are disabled and further clicks are ignored (no command queueing). A per-page exception
-surfaces as an error toast and ends the batch cleanly.
+is honored. A single-page job (`display_total === 1`) skips the overlay and runs synchronously.
+Cancel sets a flag checked before each page and stops promptly with no partial file. While a batch
+is busy, controls are disabled and further clicks are ignored (no command queueing). A per-page
+exception surfaces as an error toast and ends the batch cleanly.
+
+`BatchJob.total` (the bar's step count) and `display_total` (the counter's page count) can differ:
+an image export doubles `total` — render phase + encode phase — so the bar keeps moving instead of
+stalling at 100% while the zip is encoded, but the counter always shows real progress against
+`display_total`, never the doubled internal count (bug: export progress showing double the actual
+page count, with the counter appearing to jump erratically once it exceeds the real total).
 
 ---
 

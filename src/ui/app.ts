@@ -150,7 +150,7 @@ export class AppController {
 
     this._current_job = job
 
-    if (job.total > 1) {
+    if (job.display_total > 1) {
       this._overlay.show(job, () => { job.cancel() })
     }
     void this._refresh_async()

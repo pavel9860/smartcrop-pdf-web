@@ -27,8 +27,8 @@ test('a scanned PDF loads as SCANNED mode and the B/W filter renders correctly',
 
   const t0 = Date.now()
   await page.click('#sp-bw')
-  // The overlay only shows for job.total > 1 (app.ts dispatch_job) — best-effort wait, the real
-  // completion signal below (overlay hidden again) is what's timed.
+  // The overlay only shows for job.display_total > 1 (app.ts dispatch_job) — best-effort wait, the
+  // real completion signal below (overlay hidden again) is what's timed.
   await page.locator('.overlay').first().waitFor({ state: 'visible', timeout: 3_000 }).catch(() => {})
   await page.locator('.overlay').first().waitFor({ state: 'hidden', timeout: 30_000 })
   const elapsed_ms = Date.now() - t0
