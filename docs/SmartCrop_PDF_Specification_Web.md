@@ -934,3 +934,7 @@ state.
     failure surfaces as an error toast.
 26. A new live crop box (Auto-detect or a fresh draw) drops the previously active box and resets all
     four offsets to 0 before the new box appears.
+27. Navigating away before a page's bitmap fetch resolves never lets that late resolution become
+    the shown bitmap — it is paired against whichever page is actually current when it lands, and a
+    different rotation swaps width/height, so a stale bitmap there would show as a distorted page
+    for a moment (bug: fast-scroll after rotating). Only the fetch for the still-current page commits.

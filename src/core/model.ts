@@ -433,13 +433,8 @@ export class AppModel {
   set_paper_size(name: string): void {
     if (name in PAPER_SIZES || name === CUSTOM_PAPER_PRESET) this.settings.paper_size = name
   }
-  set_custom_paper_in(height_in: number): void {
-    this.settings.custom_paper_in = Math.max(CUSTOM_PAPER_MIN, Math.min(CUSTOM_PAPER_MAX, height_in))
-  }
-
-  set_custom_dpi(dpi: number): void {
-    this.settings.custom_dpi = Math.max(CUSTOM_DPI_MIN, Math.min(CUSTOM_DPI_MAX, Math.round(dpi)))
-  }
+  set_custom_paper_in(height_in: number): void { this.settings.custom_paper_in = Math.max(CUSTOM_PAPER_MIN, Math.min(CUSTOM_PAPER_MAX, height_in)) }
+  set_custom_dpi(dpi: number): void { this.settings.custom_dpi = Math.max(CUSTOM_DPI_MIN, Math.min(CUSTOM_DPI_MAX, Math.round(dpi))) }
   set_output_colours(mode: string): void { this.settings.output_colours = mode }
   set_export_format(fmt: string): void {
     if ((EXPORT_FORMATS as readonly string[]).includes(fmt)) {
@@ -453,9 +448,7 @@ export class AppModel {
   }
   set_detect_outlier_pages(n: number): void { this.settings.detect_outlier_pages = Math.max(0, Math.round(n)) }
   set_output_postfix(postfix: string): void { this.settings.output_postfix = postfix }
-  set_dewarp_supersample(factor: number): void {
-    this.settings.dewarp_supersample = Math.max(DEWARP_SUPERSAMPLE_MIN, Math.min(DEWARP_SUPERSAMPLE_MAX, factor))
-  }
+  set_dewarp_supersample(factor: number): void { this.settings.dewarp_supersample = Math.max(DEWARP_SUPERSAMPLE_MIN, Math.min(DEWARP_SUPERSAMPLE_MAX, factor)) }
 
   get output_postfix(): string { return this.settings.output_postfix }
   get dewarp_supersample(): number { return this.settings.dewarp_supersample }
@@ -528,9 +521,16 @@ export class AppModel {
     const p = this._current_page
 
     try {
-      const work = await this._raster.load_current(p)
-      const committed = this.document.applied.get(p)
-      if (committed) await this._raster.prerender_output_views(p, committed, this._page_dims(p), work)
+      const work = await this._raster.get_work(p)
+      // Fast navigation can outrun a slow fetch: committing a resolved-late `work` once the user
+      // has already moved to a different page pairs page p's bitmap with the NOW-current page's
+      // dimensions — a different rotation swaps width/height, showing as a brief distorted page
+      // (bug: fast-scroll after rotating). Only commit while p is still the current page.
+      if (p === this._current_page) {
+        this._raster.current = work
+        const committed = this.document.applied.get(p)
+        if (committed) await this._raster.prerender_output_views(p, committed, this._page_dims(p), work)
+      }
     } finally {
       this._raster.is_loading = false
     }

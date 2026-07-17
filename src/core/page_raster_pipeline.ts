@@ -64,6 +64,7 @@ export class PageRasterPipeline {
   ) {}
 
   get current(): ImageBitmap | null { return this._current }
+  set current(bitmap: ImageBitmap | null) { this._current = bitmap }
   get is_loading(): boolean { return this._loading }
   set is_loading(v: boolean) { this._loading = v }
 

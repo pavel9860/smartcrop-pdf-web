@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { AppModel } from '@core/model'
 import { Mode, PagesMode } from '@core/enums'
 import { Failed, Ok } from '@core/batch'
-import { make_adapter, FILE } from './harness'
+import { make_adapter, make_bitmap, FILE } from './harness'
 
 async function loaded(pc = 4, mode = Mode.NORMAL, w = 200, h = 300): Promise<AppModel> {
   const m = new AppModel(make_adapter(pc, mode, w, h)); await m.load_files([FILE()]); return m
@@ -71,6 +71,29 @@ describe('prepare_current_view', () => {
     const m = new AppModel(make_adapter())
     await m.prepare_current_view()
     expect(m.view_snapshot().image).toBeNull()
+  })
+
+  it('a slow-resolving fetch for an old page never overwrites the bitmap once the user has moved on (bug: distortion on fast scroll after rotate)', async () => {
+    const w = 200, h = 300
+    let resolve_page0!: (b: ImageBitmap) => void
+    const page0_promise = new Promise<ImageBitmap>(res => { resolve_page0 = res })
+    const adapter = make_adapter(3, Mode.NORMAL, w, h)
+    adapter.get_source_image = (page_idx: number): Promise<ImageBitmap> =>
+      page_idx === 0 ? page0_promise : Promise.resolve(make_bitmap(w, h))
+    const m = new AppModel(adapter)
+    await m.load_files([FILE()])
+
+    const p0 = m.prepare_current_view()     // starts fetching page 0 (slow — not yet resolved)
+    m.jump_to_output_page(2)                // user scrolls to page 1 before page 0's fetch resolves
+    const p1 = m.prepare_current_view()     // starts fetching page 1 (resolves immediately)
+    await p1
+    const page1_bitmap = m.view_snapshot().image
+
+    resolve_page0(make_bitmap(w, h))        // NOW let the stale page-0 fetch resolve
+    await p0
+
+    // The late page-0 resolution must not have clobbered the bitmap for the page actually shown.
+    expect(m.view_snapshot().image).toBe(page1_bitmap)
   })
 })
 
