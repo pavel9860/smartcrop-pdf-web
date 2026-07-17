@@ -1,6 +1,6 @@
 // loader.ts — PDF.js loading/rendering (main thread) + imaging/export worker RPC.
 import * as pdfjs from 'pdfjs-dist'
-import { PDFDocument, degrees } from 'pdf-lib'
+import { PDFDocument, degrees, type PDFPage } from 'pdf-lib'
 import type { DocInfo, RendererAdapter, OutputPage, VectorExportPage, PageSize } from '@core/model'
 import type { Box } from '@core/geometry'
 import { to_native_frame } from '@core/geometry'
@@ -372,30 +372,47 @@ export class PdfRendererAdapter implements RendererAdapter {
       return p
     }
 
+    // Unsplit case (one output page, no crop-window split): copyPages()+setCropBox() clones the
+    // page's own content stream/resources as-is (still compressed, fonts not re-embedded) instead
+    // of decompressing it into a Form XObject via embedPage. Batched into ONE copyPages() call per
+    // SOURCE DOCUMENT (not one call per page): pdf-lib does not dedupe a resource (e.g. one font
+    // shared by every page of a book) across SEPARATE copyPages() calls to the same outDoc, so
+    // calling it per page embedded a full duplicate of every shared resource on every page — 190
+    // pages sharing one font turned a 1.6 MB source into a 30 MB export (bug #7, ~19.5×). Batching
+    // by source restores 1:1 sizing.
+    const copied_unsplit = await this._copy_unsplit_pdf_pages(outDoc, pages, get_pdflib_doc)
+
     for (const entry of pages) {
+      const copied = copied_unsplit.get(entry)
+      const only_box = entry.boxes.length === 1 ? entry.boxes[0] : undefined
+      if (copied && only_box) {
+        const native = to_native_frame(only_box, entry.page_w, entry.page_h, entry.rotation)
+        const outPage = outDoc.addPage(copied)
+        const src_h = outPage.getHeight()
+        outPage.setCropBox(native.x0, src_h - native.y1, native.x1 - native.x0, native.y1 - native.y0)
+        // Always set explicitly, even for 0: a copied page carries the SOURCE's own native
+        // /Rotate, which embedPage's Form-XObject path never did (Form XObjects carry no
+        // rotation) — entry.rotation is the single source of truth for output rotation.
+        outPage.setRotation(degrees(entry.rotation))
+        continue
+      }
+
       const source = this._pages[entry.orig_page]
       if (!source) continue
 
-      // Unsplit case (one output page, no crop-window split): copyPages()+setCropBox() clones the
-      // page's own content stream/resources as-is (still compressed, fonts not re-embedded per
-      // call) instead of decompressing it into a Form XObject via embedPage — avoids the
-      // Form-XObject path's size inflation entirely. Split (N boxes from 1 source page) still
-      // needs embedPage below, since copyPages can only produce one crop per source page.
-      const only_box = entry.boxes.length === 1 ? entry.boxes[0] : undefined
-      if (source.kind === 'pdf' && only_box) {
-        const native  = to_native_frame(only_box, entry.page_w, entry.page_h, entry.rotation)
+      // Split (N boxes from 1 source page) or an image-sourced page: embedPage still needed (a
+      // page can only carry one CropBox, not N). A PDF source page is embedded ONCE per entry —
+      // full page, no boundingBox — and drawn N times at a per-box offset (same technique as the
+      // image branch below), instead of once per box: embedPage(srcPage, boundingBox) previously
+      // ran inside the box loop, re-embedding the SAME page's fonts/images once per split box
+      // (measured ~3.6× for a 4-way split) for no reason a cropped Form XObject needs a fresh embed.
+      let full_page: Awaited<ReturnType<typeof outDoc.embedPage>> | null = null
+      let src_h = 0
+      if (source.kind === 'pdf') {
         const srcDoc  = await get_pdflib_doc(source.pdf)
-        const [copied] = await outDoc.copyPages(srcDoc, [source.page_num - 1])
-        if (copied) {
-          const outPage = outDoc.addPage(copied)
-          const src_h = outPage.getHeight()
-          outPage.setCropBox(native.x0, src_h - native.y1, native.x1 - native.x0, native.y1 - native.y0)
-          // Always set explicitly, even for 0: a copied page carries the SOURCE's own native
-          // /Rotate, which embedPage's Form-XObject path never did (Form XObjects carry no
-          // rotation) — entry.rotation is the single source of truth for output rotation.
-          outPage.setRotation(degrees(entry.rotation))
-          continue
-        }
+        const srcPage = srcDoc.getPage(source.page_num - 1)
+        src_h = srcPage.getHeight()
+        full_page = await outDoc.embedPage(srcPage)
       }
 
       for (const box of entry.boxes) {
@@ -406,18 +423,16 @@ export class PdfRendererAdapter implements RendererAdapter {
         const out_h = native.y1 - native.y0
         const outPage = outDoc.addPage([out_w, out_h])
 
-        if (source.kind === 'pdf') {
-          const srcDoc  = await get_pdflib_doc(source.pdf)
-          const srcPage = srcDoc.getPage(source.page_num - 1)
-          const src_h   = srcPage.getHeight()
-          // pdf-lib boundingBox is {left,bottom,right,top} in the SOURCE page's own bottom-left-
-          // origin PDF space; native is top-left-origin (this app's convention) — Y-flip here.
-          const embedded = await outDoc.embedPage(srcPage, {
-            left: native.x0, right: native.x1,
-            bottom: src_h - native.y1, top: src_h - native.y0,
+        if (full_page) {
+          // pdf-lib boundingBox/drawPage is bottom-left-origin PDF space; native is top-left-origin
+          // (this app's convention) — same offset derivation as the image branch below, applied to
+          // the FULL embedded page instead of a per-box cropped embed: place it so only
+          // [native.x0,x1]×[native.y0,y1] falls within this box's (crop-sized) output page — PDF
+          // pages clip to their own bounds, so nothing else renders.
+          outPage.drawPage(full_page, {
+            x: -native.x0, y: native.y1 - src_h, width: full_page.width, height: full_page.height,
           })
-          outPage.drawPage(embedded, { x: 0, y: 0, width: out_w, height: out_h })
-        } else {
+        } else if (source.kind === 'image') {
           const bytes  = new Uint8Array(await source.blob.arrayBuffer())
           const is_png  = bytes[0] === 0x89 && bytes[1] === 0x50
           const is_jpeg = bytes[0] === 0xff && bytes[1] === 0xd8
@@ -437,6 +452,36 @@ export class PdfRendererAdapter implements RendererAdapter {
       }
     }
     return outDoc.save({ useObjectStreams: true })
+  }
+
+  // Groups the unsplit-case (single-box, PDF-sourced) entries by their source document and copies
+  // each group in ONE copyPages() call — see export_pdf_vector's header comment for why batching
+  // matters. Returns a lookup from entry to its already-copied (not yet added to outDoc) page.
+  private async _copy_unsplit_pdf_pages(
+    outDoc: PDFDocument,
+    pages: readonly VectorExportPage[],
+    get_pdflib_doc: (src: pdfjs.PDFDocumentProxy) => Promise<PDFDocument>,
+  ): Promise<Map<VectorExportPage, PDFPage>> {
+    const groups = new Map<pdfjs.PDFDocumentProxy, { entry: VectorExportPage; page_idx: number }[]>()
+    for (const entry of pages) {
+      if (entry.boxes.length !== 1) continue
+      const source = this._pages[entry.orig_page]
+      if (!source || source.kind !== 'pdf') continue
+      const list = groups.get(source.pdf) ?? []
+      list.push({ entry, page_idx: source.page_num - 1 })
+      groups.set(source.pdf, list)
+    }
+
+    const result = new Map<VectorExportPage, PDFPage>()
+    for (const [src_pdf, items] of groups) {
+      const srcDoc = await get_pdflib_doc(src_pdf)
+      const copied = await outDoc.copyPages(srcDoc, items.map(i => i.page_idx))
+      items.forEach((item, i) => {
+        const page = copied[i]
+        if (page) result.set(item.entry, page)
+      })
+    }
+    return result
   }
 
   make_synth_page(_idx: number, w: number, h: number): Promise<ImageBitmap> {

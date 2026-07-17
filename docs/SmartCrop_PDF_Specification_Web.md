@@ -558,15 +558,33 @@ many output pages, including in navigation (§4.9).
 ### 10.3 NORMAL-mode PDF export is vector, not rasterized
 
 For a NORMAL document exporting to PDF, crop/rotate/split apply as vector operations against the
-**original** page content via pdf-lib (`embedPage` with a clipping bounding box, `setRotation`) — no
-`render_output_image` call, no rasterization at all. A split page's N crop windows each become their
-own output page via N `embedPage`+`drawPage` calls against the same source page. Box coordinates
-convert from the app's current (rotation-adjusted) display frame to the source page's own native
-frame first, since `embedPage`'s clip operates in that frame. Image-sourced pages inside a mixed
-PDF+image NORMAL document embed losslessly (PNG/JPEG passthrough, no re-encode) via the same
-coordinate math expressed as a draw offset; any other browser-decodable image format re-encodes once
-as PNG. This is the **only** case that bypasses §10.1's one-raster-path rule — a NORMAL document
-exporting to JPG/PNG/TIFF still uses `render_output_image` like everything else.
+**original** page content via pdf-lib — no `render_output_image` call, no rasterization at all. This
+is the **only** case that bypasses §10.1's one-raster-path rule — a NORMAL document exporting to
+JPG/PNG/TIFF still uses `render_output_image` like everything else. Box coordinates convert from the
+app's current (rotation-adjusted) display frame to the source page's own native frame first, since
+the clip/embed operations below operate in that frame.
+
+Two paths, chosen for output size (bug #7 — see below), both batched per SOURCE DOCUMENT rather than
+called once per page:
+
+- **Unsplit (one crop window per page, the common case):** `copyPages()` + `setCropBox()` clones the
+  page's own content stream/resources as-is (still compressed, nothing re-embedded) and narrows the
+  visible area via CropBox, then `setRotation` — no Form-XObject conversion at all.
+- **Split (N crop windows from one source page) or an image-sourced page:** a page can only carry
+  one CropBox, so this still needs `embedPage`/`embedPng`/`embedJpg` — but the source page (or image)
+  is embedded **once**, full, not once per box; each split window draws that single embed at a
+  per-box offset (PDF/image pages clip to their own bounds, so nothing outside the window renders).
+
+Both paths batch their pdf-lib work per source document: `copyPages()` is called once with every
+page index needed from that document (not once per page), and `embedPage` is called once per source
+page (not once per split box). pdf-lib does not automatically deduplicate a resource (a font, an
+image) shared across pages when the same operation runs in separate calls — calling either one
+per-page/per-box instead of batched measurably duplicated shared resources: ~19.5× on a real 190-page
+book (one shared font embedded once per page) for the unsplit path, ~3.6× for a 4-way split (one
+page's photo re-embedded once per box). Batching restores near-1:1 output sizing. Image-sourced
+pages inside a mixed PDF+image NORMAL document embed losslessly (PNG/JPEG passthrough, no re-encode)
+via the same coordinate math expressed as a draw offset; any other browser-decodable image format
+re-encodes once as PNG.
 
 ### 10.4 Compress / output sizing (rasterized exports only)
 

@@ -164,11 +164,18 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               - export_pdf(pages) / export_images(pages, format) → export.worker,
                                 lazy-initialised on first export (the one real Worker left).
                               - export_pdf_vector(pages) → Promise<Uint8Array> — NORMAL-mode PDF
-                                export (spec-web §10.3): pdf-lib `embedPage`/`setRotation`
-                                against the original page content, main thread, no worker, no
-                                rasterization. One pdf-lib parse per unique source PDF
-                                (`PDFDocumentProxy.getData()` → `PDFDocument.load()`), cached across
-                                all of that file's exported pages/boxes in one export call.
+                                export (spec-web §10.3), main thread, no worker, no rasterization.
+                                Unsplit pages (one crop window): `copyPages`+`setCropBox`+
+                                `setRotation`, batched into ONE `copyPages()` call per source
+                                document (not one per page) via `_copy_unsplit_pdf_pages`. Split
+                                pages / image-sourced pages: `embedPage`/`embedPng`/`embedJpg`,
+                                each source page embedded ONCE (not once per split box) and drawn N
+                                times at a per-box offset. Both batching fixes address bug #7 (an
+                                un-batched `copyPages`/`embedPage` call per page/box doesn't dedupe
+                                a resource shared across them — measured ~19.5×/~3.6× bloat). One
+                                pdf-lib parse per unique source PDF (`PDFDocumentProxy.getData()` →
+                                `PDFDocument.load()`), cached across all of that file's exported
+                                pages/boxes in one export call.
                               - make_synth_page(idx, w, h) — synthetic placeholder (§14), drawn
                                 directly with Canvas API, no worker involved.
 
