@@ -65,6 +65,10 @@ export function make_ctrl(): FakeController {
       rec('confirm', message)
       return Promise.resolve(confirm_result)
     },
+    alert(message: unknown, variant: unknown): Promise<void> {
+      rec('alert', { message, variant })
+      return Promise.resolve()
+    },
     toggle_detail(panel: unknown): void { rec('toggle_detail', panel) },
     set_theme(t: unknown): void { rec('set_theme', t) },
     set_font_size(n: unknown): void { rec('set_font_size', n) },

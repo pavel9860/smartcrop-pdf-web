@@ -7,7 +7,7 @@ import { Failed } from '@core/batch'
 import { PdfRendererAdapter } from '@pdf/loader'
 import { CanvasView } from './canvas_view'
 import { ProgressOverlay } from './overlay'
-import { confirm_dialog } from './confirm'
+import { confirm_dialog, alert_dialog } from './confirm'
 import { PagesPanel } from './panels/pages_panel'
 import { CropPanel } from './panels/crop_panel'
 import { ScanPanel } from './panels/scan_panel'
@@ -35,7 +35,6 @@ export class AppController {
   private _current_job: BatchJob | null = null
 
   // Layout elements
-  private readonly _root: HTMLElement
   private readonly _sidebar: HTMLElement
   private readonly _detail_col: HTMLElement
   private readonly _canvas_col: HTMLElement
@@ -52,7 +51,6 @@ export class AppController {
   private readonly _detail_panel: DetailPanel
 
   constructor(root: HTMLElement) {
-    this._root    = root
     this._adapter = new PdfRendererAdapter()
     this._model   = new AppModel(this._adapter)
     this._restore_output_prefs()   // apply persisted output-quality settings before first render
@@ -177,6 +175,12 @@ export class AppController {
   // native dialog for any destructive action.
   confirm(message: string, confirm_label?: string): Promise<boolean> {
     return confirm_dialog(this._canvas_col, message, confirm_label)
+  }
+
+  // Same themed-window treatment for errors and plain notices — no message is ever a silently
+  // auto-dismissing toast.
+  alert(message: string, variant: 'error' | 'info' = 'error'): Promise<void> {
+    return alert_dialog(this._canvas_col, message, variant)
   }
 
   // ---------------------------------------------------------------------------
@@ -357,17 +361,12 @@ export class AppController {
   private _show_error(e: unknown): void {
     // DocumentLoadError (and similar) carry the underlying worker/library error on the standard
     // Error.cause (core/errors.ts) but Error.message alone doesn't include it — surface it here
-    // so failures are diagnosable from the toast/console instead of a bare wrapper message like
+    // so failures are diagnosable from the dialog/console instead of a bare wrapper message like
     // "Failed to load x.pdf" with no indication of why.
     const cause = e instanceof Error ? e.cause : undefined
     const base  = e instanceof Error ? e.message : String(e)
     const msg   = cause !== undefined ? `${base} — ${stringify_cause(cause)}` : base
-    const toast = document.createElement('div')
-    toast.className = 'error-toast'
-    toast.textContent = msg
-    this._root.appendChild(toast)
-    // Auto-dismiss after 5 s (unhandled errors from callbacks)
-    setTimeout(() => { toast.remove() }, 5000)
+    void this.alert(msg, 'error')
     console.error('[SmartCrop]', msg)
   }
 

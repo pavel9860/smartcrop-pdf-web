@@ -649,7 +649,7 @@ event loop drives the batch page-by-page, yielding between pages so the overlay 
 is honored. A single-page job (`display_total === 1`) skips the overlay and runs synchronously.
 Cancel sets a flag checked before each page and stops promptly with no partial file. While a batch
 is busy, controls are disabled and further clicks are ignored (no command queueing). A per-page
-exception surfaces as an error toast and ends the batch cleanly.
+exception surfaces as an error dialog (§19) and ends the batch cleanly.
 
 `BatchJob.total` (the bar's step count) and `display_total` (the counter's page count) can differ:
 an image export doubles `total` — render phase + encode phase — so the bar keeps moving instead of
@@ -858,18 +858,20 @@ cursor read-out (§3).
 dispatch sites: `NoDocumentError`, `EmptySelectionError`, `InvalidSplitError`, `DeleteAllPagesError`,
 `DocumentLoadError`, `ImagingError`, `MissingDependencyError`. `AppController.dispatch`/
 `dispatch_async`/`dispatch_job` are the only error-catch sites in the app; a caught error surfaces as
-a dismissible toast, never a silent failure. An unhandled promise rejection is caught by a global
-`window.addEventListener('unhandledrejection')` handler that clears the current job, hides the
-overlay, repaints, and surfaces the error — the app always lands on a usable, repaint-consistent
-state.
+a themed modal dialog (`AppController.alert`, `ui/confirm.ts::alert_dialog` — same shell as the
+yes/no confirm dialog, single OK button), never a silent failure and never an auto-dismissing toast.
 
 - No document loaded → actions are no-ops; nav shows `/ 0`.
-- Empty Pages selection → the relevant action throws `EmptySelectionError`, surfaced as a toast; no
+- Empty Pages selection → the relevant action throws `EmptySelectionError`, surfaced as a dialog; no
   partial mutation.
 - A drag collapsing a rectangle clamps to `MIN_RECT`, never inverts.
 - A crop rectangle is always clamped to the page; degenerate results are skipped.
-- A failed dewarp/filter/export on one page in a batch ends the batch with an error toast; the
+- A failed dewarp/filter/export on one page in a batch ends the batch with an error dialog; the
   document is left in its pre-batch state for that page (no partial commit).
+- Deleting every page in the Pages selection is checked before the confirm dialog even opens: an
+  info dialog ("Cannot delete all pages.") replaces it, since that action was never going to
+  succeed — no confirm-then-error two-step, no `DeleteAllPagesError` reaching the UI in the normal
+  flow (the model-level guard stays as a defensive invariant regardless).
 
 ---
 
@@ -940,7 +942,7 @@ state.
     window and committed/detected boxes rotate with their pages; detection on a rotated page returns
     its box in the rotated page's coordinate space.
 25. A failed dewarp inference does not crash the batch or commit a half-processed selection; the
-    failure surfaces as an error toast.
+    failure surfaces as an error dialog.
 26. A new live crop box (Auto-detect or a fresh draw) drops the previously active box and resets all
     four offsets to 0 before the new box appears.
 27. Navigating away before a page's bitmap fetch resolves never lets that late resolution become

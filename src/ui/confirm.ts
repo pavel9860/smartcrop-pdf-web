@@ -29,3 +29,25 @@ export function confirm_dialog(
     container.appendChild(el)
   })
 }
+
+// Single-button variant for errors and plain notices — replaces the old bottom-center toast
+// (every message now goes through a themed window, none silently time out unread). 'error' gets
+// the same danger styling as confirm_dialog's destructive action; 'info' is neutral.
+export function alert_dialog(
+  container: HTMLElement, message: string, variant: 'error' | 'info' = 'error',
+): Promise<void> {
+  return new Promise(resolve => {
+    const el = document.createElement('div')
+    el.className = 'overlay'
+    el.innerHTML = `
+      <div class="overlay__card">
+        <div class="overlay__title"></div>
+        <div class="confirm-actions">
+          <button class="btn ${variant === 'error' ? 'btn-danger' : 'btn-secondary'}" data-act="ok">OK</button>
+        </div>
+      </div>`
+    requireEl(el, '.overlay__title').textContent = message
+    requireEl<HTMLButtonElement>(el, '[data-act="ok"]').addEventListener('click', () => { el.remove(); resolve() })
+    container.appendChild(el)
+  })
+}

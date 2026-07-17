@@ -24,6 +24,21 @@ test('closed detail panel does not paint over the sidebar (regression)', async (
   expect(panel_box.x).toBeGreaterThanOrEqual(sidebar_box.x + sidebar_box.width)
 })
 
+test('deleting the only page shows a themed info dialog, not a toast or a confirm prompt (bug 18)', async ({ page }) => {
+  // The synthetic placeholder doc has exactly 1 page with "All" selected by default — deleting it
+  // would always fail (DeleteAllPagesError), so it's checked before any dialog opens.
+  await page.click('#cp-delete')
+  // .overlay__card also matches the always-in-DOM (but class="hidden" by default) progress
+  // overlay (overlay.ts) — scope to the OK button, which only the alert dialog has.
+  const dialog = page.locator('.overlay__card', { has: page.locator('[data-act="ok"]') })
+  await expect(dialog).toBeVisible()
+  await expect(dialog).toContainText('Cannot delete all pages')
+  await expect(dialog.locator('[data-act="cancel"]')).toHaveCount(0)   // info, not a yes/no confirm
+  await expect(page.locator('.error-toast')).toHaveCount(0)
+  await dialog.locator('[data-act="ok"]').click()
+  await expect(dialog).toHaveCount(0)   // removed on dismiss, unlike the progress overlay's hide()
+})
+
 test('primary controls are present', async ({ page }) => {
   for (const id of [
     '#pp-load', '#cp-detect', '#cp-crop', '#cp-rotate', '#cp-delete',

@@ -797,8 +797,9 @@ class ImagingError extends SmartCropError {}
 class MissingDependencyError extends SmartCropError {}
 ```
 
-`core/` raises these; `AppController.dispatch()` / `dispatch_job()` catch them and show
-a styled error notification (inline `<div class="error-toast">`, auto-dismisses after 5 s).
+`core/` raises these; `AppController.dispatch()` / `dispatch_job()` catch them and show a themed
+modal (`AppController.alert()` → `ui/confirm.ts::alert_dialog`, the same `.overlay`/`.overlay__card`
+shell as the yes/no confirm dialog, single OK button) — dismissed by the user, never auto-timed-out.
 
 Worker errors: worker posts `{type:'error', message}` → caught in worker message handler →
 converted to `ImagingError` → passed to `dispatch_job` as `Failed(error)`.

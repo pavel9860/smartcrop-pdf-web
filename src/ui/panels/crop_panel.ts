@@ -146,6 +146,12 @@ export class CropPanel {
     this._rotate_btn.addEventListener('click', () =>
       { ctrl.dispatch(() => { model.rotate_pages() }) })
     this._delete_btn.addEventListener('click', () => {
+      // Deleting every page always fails (DeleteAllPagesError) — check first so that case gets a
+      // plain info notice, not a confirm dialog for an action that was never going to happen.
+      if (model.resolve_pages().length >= model.page_count()) {
+        void ctrl.alert('Cannot delete all pages.', 'info')
+        return
+      }
       void ctrl.confirm('Delete selected pages?', 'Delete').then(ok => {
         if (ok) ctrl.dispatch(() => { model.delete_pages() })
       })
