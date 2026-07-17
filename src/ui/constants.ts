@@ -5,6 +5,10 @@
 // and PANEL_WIDTH had drifted from the real CSS value).
 
 export const SCALE_THROTTLE_MS  = 80     // ms — canvas resize debounce (canvas_view.ts._resize)
+// ms — leading+trailing throttle on drag-driven _notify() (canvas_view.ts._on_move): pointermove
+// fires at 60-120+ Hz; this caps how often the full app refresh (6 panel .refresh() calls) runs
+// during a drag, while the trailing edge still guarantees the final drag position gets painted.
+export const DRAG_THROTTLE_MS   = 32
 export const FONT_SIZE_MIN      = 8
 export const FONT_SIZE_MAX      = 25
 export const FONT_SIZE_DEFAULT  = 15

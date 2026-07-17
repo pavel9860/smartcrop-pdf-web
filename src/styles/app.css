@@ -152,11 +152,18 @@ input, select { font: inherit; }
   overflow: hidden;
 }
 
-.page-canvas {
+.page-canvas, .overlay-canvas {
   display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
 }
+
+/* Overlay canvas (crop frames/handles/rubber-band, and the pointer-event target) stacks on the
+   static page-image canvas below it — DOM order alone puts it on top within the same stacking
+   context, no z-index needed. */
 
 /* Cursor coordinates read-out (desktop: bottom-right of the canvas pane, sidebar text style). */
 .canvas-coords {

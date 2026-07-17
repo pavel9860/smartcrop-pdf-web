@@ -1,6 +1,11 @@
 // canvas_view.ts — page canvas: paint from ViewSnapshot + pointer events → model gestures.
 // Spec-web §2, §6.3, §6.6, §18. No status text on the canvas (spec-web §3); the only overlay
 // text is the bottom-right cursor read-out.
+//
+// Two stacked canvases, not one: `el` (static page image, repainted only when the image/size
+// actually changes) and `_overlay_el` (crop frames/handles/rubber-band, repainted every call —
+// cheap stroke/fill only). A drag fires paint() at pointermove rate; redrawing the full page
+// bitmap on every one of those frames was the dominant cost of a drag repaint.
 
 import type { AppModel, ViewSnapshot, OverlayBox } from '@core/model'
 import type { Box } from '@core/geometry'
@@ -9,11 +14,11 @@ import { CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import {
   OVERLAY_DASH, OVERLAY_LINE_WIDTH_SPLIT, OVERLAY_LINE_WIDTH_CROP, HANDLE_LINE_WIDTH,
   SPLIT_BADGE_FONT_SCALE, SPLIT_BADGE_RADIUS_SCALE, RUBBER_BAND_DASH, RUBBER_BAND_LINE_WIDTH,
-  LOADING_FONT_SIZE, SCALE_THROTTLE_MS,
+  LOADING_FONT_SIZE, SCALE_THROTTLE_MS, DRAG_THROTTLE_MS,
 } from './constants'
 
 // Canvas 2D fillStyle/strokeStyle/font do NOT resolve CSS var() — no cascade context.
-// Resolved once per paint() via getComputedStyle and cached here.
+// Resolved once per static repaint via getComputedStyle and cached here.
 interface ThemeColors {
   bg: string; crop: string; split: string; handle: string; text_dim: string; font: string
 }
@@ -21,6 +26,8 @@ interface ThemeColors {
 export class CanvasView {
   readonly el: HTMLCanvasElement
   private _ctx: CanvasRenderingContext2D
+  private readonly _overlay_el: HTMLCanvasElement
+  private _overlay_ctx: CanvasRenderingContext2D
   private _model: AppModel
   private _dragging = false
   private _scale = 1
@@ -41,6 +48,15 @@ export class CanvasView {
     bg: '#121212', crop: '#4a9eff', split: '#2a7edb',
     handle: '#ffffff', text_dim: '#888888', font: 'sans-serif',
   }
+  // Static-layer repaint gate: redraw the page image only when the image reference or the
+  // backing-store size actually changed since the last paint() — not on every overlay-only
+  // (drag-frame) call. `_last_bw`/`_last_bh` start at -1 (never a real size), so the first
+  // paint() always draws the static layer once regardless of `_last_image`.
+  private _last_image: ImageBitmap | null = null
+  private _last_bw = -1
+  private _last_bh = -1
+  private _drag_notify_timer: ReturnType<typeof setTimeout> | null = null
+  private _drag_notify_pending = false
 
   constructor(model: AppModel) {
     this._model = model
@@ -49,6 +65,12 @@ export class CanvasView {
     const ctx = this.el.getContext('2d')
     if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
     this._ctx = ctx
+
+    this._overlay_el = document.createElement('canvas')
+    this._overlay_el.className = 'overlay-canvas'
+    const overlay_ctx = this._overlay_el.getContext('2d')
+    if (!overlay_ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
+    this._overlay_ctx = overlay_ctx
 
     this._coords_el = document.createElement('div')
     this._coords_el.className = 'canvas-coords'
@@ -59,13 +81,15 @@ export class CanvasView {
     this._arrow_next = this._make_arrow('▶', 'canvas-nav--right',
       () => { this._model.next_page(); this._notify() })
 
-    // Pointer events → page-unit coordinates → model gestures
-    this.el.addEventListener('pointerdown', this._on_down)
-    this.el.addEventListener('pointermove', this._on_move)
-    this.el.addEventListener('pointerup',   this._on_up)
-    this.el.addEventListener('pointerleave', () => { this._coords_el.textContent = '' })
-    this.el.addEventListener('contextmenu', e => { e.preventDefault(); this._cancel() })
-    this.el.addEventListener('wheel', this._on_wheel, { passive: true })
+    // Pointer events → page-unit coordinates → model gestures. Attached to the overlay canvas
+    // (topmost in stacking order) since it's what actually receives pointer events; the static
+    // layer beneath is sized/positioned identically so the coordinate math is unaffected.
+    this._overlay_el.addEventListener('pointerdown', this._on_down)
+    this._overlay_el.addEventListener('pointermove', this._on_move)
+    this._overlay_el.addEventListener('pointerup',   this._on_up)
+    this._overlay_el.addEventListener('pointerleave', () => { this._coords_el.textContent = '' })
+    this._overlay_el.addEventListener('contextmenu', e => { e.preventDefault(); this._cancel() })
+    this._overlay_el.addEventListener('wheel', this._on_wheel, { passive: true })
     window.addEventListener('keydown', this._on_key)
 
     // Debounced: a live window/panel drag-resize can fire ResizeObserver many times a second,
@@ -78,14 +102,40 @@ export class CanvasView {
   }
 
   paint(snap: ViewSnapshot): void {
-    const { el, _ctx: ctx } = this
+    const { el } = this
+    // Attach DOM overlays (overlay canvas/coords/nav arrows) once the canvas is in the tree.
+    // There is no page/size status element (spec-web §3).
+    const parent = el.parentElement
+    if (parent && this._overlay_el.parentElement === null) {
+      parent.appendChild(this._overlay_el)
+      parent.appendChild(this._coords_el)
+      parent.appendChild(this._arrow_prev)
+      parent.appendChild(this._arrow_next)
+    }
+
     // Size the backing store in PHYSICAL pixels (× devicePixelRatio) so the page raster and the
-    // crop overlay are sharp on HiDPI/scaled displays — the canvas was rendering at CSS resolution
-    // (half-res on a 2× screen), which made text look blurry. All drawing
-    // below stays in CSS-pixel units; the transform maps them to the physical backing store.
+    // crop overlay are sharp on HiDPI/scaled displays — both canvases are stacked at identical
+    // CSS size, so they share one bw/bh/dpr computation.
     const dpr = window.devicePixelRatio || 1
     const cw = el.clientWidth, ch = el.clientHeight
     const bw = Math.max(1, Math.round(cw * dpr)), bh = Math.max(1, Math.round(ch * dpr))
+
+    const image_changed = snap.image !== this._last_image
+    const size_changed = bw !== this._last_bw || bh !== this._last_bh
+    if (image_changed || size_changed) {
+      this._paint_static(snap, cw, ch, bw, bh, dpr)
+      this._last_image = snap.image
+      this._last_bw = bw
+      this._last_bh = bh
+    }
+
+    this._paint_overlay(snap, cw, ch, bw, bh, dpr)
+  }
+
+  private _paint_static(
+    snap: ViewSnapshot, cw: number, ch: number, bw: number, bh: number, dpr: number,
+  ): void {
+    const { el, _ctx: ctx } = this
     if (el.width !== bw || el.height !== bh) { el.width = bw; el.height = bh }
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     this._read_theme()
@@ -93,15 +143,6 @@ export class CanvasView {
     ctx.clearRect(0, 0, cw, ch)
     ctx.fillStyle = this._theme.bg
     ctx.fillRect(0, 0, cw, ch)
-
-    // Attach DOM overlays (coords/nav arrows) once the canvas is in the tree. There is no
-    // page/size status element (spec-web §3).
-    const parent = this.el.parentElement
-    if (parent && this._coords_el.parentElement === null) {
-      parent.appendChild(this._coords_el)
-      parent.appendChild(this._arrow_prev)
-      parent.appendChild(this._arrow_next)
-    }
 
     if (!snap.image) {
       if (snap.is_loading) this._draw_loading(ctx, cw, ch)
@@ -118,17 +159,26 @@ export class CanvasView {
     this._img_x = (cw - snap.page_w * scale) / 2
     this._img_y = (ch - snap.page_h * scale) / 2
 
-    // Draw page image
     ctx.drawImage(snap.image,
       this._img_x, this._img_y,
       snap.page_w * scale, snap.page_h * scale)
+  }
 
-    // Overlay crop frames
-    for (const box of snap.overlay) this._draw_overlay_box(ctx, box, scale)
-    if (snap.draw_rect) this._draw_rubber_band(ctx, snap.draw_rect, scale)
+  // Crop frames/handles/rubber-band + nav-arrow enabled state — repainted every paint() call.
+  // Cheap: stroke/fill of a handful of small shapes, no image blit.
+  private _paint_overlay(
+    snap: ViewSnapshot, cw: number, ch: number, bw: number, bh: number, dpr: number,
+  ): void {
+    const { _overlay_el: el, _overlay_ctx: ctx } = this
+    if (el.width !== bw || el.height !== bh) { el.width = bw; el.height = bh }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, cw, ch)
 
-    // Nothing is painted on the page image; cursor coordinates show in the
-    // bottom-right DOM overlay. No page/size status element (spec-web §3).
+    if (snap.image) {
+      for (const box of snap.overlay) this._draw_overlay_box(ctx, box, this._scale)
+      if (snap.draw_rect) this._draw_rubber_band(ctx, snap.draw_rect, this._scale)
+    }
+
     this._arrow_prev.disabled = snap.position <= 1
     this._arrow_next.disabled = snap.position >= snap.total
   }
@@ -259,7 +309,7 @@ export class CanvasView {
 
   // Pointer event → page-unit coordinates
   private _canvas_to_page(ev: PointerEvent): [number, number] {
-    const rect = this.el.getBoundingClientRect()
+    const rect = this._overlay_el.getBoundingClientRect()
     const cx   = ev.clientX - rect.left
     const cy   = ev.clientY - rect.top
     return [
@@ -270,7 +320,7 @@ export class CanvasView {
 
   private _on_down = (ev: PointerEvent): void => {
     if (ev.button === 2) { this._cancel(); return }
-    this.el.setPointerCapture(ev.pointerId)
+    this._overlay_el.setPointerCapture(ev.pointerId)
     this._dragging = true
     const [px, py] = this._canvas_to_page(ev)
     this._model.begin_drag(px, py, (HANDLE_R + HANDLE_SLACK) / this._scale)
@@ -282,14 +332,15 @@ export class CanvasView {
     this._update_coords(px, py)      // bottom-right read-out updates on every move (bug 10)
     if (!this._dragging) return
     this._model.update_drag(px, py)
-    this._notify()
+    this._notify_throttled()
   }
 
   private _on_up = (ev: PointerEvent): void => {
     if (!this._dragging) return
     this._dragging = false
-    this.el.releasePointerCapture(ev.pointerId)
+    this._overlay_el.releasePointerCapture(ev.pointerId)
     this._model.end_drag()
+    this._flush_drag_throttle()
     this._notify()
   }
 
@@ -298,6 +349,7 @@ export class CanvasView {
     // an in-progress drag. cancel_drag() is a no-op when there is nothing pending.
     this._dragging = false
     this._model.cancel_drag()
+    this._flush_drag_throttle()
     this._notify()
   }
 
@@ -318,6 +370,25 @@ export class CanvasView {
   set_on_change(cb: () => void): void { this._on_change = cb }
   private _notify(): void { this._on_change?.() }
 
+  // Leading+trailing throttle for drag-driven notify() (#7): pointermove fires at 60-120+ Hz, and
+  // each notify() triggers app.ts's full _refresh_async (prepare_current_view + 6 panel
+  // .refresh() calls), not just a repaint. Fires immediately on the first call in a burst, then
+  // at most once per DRAG_THROTTLE_MS; the trailing call guarantees the last position during a
+  // fast drag still lands, not just whatever position happened to align with a throttle tick.
+  private _notify_throttled(): void {
+    if (this._drag_notify_timer !== null) { this._drag_notify_pending = true; return }
+    this._notify()
+    this._drag_notify_timer = setTimeout(() => {
+      this._drag_notify_timer = null
+      if (this._drag_notify_pending) { this._drag_notify_pending = false; this._notify() }
+    }, DRAG_THROTTLE_MS)
+  }
+
+  private _flush_drag_throttle(): void {
+    if (this._drag_notify_timer !== null) { clearTimeout(this._drag_notify_timer); this._drag_notify_timer = null }
+    this._drag_notify_pending = false
+  }
+
   private _resize(): void {
     // Report the canvas' new physical-px-per-page-unit ratio so NORMAL-mode preview can
     // re-render sharp instead of upscaling a fixed-DPI bitmap (spec-web §2). Uses the last-painted
@@ -335,6 +406,7 @@ export class CanvasView {
   destroy(): void {
     this._ro.disconnect()
     if (this._resize_timer !== null) clearTimeout(this._resize_timer)
+    this._flush_drag_throttle()
     window.removeEventListener('keydown', this._on_key)
   }
 }
