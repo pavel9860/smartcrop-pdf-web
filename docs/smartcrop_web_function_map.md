@@ -174,8 +174,6 @@ Called by `crop_panel.ts`: Auto-detect button (`dispatch_job`), Crop button (`di
 | Method | Line | Notes |
 |---|---|---|
 | `set_anchor(left,top)` | 503 | either arg `null` = leave unchanged |
-| `set_offset(edge,value)` | 508 | history.push per call; clamps to `±OFFSET_LIMIT` |
-| `commit_offsets()` | 521 | snaps out-of-range offsets to page-limit (spec-web §4.6); recomputes offsets from the resulting rect |
 | `set_keep_ratio(on,ratio?)` | 544 | explicit `ratio` wins; else off→on populates from `_default_ratio()` — comment flags a real prior bug (dead-code branch from checking `_keep_ratio` **after** mutating it) |
 | `_default_ratio()` private | 561 | precedence: `crop_rects[0]` (split>1) → `_drawn` (split=1) → `_union` → current page aspect → `1.0` |
 | `set_split(n)` | 578 | no-op if unchanged; clears `applied` + `drawn` + `manual_offsets_on` (committed crops and the manual-offsets window both belong to the old layout); reseeds `crop_rects` via `split_rects_grid`; re-derives ratio if keep-ratio is on (does NOT carry the old ratio proportionally — deliberate, spec-web §6.7) |

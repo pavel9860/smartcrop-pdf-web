@@ -286,14 +286,6 @@ describe('detect_content / apply_crop', () => {
     expect(() => model.detect_content()).toThrow(EmptySelectionError)
   })
 
-  it('set_offset clamps to +/-OFFSET_LIMIT and commit_offsets is a no-op with no detection', async () => {
-    const model = await loaded_model()
-    model.set_offset('L', 9999)
-    expect(model.offsets.left).toBeLessThanOrEqual(100)
-    model.commit_offsets()   // no detect_cache/union yet — must not throw
-    expect(model.offsets.left).toBeLessThanOrEqual(100)
-  })
-
   it('set_keep_ratio(true) with no union defaults to the PAGE aspect ratio (bug E)', async () => {
     const model = await loaded_model({ page_w: 200, page_h: 400 })
     model.set_keep_ratio(true)
@@ -626,26 +618,6 @@ describe('undo / redo', () => {
     expect(model.document.applied.size).toBe(2)
     expect(model.document.applied.get(0)).toEqual([{ x0: 10, y0: 10, x1: 150, y1: 250 }])
     expect(model.document.applied.get(1)).toEqual([{ x0: 10, y0: 10, x1: 150, y1: 250 }])
-  })
-
-  it('set_offset + commit_offsets in one dispatch is ONE undo step, not two', async () => {
-    // Offsets start at the default {0,0,0,0} both before AND after detect_content (detect never
-    // touches offsets), so a single stale snapshot would coincidentally look like a correct
-    // revert — chain two distinct edits to prove the checkpoint is real, not a no-op push.
-    const model = await loaded_model({ page_w: 200, page_h: 400 })
-    await model.detect_content().result()
-    const before = model.offsets
-    model.set_offset('L', 5)
-    model.commit_offsets()   // the crop_panel offset-field flow: set_offset then commit_offsets
-    expect(model.offsets).not.toEqual(before)
-    model.undo()   // one Ctrl+Z reaches the pre-edit state directly — not an intermediate one
-    expect(model.offsets).toEqual(before)
-  })
-
-  it('commit_offsets alone (no preceding set_offset) still applies, just not undoable on its own', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 400 })
-    await model.detect_content().result()
-    expect(() => { model.commit_offsets() }).not.toThrow()
   })
 
   it('a completed auto-drag resize is undoable one drag at a time (C1)', async () => {

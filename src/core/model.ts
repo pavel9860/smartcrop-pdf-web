@@ -149,6 +149,7 @@ export class AppModel {
       ...page_ctx,
       ...detection_accessors,
       has_document: (): boolean => this._doc !== null,
+      set_auto_active: (on: boolean): void => { this._auto_active = on },
       drawn: (): Box | null => this._drawn,
       set_drawn,
     })
@@ -324,7 +325,7 @@ export class AppModel {
 
   get can_apply(): boolean {
     if (!this.has_document) return false
-    if (this._crop.split_count === 1) return true
+    if (this._crop.split_count === 1) return this._crop.has_crop_source()
     return this.document.crop_rects.length === this._crop.split_count
   }
 
@@ -364,8 +365,6 @@ export class AppModel {
   // (spec-web §6.5/§6.6), are owned by CropController (§18) — these are 1-line delegations so
   // ui/ keeps calling AppModel's public surface unchanged.
   set_anchor(left: boolean | null, top: boolean | null): void { this._crop.set_anchor(left, top) }
-  set_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_offset(edge, value) }
-  commit_offsets(): void { this._crop.commit_offsets() }
   set_manual_offsets_on(on: boolean): void { this._crop.set_manual_offsets_on(on) }
   set_manual_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_manual_offset(edge, value) }
   set_keep_ratio(on: boolean, ratio?: number): void { this._crop.set_keep_ratio(on, ratio) }

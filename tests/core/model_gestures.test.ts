@@ -362,13 +362,6 @@ describe('draw with keep-ratio + misc', () => {
     expect(m.ratio).toBeCloseTo(1.75, 5)
   })
 
-  it('set_offset writes each edge', async () => {
-    const m = await loaded()
-    m.set_offset('L', 5); m.set_offset('T', 6)
-    expect(m.offsets.left).toBeCloseTo(5, 5)
-    expect(m.offsets.top).toBeCloseTo(6, 5)
-  })
-
   it('set_filter_strength throws EmptySelectionError on an empty selection (M4)', async () => {
     const m = await loaded(4, Mode.SCANNED)
     m.set_select_pattern('999'); m.set_pages_mode(PagesMode.SELECT)

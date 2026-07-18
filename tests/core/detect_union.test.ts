@@ -219,11 +219,11 @@ describe('settings.detect_outlier_pages routes into the union (spec-web §5, #11
     expect(model.union).toEqual({ x0: 0, y0: 0, x1: 180, y1: 100 })
   })
 
-  it('defaults to 2, not Off (bug #4)', () => {
+  it('defaults to 5, not Off (bug #4)', () => {
     const model = new AppModel(make_adapter([{ width: 100, height: 100 }], [
       { x0: 0, y0: 0, x1: 10, y1: 10 },
     ]).adapter)
-    expect(model.detect_outlier_pages).toBe(2)
+    expect(model.detect_outlier_pages).toBe(5)
   })
 
   it('set_detect_outlier_pages clamps to a non-negative integer', () => {

@@ -281,7 +281,7 @@ re-applied identically whenever the union is rebuilt after a rotate or a delete 
 cached (non-undoable AppModel state — §13).
 
 **Outlier tolerance**: Settings → Behaviour → "Ignore N outlier pages"
-(`DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]`, default 2). When N > 0, `W`/`H` are each the
+(`DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]`, default 5). When N > 0, `W`/`H` are each the
 `(N+1)`-th *largest* per-page width/height — sorted independently, so the page contributing `W`
 need not be the same page contributing `H` — instead of always the maximum; `gL`/`gT` (the min
 corner) are unaffected. This lets a handful of oversized pages (e.g. a few fold-out or
@@ -718,7 +718,7 @@ Output
 Behaviour
   Remember last folder     [ on  ]
   Undo / redo depth        [ 2   v ]           preset dropdown, [1,2,4,8]
-  Ignore N outlier pages   [ 2   v ]           preset dropdown, [0,1,2,5,10], default 2 (auto-crop sizing, §5)
+  Ignore N outlier pages   [ 5   v ]           preset dropdown, [0,1,2,5,10], default 5 (auto-crop sizing, §5)
 Scan
   Dewarp supersample       [ 2.0 ]             quality lever for dewarp (§7.1); 1.0 = off
 ```
@@ -836,7 +836,7 @@ DEFAULT_COMPRESS_PRESET = "Original resolution"   DEFAULT_OUTPUT_COLOURS = "Orig
 DEFAULT_EXPORT_FORMAT = "PDF"    DEFAULT_OUTPUT_POSTFIX = "_cropped"
 DEFAULT_UNDO_DEPTH = 2    UNDO_DEPTH_OPTIONS = [1,2,4,8]    UNDO_DEPTH_MIN/MAX = 1 / 50
 DEFAULT_DEWARP_SUPERSAMPLE = 2.0
-DEFAULT_DETECT_OUTLIER = 0    DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]
+DEFAULT_DETECT_OUTLIER = 5    DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]
 # dewarp model (pstwh/docuwarp, two-stage ONNX)
 DEWARP_MODEL_W/H = 488 / 712   (fixed CNN input size, not tunable)
 ```
@@ -894,8 +894,9 @@ yes/no confirm dialog, single OK button), never a silent failure and never an au
 | `ArrowLeft`/`ArrowRight`, `PageUp`/`PageDown`, mouse wheel over canvas | Prev/Next page |
 | `Ctrl +`/`Ctrl -`/`Ctrl 0` | Zoom UI / reset (shares state with the Settings dropdown) |
 | `Enter` in the page box | Jump to page |
+| `Delete` | Delete the Pages selection (same confirm as the Delete button) |
 | `Esc` / right-click during a drag | Cancel drag |
-| `Esc` (not during a drag) | Closes the detail panel if open, else drops the current live crop window (§6.3) |
+| `Esc` (not during a drag) | Drops the current live crop window (§6.3) |
 
 ---
 

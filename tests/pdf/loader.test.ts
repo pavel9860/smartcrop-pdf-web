@@ -16,6 +16,7 @@ vi.mock('pdfjs-dist', () => ({
     constructPath: 1, fill: 2, eoFill: 3, fillStroke: 4, eoFillStroke: 5,
     stroke: 6, closeStroke: 7, closeFillStroke: 8, closeEOFillStroke: 9, shadingFill: 10,
   },
+  Util: { transform: (_vp: number[], it: number[]): number[] => it },   // identity passthrough
   getDocument: () => ({
     promise: shared.pdfQueue.length
       ? Promise.resolve(shared.pdfQueue.shift())
@@ -181,5 +182,33 @@ describe('render_output_image sizing (C2, spec-web §W2 row 8)', () => {
     await a.render_output_image(src, box, 200, 300, null, true)
     await a.render_output_image(src, box, 200, 300, null, false)
     expect(seen).toEqual(['grayscale(1)'])
+  })
+})
+
+describe('detect_text_box whitespace trim (ghost-width fix, spec-web §5)', () => {
+  it('excludes a trailing fill-run\'s advance width, not just fully-blank items', async () => {
+    // "word" (visible) + 5 trailing fill spaces (e.g. justified-text word-spacing) — the full
+    // 9-character run's advance width must not all count toward the box; only the visible span.
+    const str = 'word     '
+    const full_width = 90
+    const left = 10
+    const font_h = 12
+    const page = {
+      getViewport: ({ scale }: { scale: number }) =>
+        ({ width: 200, height: 300, scale, transform: [1, 0, 0, 1, 0, 0] }),
+      getTextContent: () => Promise.resolve({
+        items: [{ str, transform: [1, 0, 0, font_h, left, font_h], width: full_width }],
+      }),
+      cleanup: () => { /* no-op */ },
+    }
+    shared.pdfQueue = [{
+      numPages: 1, destroy: vi.fn(() => Promise.resolve()), getPage: vi.fn(() => Promise.resolve(page)),
+    }]
+    const a = new PdfRendererAdapter()
+    await a.load_files([pdf_file('a.pdf')])
+    const box = await a.detect_text_box(0)
+    expect(box).not.toBeNull()
+    expect(box!.x1).toBeCloseTo(left + full_width * (4 / 9), 5)   // trimmed to "word"'s share only
+    expect(box!.x1).toBeLessThan(left + full_width)               // must not include the fill run
   })
 })

@@ -48,10 +48,12 @@ test('primary controls are present', async ({ page }) => {
   }
 })
 
-test('Settings detail panel opens and Esc closes it', async ({ page }) => {
+test('Settings detail panel opens and closes on toggle (Esc no longer closes it, spec-web §20)', async ({ page }) => {
   await page.click('[data-id="settings"]')
   await expect(page.locator('#sv-undo')).toBeVisible()   // a Settings control is now shown
   await page.keyboard.press('Escape')
+  await expect(page.locator('#sv-undo')).toBeVisible()   // Esc drops the crop window instead, not this
+  await page.click('[data-id="settings"]')
   await expect(page.locator('#sv-undo')).toBeHidden()
 })
 
@@ -84,7 +86,7 @@ test('opening/closing Settings or Help reflows the canvas right by the sidebar w
   expect(box_open.x).toBeCloseTo(box_before!.x + sidebar_box.width, 0)   // pushed right by the panel
   expect(box_open.width).toBeCloseTo(box_before!.width - sidebar_box.width, 0)
 
-  await page.keyboard.press('Escape')
+  await page.click('[data-id="settings"]')   // toggle closed — Esc no longer closes the panel (spec-web §20)
   await expect(panel).not.toHaveClass(/open/)
   await settle()
   expect(await canvas.boundingBox()).toEqual(box_before)   // back to the original position/size

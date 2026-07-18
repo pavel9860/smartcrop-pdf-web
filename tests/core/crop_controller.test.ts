@@ -19,6 +19,7 @@ function ctx(overrides: Partial<CropContext> = {}): { doc: DocumentState; ctx: C
     detected: () => null,
     union: () => null,
     auto_active: () => false,
+    set_auto_active: () => {},
     drawn: () => null,
     set_drawn: () => {},
     ...overrides,
@@ -42,28 +43,6 @@ describe('CropController anchors/offsets', () => {
     expect(c.anchor_top).toBe(false)
   })
 
-  it('set_offset clamps to +/-OFFSET_LIMIT and writes only the targeted edge', () => {
-    const { c, doc } = controller()
-    c.set_offset('L', 9999)
-    expect(doc.offsets.left).toBeLessThan(9999)
-    expect(doc.offsets.top).toBe(0)
-  })
-
-  it('commit_offsets is a no-op without both a detected box and a union', () => {
-    const { c, doc } = controller()
-    const before = doc.offsets
-    c.commit_offsets()
-    expect(doc.offsets).toEqual(before)
-  })
-
-  it('commit_offsets recomputes offsets from the live auto-crop rect when detection exists', () => {
-    const detected: Box = { x0: 20, y0: 20, x1: 180, y1: 280 }
-    const union: Box = { x0: 20, y0: 20, x1: 180, y1: 280 }
-    const { c, doc } = controller({ detected: () => detected, union: () => union })
-    c.commit_offsets()
-    expect(doc.offsets.left).toBeCloseTo(0)
-    expect(doc.offsets.top).toBeCloseTo(0)
-  })
 })
 
 describe('CropController manual offsets (spec-web §4.6, replaces the old Advanced accordion)', () => {
@@ -108,6 +87,14 @@ describe('CropController manual offsets (spec-web §4.6, replaces the old Advanc
     c.update_drag(50, 50)
     c.end_drag()
     expect(drawn()).toEqual(before)   // untouched — begin_drag was a no-op
+  })
+
+  it('Esc/right-click (no drag in progress) does not drop the manual window either', () => {
+    const { c, drawn } = manual_controller()
+    c.set_manual_offsets_on(true)
+    const before = drawn()
+    c.cancel_drag()
+    expect(drawn()).toEqual(before)   // untouched — same guard as click-outside
   })
 
   it('a handle-drag still resizes the manual window', () => {
@@ -217,10 +204,28 @@ describe('CropController drag gestures', () => {
   })
 
   it('cancel_drag with no active drag drops a pending drawn window (Esc, bug 5)', () => {
+    const box: Box = { x0: 10, y0: 10, x1: 90, y1: 90 }
     const drawn_calls: (Box | null)[] = []
-    const { c } = controller({ set_drawn: (b) => { drawn_calls.push(b) } })
+    const { c } = controller({ drawn: () => box, set_drawn: (b) => { drawn_calls.push(b) } })
     c.cancel_drag()
     expect(drawn_calls).toEqual([null])
+  })
+
+  it('cancel_drag with no drawn window and no active drag deactivates the auto-detect frame '
+    + 'instead (Esc/right-click, spec-web §6.2)', () => {
+    let active = true
+    const { c } = controller({
+      drawn: () => null, auto_active: () => active, set_auto_active: (on) => { active = on },
+    })
+    c.cancel_drag()
+    expect(active).toBe(false)
+  })
+
+  it('cancel_drag is a no-op when there is neither a drawn window nor an active auto-detect', () => {
+    const drawn_calls: (Box | null)[] = []
+    const { c } = controller({ set_drawn: (b) => { drawn_calls.push(b) } })
+    expect(() => { c.cancel_drag() }).not.toThrow()
+    expect(drawn_calls).toEqual([])
   })
 
   it('cancel_drag on a split resize restores every window from rects0', () => {

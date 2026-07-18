@@ -1,6 +1,6 @@
 // AppModel remaining branch coverage: export box variants + failure, suggested names,
 // prepare_current_view (scanned + committed prerender), rotate/delete after detect,
-// commit_offsets with anchors off, re-detect refresh, gesture misses. Public interface only.
+// re-detect refresh, gesture misses. Public interface only.
 import { describe, it, expect } from 'vitest'
 import { AppModel } from '@core/model'
 import { Mode, PagesMode } from '@core/enums'
@@ -146,17 +146,7 @@ describe('rotate / delete after detect', () => {
   })
 })
 
-describe('commit_offsets / re-detect', () => {
-  it('commit_offsets uses the union base when anchors are off', async () => {
-    const m = await loaded(4, Mode.NORMAL, 200, 300)
-    m.set_pages_mode(PagesMode.ALL)
-    await m.detect_content().result()
-    m.set_anchor(false, false)
-    m.set_offset('R', 10)
-    m.commit_offsets()
-    expect(m.offsets).toBeDefined()
-  })
-
+describe('re-detect', () => {
   it('re-detect refreshes an existing committed crop', async () => {
     const m = await loaded(3)
     await m.detect_content().result()

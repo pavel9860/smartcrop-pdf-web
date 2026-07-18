@@ -57,10 +57,11 @@ const SECTIONS: readonly HelpSection[] = [
     body: "Anchor Left and Anchor Top (in the Detect card) pin that edge of the shared crop "
       + "to each page's own content rather than the union of all pages. "
       + 'Useful when margins differ across pages. At least one anchor must stay on.\n\n'
-      + 'The Advanced card has four offset fields (L T R B). '
-      + 'Each nudges one edge by a percentage of the page size. '
-      + 'Positive values shrink the crop; negative values expand it. '
-      + 'Out-of-range values snap to the page border automatically.\n\n'
+      + 'Set offsets manual (in the Detect card) seeds a crop window at a fixed margin and shows '
+      + 'four offset fields (L T R B), each nudging one edge by a percentage of the page size — '
+      + 'positive shrinks the crop, negative expands it, and out-of-range values snap to the page '
+      + 'border automatically. While it\'s on, Auto-detect and dropping/redrawing the window are '
+      + 'disabled; only the fields and the window\'s own handles can change it.\n\n'
       + "If a few pages have unusually large content (e.g. a fold-out), Settings → "
       + '"Ignore N outlier pages" excludes that many of the largest pages when sizing the shared '
       + 'crop, so they stop inflating the crop on every other page. Defaults to 2.',
@@ -127,9 +128,6 @@ const SECTIONS: readonly HelpSection[] = [
     id: 'history', title: 'Undo, Redo, Reset',
     body: 'Undo and Redo step through crop, rotation, and scan-processing history. '
       + 'The depth (how many steps are kept) is set in Settings.\n\n'
-      + "Auto-detect and an in-progress drawn rectangle aren't part of that history on their own "
-      + "— Undo right after Auto-detect, before you press Crop, does nothing, since nothing has "
-      + 'actually been committed yet.\n\n'
       + 'Reset clears everything — crops, rotation, processing, and history — '
       + 'and reloads the document. It cannot be undone.',
   },
@@ -139,8 +137,10 @@ const SECTIONS: readonly HelpSection[] = [
       + 'Ctrl 0 to reset).\n\n'
       + 'Output: postfix appended to the exported file name; Custom DPI and Paper size — shared '
       + 'with the sidebar Output Quality card, so either control always reflects the other.\n\n'
-      + 'Behaviour: remember the last-used folder; Enable offline mode (see About, below); '
-      + 'Undo/redo depth; Ignore N outlier pages (§6 above).\n\n'
+      + 'Behaviour: remember the last-used folder; Enable offline mode — off by default, turn it on '
+      + 'to make every feature, including scanned-mode dewarp and filters, work offline right away '
+      + 'instead of only after first use (downloads more up front); Undo/redo depth; '
+      + 'Ignore N outlier pages (§6 above).\n\n'
       + 'Scan: Dewarp supersample — renders a scanned page larger before straightening it, '
       + 'trading time for a sharper result.',
   },
@@ -157,15 +157,15 @@ const SECTIONS: readonly HelpSection[] = [
       + 'Enter in page box — Jump to that page\n'
       + 'Ctrl + / − — Scale the UI\n'
       + 'Ctrl 0 — Reset UI scale\n'
-      + 'Esc or right-click — Cancel drag',
+      + 'Delete — Delete the selected pages\n'
+      + 'Esc or right-click — Cancel drag, or drop the current crop window',
   },
   {
     id: 'about', title: 'About',
     body: 'SmartCrop PDF — Web Edition. All processing runs in your browser; no files are uploaded. '
       + 'No install needed — the app works offline after being loaded once, for whichever features '
-      + 'you\'ve already used. Turn on Settings → "Enable offline mode" to make every feature, '
-      + 'including scanned-mode dewarp and filters, work offline right away instead of only after '
-      + 'first use — off by default since it downloads more up front.',
+      + 'you\'ve already used (see Settings, below, for making every feature available offline '
+      + 'right away).',
   },
 ]
 

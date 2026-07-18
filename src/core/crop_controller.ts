@@ -32,6 +32,7 @@ export interface CropContext {
   detected(p: number): Box | null
   union(): Box | null
   auto_active(): boolean
+  set_auto_active(on: boolean): void
   drawn(): Box | null
   set_drawn(box: Box | null): void
 }
@@ -155,50 +156,18 @@ export class CropController {
     return null
   }
 
+  // Whether Crop has anything to commit at split = 1: a drawn/manual window, or an active,
+  // anchored auto-crop — same condition compute_crop_boxes_for_page falls back to null on, without
+  // needing a page (both sources are global, not per-page).
+  has_crop_source(): boolean {
+    if (this._ctx.drawn()) return true
+    return this._ctx.union() !== null && this._ctx.auto_active()
+      && (this._anchor_left || this._anchor_top)
+  }
+
   set_anchor(left: boolean | null, top: boolean | null): void {
     if (left !== null) this._anchor_left = left
     if (top  !== null) this._anchor_top  = top
-  }
-
-  set_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void {
-    this._history.push(this._ctx.document())
-    const doc = this._ctx.document()
-    const o = doc.offsets
-    const clamped = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, value))
-    doc.offsets = {
-      left:   edge === 'L' ? clamped : o.left,
-      top:    edge === 'T' ? clamped : o.top,
-      right:  edge === 'R' ? clamped : o.right,
-      bottom: edge === 'B' ? clamped : o.bottom,
-    }
-  }
-
-  // Snaps out-of-range offsets to the page limit. Does NOT push its own history checkpoint: its
-  // one real caller, crop_panel's offset-field blur/Enter handler, always calls set_offset() first
-  // in the same dispatch, which already pushed the pre-edit checkpoint — this adjustment folds into
-  // that same undo step instead of forcing a second Ctrl+Z to reach the state before the field was
-  // edited. If a future caller ever needs to call commit_offsets() on its own (no preceding
-  // set_offset in the same dispatch), it must push its own checkpoint first.
-  commit_offsets(): void {
-    if (!this._ctx.has_document()) return
-    const p = this._ctx.current_page()
-    const sz = this._ctx.page_dims(p)
-    const detected = this._ctx.detected(p)
-    const union    = this._ctx.union()
-    if (!detected || !union) return
-
-    const rect = auto_crop_rect(detected, union, this._ctx.document().offsets,
-      sz.width, sz.height, this._anchor_left, this._anchor_top)
-
-    const base_left = this._anchor_left ? detected.x0 : union.x0
-    const base_top  = this._anchor_top  ? detected.y0 : union.y0
-    const W = box_width(union), H = box_height(union)
-    this._ctx.document().offsets = {
-      left:   (base_left - rect.x0) / sz.width  * 100,
-      top:    (base_top  - rect.y0) / sz.height * 100,
-      right:  (rect.x1 - (base_left + W)) / sz.width  * 100,
-      bottom: (rect.y1 - (base_top  + H)) / sz.height * 100,
-    }
   }
 
   set_keep_ratio(on: boolean, ratio?: number): void {
@@ -499,7 +468,14 @@ export class CropController {
     this._draw_rect = null
 
     if (!drag) {
-      this._ctx.set_drawn(null)   // Esc / right-click drops the pending drawn window (bug 5)
+      // Manual-offsets mode disables dropping/redrawing the window entirely (spec-web §4.6) —
+      // same guard as begin_drag's click-outside case.
+      if (this._manual_offsets_on) return
+      // Esc / right-click drops the drawn window if one exists (bug 5); else deactivates the
+      // auto-detect frame instead (spec-web §6.2) — its cached result survives and re-activates
+      // on the next Auto-detect press.
+      if (this._ctx.drawn() !== null) { this._ctx.set_drawn(null); return }
+      if (this._ctx.auto_active()) this._ctx.set_auto_active(false)
       return
     }
 

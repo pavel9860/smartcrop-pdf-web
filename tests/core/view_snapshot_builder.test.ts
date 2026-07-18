@@ -47,6 +47,7 @@ function setup(page_count = 2): {
     detected: (p) => detected.get(p) ?? null,
     union: () => union.v,
     auto_active: () => auto_active.v,
+    set_auto_active: (on) => { auto_active.v = on },
     drawn: () => drawn.v,
     set_drawn: (b) => { drawn.v = b },
   }

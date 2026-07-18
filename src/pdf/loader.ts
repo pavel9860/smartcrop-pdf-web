@@ -312,14 +312,24 @@ export class PdfRendererAdapter implements RendererAdapter {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
     let found = false
     for (const item of text.items) {
-      if (!('str' in item) || item.str.trim() === '') continue
+      if (!('str' in item)) continue
+      const trimmed = item.str.trim()
+      if (trimmed === '') continue
       // pdf.js types transform/Util.transform loosely; narrow to the numeric shape we use.
       const it = item as unknown as { transform: number[]; width: number }
       const tx = pdfjs.Util.transform(vp.transform, it.transform) as number[]
       const font_h = Math.hypot(tx[2] ?? 0, tx[3] ?? 0)
-      const left   = tx[4] ?? 0
+      // Trailing/leading whitespace inside an otherwise non-blank run (e.g. justified-text word
+      // spacing stretched to fill the line) still carries the item's full advance width, pushing
+      // the box past the visible glyphs. Scale the run down to its trimmed character-length share
+      // — pdf.js's TextItem has no per-character widths, so this is an approximation, but it stops
+      // whole fill-runs from dominating the box.
+      const lead_ratio  = item.str.indexOf(trimmed) / item.str.length
+      const trail_ratio = (item.str.length - item.str.indexOf(trimmed) - trimmed.length) / item.str.length
+      const full_width  = it.width * vp.scale
+      const width  = full_width * (1 - lead_ratio - trail_ratio)
+      const left   = (tx[4] ?? 0) + full_width * lead_ratio
       const top    = (tx[5] ?? 0) - font_h
-      const width  = it.width * vp.scale
       x0 = Math.min(x0, left);          y0 = Math.min(y0, top)
       x1 = Math.max(x1, left + width);  y1 = Math.max(y1, top + font_h)
       found = true

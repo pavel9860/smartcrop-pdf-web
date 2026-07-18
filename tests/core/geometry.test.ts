@@ -8,6 +8,7 @@ import {
   MIN_RECT, type Box,
 } from '@core/geometry'
 import type { Offsets } from '@core/document_state'
+import { DEFAULT_DETECT_OUTLIER } from '@core/constants'
 
 const ZERO_OFFSETS: Offsets = { left: 0, top: 0, right: 0, bottom: 0 }
 const box = (x0: number, y0: number, x1: number, y1: number): Box => ({ x0, y0, x1, y1 })
@@ -201,6 +202,14 @@ describe('detection_union outlier tolerance (spec-web §5, #11)', () => {
     expect(u0.y0).toBe(5)
     expect(u1.x0).toBe(5)
     expect(u1.y0).toBe(5)
+  })
+
+  it('the default tolerance excludes a real-world 3-outlier-page cluster (ghost-width regression, '
+    + 'e.g. a bibliography/notes section with unbroken URLs widening 3 of 190 pages)', () => {
+    const normal = Array.from({ length: 187 }, () => box(50, 47, 562.7, 690))   // typical body page
+    const outliers = [box(50, 47, 615.6, 690), box(50, 47, 615.0, 690), box(50, 47, 612.6, 690)]
+    const u = detection_union([...normal, ...outliers], DEFAULT_DETECT_OUTLIER)
+    expect(box_width(u)).toBeCloseTo(512.7, 1)   // the normal pages' width, not an outlier's
   })
 })
 

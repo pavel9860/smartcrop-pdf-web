@@ -401,9 +401,14 @@ export class AppController {
   // ---------------------------------------------------------------------------
 
   private _on_shortcut = (ev: KeyboardEvent): void => {
-    // Esc closes the detail panel (spec-web §20). Handled before the Ctrl gate since Esc carries
-    // no modifier. Drag-cancel Esc is handled separately in canvas_view against the canvas element.
-    if (ev.key === 'Escape') { this._close_detail(); return }
+    // Delete/Backspace deletes the Pages selection, mirroring crop_panel's Delete button — skip
+    // when a text input has focus so Backspace still edits the page-jump box normally.
+    if ((ev.key === 'Delete' || ev.key === 'Backspace')
+      && !(ev.target instanceof HTMLInputElement || ev.target instanceof HTMLTextAreaElement)) {
+      ev.preventDefault()
+      this._delete_selected_pages()
+      return
+    }
     const ctrl = ev.ctrlKey || ev.metaKey
     if (!ctrl) return
     switch (ev.key) {
@@ -421,6 +426,18 @@ export class AppController {
   private _trigger_export(): void {
     const name = this._model.suggested_export_name()
     this.dispatch_job(() => this._model.export(name))
+  }
+
+  // Same guard/confirm/dispatch as crop_panel's Delete button — reused by the Delete/Backspace
+  // keyboard shortcut.
+  private _delete_selected_pages(): void {
+    if (this._model.resolve_pages().length >= this._model.page_count()) {
+      void this.alert('Cannot delete all pages.', 'info')
+      return
+    }
+    void this.confirm('Delete selected pages?', 'Delete').then(ok => {
+      if (ok) this.dispatch(() => { this._model.delete_pages() })
+    })
   }
 
   destroy(): void {

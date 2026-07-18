@@ -120,23 +120,6 @@ describe('anchors / offsets edges', () => {
     expect(m.can_detect).toBe(true)
   })
 
-  it('offset edits commit onto an active detection union', async () => {
-    const m = await loaded(4, Mode.NORMAL, 200, 300)
-    await m.detect_content().result()
-    m.set_offset('R', 15)
-    m.set_offset('B', 5)
-    m.commit_offsets()
-    expect(m.offsets.right).toBeGreaterThan(0)
-    expect(m.offsets.right).toBeLessThanOrEqual(15)
-  })
-
-  it('every offset edge clamps to +/-OFFSET_LIMIT', async () => {
-    const m = await loaded()
-    for (const e of ['L', 'T', 'R', 'B'] as const) {
-      m.set_offset(e, 100000)
-      expect(Math.abs(m.offsets[({ L: 'left', T: 'top', R: 'right', B: 'bottom' } as const)[e]])).toBeLessThanOrEqual(1000)
-    }
-  })
 })
 
 describe('scan processing edges', () => {
