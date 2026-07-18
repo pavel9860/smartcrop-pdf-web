@@ -4,7 +4,7 @@
 // 2. The union rebuilds after rotate/delete must keep the FULL_PAGE_FRAC exclusion and
 //    judge each box against its OWN page's post-reindex dimensions.
 import { describe, it, expect } from 'vitest'
-import { AppModel, type RendererAdapter, type DocInfo, type PageSize } from '@core/model'
+import { AppModel, type RendererAdapter, type DocInfo, type PageSize, type OutputPage } from '@core/model'
 import { Mode, PagesMode } from '@core/enums'
 import type { Box } from '@core/geometry'
 
@@ -304,5 +304,27 @@ describe('a page with no detected content still gets cropped, centered (bug #8/#
     model.apply_crop()
 
     expect(model.document.applied.has(1)).toBe(false)
+  })
+})
+
+describe('export never applies an uncommitted crop (spec-web §10.6)', () => {
+  it('an active but uncommitted auto-crop still exports the full page, not the detected box', async () => {
+    const sizes = [{ width: 200, height: 300 }]
+    const { adapter } = make_adapter(sizes, [{ x0: 20, y0: 20, x1: 120, y1: 280 }])
+    let exported: OutputPage[] = []
+    const with_capture: RendererAdapter = {
+      ...adapter,
+      export_pdf: (pages): Promise<Uint8Array> => { exported = pages; return Promise.resolve(new Uint8Array()) },
+    }
+    const model = new AppModel(with_capture)
+    await model.load_files([FILE()])
+    await model.detect_content().result()
+    expect(model.union).not.toBeNull()   // a live auto-crop genuinely exists, nothing committed
+
+    await model.export('out.pdf').result()
+
+    expect(exported).toHaveLength(1)
+    expect(exported[0]!.bitmap.width).toBe(200)    // full page, not the detected box's 100
+    expect(exported[0]!.bitmap.height).toBe(300)   // full page, not the detected box's 260
   })
 })

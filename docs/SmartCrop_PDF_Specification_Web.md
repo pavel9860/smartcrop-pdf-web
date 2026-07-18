@@ -632,12 +632,15 @@ spans both phases for image formats: render advances the first
 half, per-page encode the second, so it does not complete then hang during zip encoding. Export
 yields to the event loop between pages so the bar actually animates.
 
-### 10.6 A visible crop is never dropped from the file
+### 10.6 Only a committed crop affects the exported file
 
-On export each page's box is: the committed box if committed, else the drawn window, else its live
-auto crop when active, else the whole page. Export first commits the drawn/live crop of any
-uncommitted selected page; with Split active it (re)commits the selection's N rectangles regardless
-of earlier single-crop state.
+On export each page's box is: the committed box if committed, else the whole page — never a live
+auto crop or a drawn/manual window that hasn't been applied. Export never implicitly commits
+anything; a crop frame that's merely visible on screen (previewed, not yet applied via Crop/Split &
+Crop) exports as the full, uncropped page. This was previously inconsistent — the live auto-crop
+case alone silently applied itself on export while a drawn/manual window or an unapplied split
+never did — the fix is to make every uncommitted case behave like the drawn/manual/split ones
+already did: nothing is exported that Crop didn't actually commit.
 
 ---
 
@@ -735,8 +738,9 @@ updates the other.
 ## 14. Help
 
 A section of the detail panel: a heading, a one-line description, then a Contents card (one button
-per section, clicking scrolls the body to it), then the section blocks in order, ending with an
-About block (app name, purpose). Content must describe actual current behavior — see §16 for the
+per section, clicking scrolls the body to it), then the section blocks in order: the numbered
+workflow steps, Undo/Settings/Keyboard shortcuts, an About block (app name, purpose), and finally
+Contacts (support email addresses). Content must describe actual current behavior — see §16 for the
 review pass that keeps it accurate.
 
 ---

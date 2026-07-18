@@ -186,7 +186,7 @@ input, select { font: inherit; }
   bottom: 8px;
   color: var(--text-primary);
   font-size: 0.9375rem;
-  text-shadow: 0 0 1px var(--bg-chrome);
+  text-shadow: 0 0 3px var(--bg-chrome);
   pointer-events: none;
   z-index: 2;
 }

@@ -31,7 +31,6 @@ export interface ExportContext {
   custom_dpi(): number
   paper_size(): string
   custom_paper_in(): number
-  live_auto_crop_for(p: number): Box | null
 }
 
 export class ExportService {
@@ -191,11 +190,11 @@ export class ExportService {
     return Math.round(dpi * height_in)
   }
 
+  // Only a committed crop (Crop/Split & Crop) affects the exported file — an active but
+  // uncommitted live auto-crop or drawn window is a preview only (spec-web §10.6).
   private _export_boxes_for_page(p: number, sz: PageSize): Box[] {
     const committed = this._ctx.document().applied.get(p)
     if (committed) return committed
-    const live = this._ctx.live_auto_crop_for(p)
-    if (live) return [live]
     return [{ x0: 0, y0: 0, x1: sz.width, y1: sz.height }]
   }
 }

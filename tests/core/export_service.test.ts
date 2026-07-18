@@ -47,7 +47,6 @@ function setup(opts: {
     custom_dpi: () => 300,
     paper_size: () => 'A4',
     custom_paper_in: () => 11.69,
-    live_auto_crop_for: () => null,
   }
   const svc = new ExportService(adapter, raster, idx, ctx)
   const pdf_bytes: Uint8Array[] = []

@@ -117,7 +117,8 @@ const SECTIONS: readonly HelpSection[] = [
     id: 'export', title: '12. Export',
     body: 'Press Export or Ctrl+S. '
       + 'Pages with a committed crop export exactly as shown on screen. '
-      + 'Pages without one export through the live auto-crop.\n\n'
+      + 'Pages without one export as the full, uncropped page — press Crop first if you want a '
+      + 'previewed crop to actually apply.\n\n'
       + 'PDF writes one file (a real vector PDF for a Normal document, §11 above). '
       + 'JPG, PNG and TIFF each write one .zip containing one file per output page. '
       + 'Use the arrow on the Export button to switch format.\n\n'
@@ -166,6 +167,11 @@ const SECTIONS: readonly HelpSection[] = [
       + 'No install needed — the app works offline after being loaded once, for whichever features '
       + 'you\'ve already used (see Settings, below, for making every feature available offline '
       + 'right away).',
+  },
+  {
+    id: 'contacts', title: 'Contacts',
+    body: 'Questions or feedback: hello@smartcroppdf.com\n'
+      + 'Something not working? support@smartcroppdf.com',
   },
 ]
 

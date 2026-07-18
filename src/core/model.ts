@@ -197,7 +197,6 @@ export class AppModel {
       custom_dpi: (): number => this.settings.custom_dpi,
       paper_size: (): string => this.settings.paper_size,
       custom_paper_in: (): number => this.settings.custom_paper_in,
-      live_auto_crop_for: (p): Box | null => this._view.live_auto_crop_for(p),
     })
     this._view = new ViewSnapshotBuilder(this._raster, this._crop, {
       ...page_ctx,
@@ -345,7 +344,6 @@ export class AppModel {
 
     this.history.push(this.document)
 
-    // Export also commits live auto-crop for uncommitted pages (spec-web §10.6)
     for (const p of pages) {
       if (this._crop.split_count === 1) {
         const boxes = this._crop.compute_crop_boxes_for_page(p)

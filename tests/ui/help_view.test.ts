@@ -40,4 +40,11 @@ describe('HelpView', () => {
     expect(text).toMatch(/outlier/i)
     expect(text).toMatch(/vector PDF/i)
   })
+
+  it('has a Contacts section with both support addresses', () => {
+    new HelpView(root)
+    const text = root.textContent
+    expect(text).toContain('hello@smartcroppdf.com')
+    expect(text).toContain('support@smartcroppdf.com')
+  })
 })

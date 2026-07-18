@@ -263,7 +263,7 @@ info dialog instead of ever opening the confirm dialog; otherwise confirms via `
 | `_run_export(job,filename)` private async (raster) | 1180 | `_render_export_pages` → `adapter.export_pdf` or `adapter.export_images`(+zip) → `_download_pdf`/`_download_zip` callback |
 | `_run_export_vector(job,filename)` private async | 1215 | builds `VectorExportPage[]` (current-frame box + rotation per page, via `_export_boxes_for_page`/`_page_dims`/`document.rotation`) → `adapter.export_pdf_vector(pages)` → `_download_pdf`. No `render_output_image`, no rasterization — box resolution is the only work done here, the adapter converts to the source's native frame itself. |
 | `_render_export_pages` private async | 1243 | per page: `_get_work(p)` → `_export_boxes_for_page` → `adapter.render_output_image` per box, yields to paint between pages |
-| `_export_boxes_for_page(p,sz)` private | 1277 | committed boxes → else live auto-crop → else full page; shared by both export runners |
+| `_export_boxes_for_page(p,sz)` private | 1277 | committed boxes → else full page (spec-web §10.6: an uncommitted live auto-crop/drawn window is a preview only); shared by both export runners |
 | `_yield_to_paint()` private | 1273 | `setTimeout(0)` — deliberately not `window`/`document` so `core/` stays platform-agnostic |
 | `set_download_handlers(pdf,zip)` | 1289 | wired once by `app.ts` at construction to actual `<a download>` blob logic |
 
@@ -293,7 +293,7 @@ Called every mutation by `app.ts::_refresh_async()`.
 | `_get_source(p)` async | 1383 | RAM-cached (`_source_cache`, LRU `CACHE_WINDOW`); real doc → `adapter.get_source_image`; synthetic → `adapter.make_synth_page`. Every raster is rendered here exactly once per (page,rotation) — detect, NORMAL view, and the SCANNED work pipeline all funnel through this. |
 | `_get_work(p)` async | 1398 | NORMAL mode: returns `src` directly, **not** re-cached in `_work_cache` (explicit double-close hazard comment — two close-on-evict caches holding the same bitmap would double-`close()` it). SCANNED + no-op intent: same short-circuit. SCANNED + real intent: disk-tier check (`_persisted_keys.has(key)`) → `adapter.get_work_image` → `_cache_work`. |
 | `_cache_work/_page_process_intent/_work_disk_key/_load_work_from_disk` | 1430/1435/1447/1454 | disk key = `g{gen}|{origpage}|d{0,1}|f{mode-strength}|r{rot}|s{supersample}` — namespaced so a settings change or new document can never read a stale/wrong raster |
-| `_live_auto_crop_for(p)` | 1460 | same math as `_build_overlay`'s auto branch, reused by `_export_boxes_for_page` |
+| `_live_auto_crop_for(p)` | 1460 | same math as `_build_overlay`'s auto branch (canvas preview only, spec-web §10.6) |
 
 ---
 
