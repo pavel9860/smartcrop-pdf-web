@@ -100,6 +100,9 @@ core/model.ts into a session.
   learned instead of patching again.
 - For a one-sentence change, skip planning overhead and edit directly; plan explicitly only for
   multi-file or unfamiliar-area changes.
+- Provide clean, working code block fixes. Do not rewrite unchanged lines unless necessary.
+- Omit inline comments unless specifically requested. Do not include explanatory comments.
+- Keep conversational output concise, prioritizing brief bullet summaries over text walls.
 - Commit after every gate-passing step, from a native filesystem session (see Environment
   constraints above) — paste the gate output in the commit body.
 
@@ -114,6 +117,7 @@ review loop these questions across the full codebase:
 - Every ImageBitmap/canvas resource not released (LRU eviction, export streaming, §17).
 
 ## Anti-patterns to catch (smell → fix)
+- Verbose comments or increasing LOC/LOD while refactoring/simplification.  
 - Legacy-driven decisions not tied to current need.
 - Over-complication: abstraction or config with no real requirement behind it.
 - Repetitive code, or a defensive check duplicated more than twice → extract one helper.
