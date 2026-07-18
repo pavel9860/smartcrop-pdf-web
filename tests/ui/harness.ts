@@ -21,6 +21,8 @@ export function make_adapter(page_count = 3, mode: Mode = Mode.NORMAL): Renderer
     }),
     get_source_image: () => Promise.resolve(make_bitmap(pw, ph)),
     get_work_image: () => Promise.resolve(make_bitmap(pw, ph)),
+    rotate_bitmap: (b, degrees) => Promise.resolve(
+      degrees % 180 === 90 ? make_bitmap(b.height, b.width) : make_bitmap(b.width, b.height)),
     render_output_image: (_s, box) => Promise.resolve(
       make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
     detect_content_box: (_i, w, h) => Promise.resolve({ x0: 20, y0: 20, x1: w - 20, y1: h - 20 }),

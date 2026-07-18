@@ -29,6 +29,7 @@ function make_adapter(pages: number): {
     }),
     get_source_image: () => Promise.resolve(make_bitmap()),
     get_work_image: (): Promise<ImageBitmap> => { get_work_calls.n++; return Promise.resolve(make_bitmap()) },
+    rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: () => Promise.resolve(make_bitmap()),
     detect_content_box: () => Promise.resolve({ x0: 20, y0: 20, x1: 120, y1: 280 }),
     export_pdf:    () => Promise.resolve(new Uint8Array()),

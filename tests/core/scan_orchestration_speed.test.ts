@@ -25,6 +25,7 @@ function make_adapter(pages: number): RendererAdapter {
     }),
     get_source_image: () => Promise.resolve(make_bitmap()),
     get_work_image:   () => Promise.resolve(make_bitmap()),
+    rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: () => Promise.resolve(make_bitmap()),
     detect_content_box: () => Promise.resolve({ x0: 20, y0: 20, x1: 120, y1: 280 }),
     export_pdf:    () => Promise.resolve(new Uint8Array()),
@@ -60,6 +61,7 @@ describe('scan orchestration overhead (spec-web §16)', () => {
     const adapter: RendererAdapter = {
       ...make_adapter(PAGES),
       get_work_image: () => { get_work_calls++; return Promise.resolve(make_bitmap()) },
+      rotate_bitmap: (b) => Promise.resolve(b),
     }
     const model = new AppModel(adapter)
     await model.load_files([FILE()])

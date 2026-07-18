@@ -36,9 +36,88 @@ async function is_native_page(page: pdfjs.PDFPageProxy): Promise<boolean> {
   return ops.fnArray.some(fn => VECTOR_OPS.has(fn))
 }
 
-// Rotate a rendered page raster 90° CW `angle` degrees (0/90/180/270), expanding the
-// canvas so the rotated content isn't clipped
-function rotate_bitmap_cw(bitmap: ImageBitmap, angle: number): ImageBitmap {
+// How far detect_text_box's edge-outlier check requires the widest/tallest item to lead the
+// runner-up before it's worth paying for an operator-list walk (page units, spec-web §5).
+const CLIP_OUTLIER_GAP = 20
+
+// True if any of a page's 4 content edges is set by a single item implausibly far past every
+// other item's — the ghost-width signature (see detect_text_box). Cheap: reuses the item boxes
+// already collected, no extra pdf.js calls.
+function has_outlier_edge(items: readonly Box[]): boolean {
+  const edge_gap = (values: number[]): number => {
+    values.sort((a, b) => b - a)
+    return values.length < 2 ? 0 : (values[0] ?? 0) - (values[1] ?? 0)
+  }
+  return edge_gap(items.map(b => b.x1)) > CLIP_OUTLIER_GAP
+    || edge_gap(items.map(b => -b.x0)) > CLIP_OUTLIER_GAP
+    || edge_gap(items.map(b => b.y1)) > CLIP_OUTLIER_GAP
+    || edge_gap(items.map(b => -b.y0)) > CLIP_OUTLIER_GAP
+}
+
+// Some PDF generators (e.g. calibre) wrap a page's text-drawing operators in a content-stream
+// clip (a page-wide "safe content area") — text overflowing it is invisibly cut off when
+// rendered, but getTextContent() doesn't know about clip paths at all and reports the un-clipped
+// geometry. Replays the operator list's CTM/clip stack (save/restore/transform/(eo)clip) to find
+// the clip active at each beginText, returning whichever clip covers the most of them (the one
+// real-world pattern this needs to handle: one dominant, page-wide clip established before the
+// bulk of the page's text and never narrowed again — not general per-run clip tracking). Returns
+// null if the page establishes no such clip, which is the common case.
+async function dominant_text_clip(
+  page: pdfjs.PDFPageProxy, vp: pdfjs.PageViewport,
+): Promise<Box | null> {
+  const OPS = pdfjs.OPS
+  const { fnArray, argsArray } = await page.getOperatorList()
+
+  let ctm: number[] = [1, 0, 0, 1, 0, 0]
+  const ctm_stack: number[][] = []
+  let clip: Box | null = null
+  const clip_stack: (Box | null)[] = []
+  let last_path_bbox: number[] | null = null
+  const votes = new Map<string, { box: Box; n: number }>()
+
+  const apply = (p: [number, number], m: number[]): [number, number] => {
+    const t = pdfjs.Util.applyTransform(p, m) as unknown as [number, number]
+    return t
+  }
+
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i]
+    const args = argsArray[i] as unknown
+    if (fn === OPS.save) { ctm_stack.push(ctm); clip_stack.push(clip) }
+    else if (fn === OPS.restore) { ctm = ctm_stack.pop() ?? ctm; clip = clip_stack.pop() ?? null }
+    else if (fn === OPS.transform) { ctm = pdfjs.Util.transform(ctm, args) as number[] }
+    else if (fn === OPS.constructPath) {
+      const bbox = (args as [unknown, unknown, number[]])[2]
+      last_path_bbox = bbox.every(Number.isFinite) ? bbox : null
+    } else if ((fn === OPS.clip || fn === OPS.eoClip) && last_path_bbox) {
+      const full = pdfjs.Util.transform(vp.transform, ctm) as number[]
+      const [px0, py0, px1, py1] = last_path_bbox as [number, number, number, number]
+      const path_corners: [number, number][] = [[px0, py0], [px1, py0], [px0, py1], [px1, py1]]
+      const corners = path_corners.map(p => apply(p, full))
+      const rect: Box = {
+        x0: Math.min(...corners.map(c => c[0])), y0: Math.min(...corners.map(c => c[1])),
+        x1: Math.max(...corners.map(c => c[0])), y1: Math.max(...corners.map(c => c[1])),
+      }
+      clip = clip
+        ? { x0: Math.max(clip.x0, rect.x0), y0: Math.max(clip.y0, rect.y0),
+            x1: Math.min(clip.x1, rect.x1), y1: Math.min(clip.y1, rect.y1) }
+        : rect
+    } else if (fn === OPS.beginText && clip) {
+      const key = `${clip.x0},${clip.y0},${clip.x1},${clip.y1}`
+      const entry = votes.get(key)
+      if (entry) entry.n++
+      else votes.set(key, { box: clip, n: 1 })
+    }
+  }
+
+  let best: { box: Box; n: number } | null = null
+  for (const v of votes.values()) if (!best || v.n > best.n) best = v
+  return best?.box ?? null
+}
+
+// Draws `bitmap` rotated 90° CW `angle` degrees (0/90/180/270) onto a fresh, expanded canvas so
+// the rotated content isn't clipped. Never touches the input bitmap.
+function draw_rotated(bitmap: ImageBitmap, angle: number): ImageBitmap {
   if (angle === 0) return bitmap
   const { width: w, height: h } = bitmap
   const swapped = angle % 180 === 90
@@ -52,8 +131,15 @@ function rotate_bitmap_cw(bitmap: ImageBitmap, angle: number): ImageBitmap {
     default:  throw new Error(`Invalid rotation angle: ${angle}`)
   }
   ctx.drawImage(bitmap, 0, 0)
-  bitmap.close()
   return canvas.transferToImageBitmap()
+}
+
+// Rotate a rendered page raster 90° CW `angle` degrees, then close it — every call site (source
+// rendering) hands this a fresh, single-use render it owns outright.
+function rotate_bitmap_cw(bitmap: ImageBitmap, angle: number): ImageBitmap {
+  const rotated = draw_rotated(bitmap, angle)
+  if (angle !== 0) bitmap.close()
+  return rotated
 }
 
 // Re-encode an image blob as PNG bytes — used by export_pdf_vector for an image-sourced page in
@@ -257,6 +343,10 @@ export class PdfRendererAdapter implements RendererAdapter {
     return process_page_async(source, intent, supersample)
   }
 
+  rotate_bitmap(bitmap: ImageBitmap, degrees: number): Promise<ImageBitmap> {
+    return Promise.resolve(draw_rotated(bitmap, degrees))
+  }
+
   render_output_image(
     src: ImageBitmap,
     box: Box,
@@ -309,8 +399,7 @@ export class PdfRendererAdapter implements RendererAdapter {
     const vp   = page.getViewport({ scale: 1 })   // page-unit coords (top-left origin)
     const text = await page.getTextContent()
 
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
-    let found = false
+    const items: Box[] = []
     for (const item of text.items) {
       if (!('str' in item)) continue
       const trimmed = item.str.trim()
@@ -330,12 +419,30 @@ export class PdfRendererAdapter implements RendererAdapter {
       const width  = full_width * (1 - lead_ratio - trail_ratio)
       const left   = (tx[4] ?? 0) + full_width * lead_ratio
       const top    = (tx[5] ?? 0) - font_h
-      x0 = Math.min(x0, left);          y0 = Math.min(y0, top)
-      x1 = Math.max(x1, left + width);  y1 = Math.max(y1, top + font_h)
-      found = true
+      items.push({ x0: left, y0: top, x1: left + width, y1: top + font_h })
+    }
+    if (items.length === 0) { page.cleanup(); return null }
+
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
+    for (const b of items) {
+      x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0)
+      x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1)
+    }
+
+    // Ghost width (spec-web §5): some PDF generators (e.g. calibre) wrap a page's text in a
+    // content-stream clip — an unbroken long token (a URL with no spaces, past the clip) is
+    // invisibly cut off when rendered, but getTextContent() still reports its full un-clipped
+    // geometry, so a single item can push an edge far past every other item's on the same page.
+    // Detecting that (cheap: just compares the already-collected item boxes) before paying for
+    // the operator-list walk below keeps the common case (no clip) free.
+    if (has_outlier_edge(items)) {
+      const clip = await dominant_text_clip(page, vp)
+      if (clip) {
+        x0 = Math.max(x0, clip.x0); y0 = Math.max(y0, clip.y0)
+        x1 = Math.min(x1, clip.x1); y1 = Math.min(y1, clip.y1)
+      }
     }
     page.cleanup()
-    if (!found) return null
 
     const box: Box = {
       x0: Math.max(0, x0), y0: Math.max(0, y0),

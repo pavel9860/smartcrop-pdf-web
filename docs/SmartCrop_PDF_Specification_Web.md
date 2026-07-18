@@ -257,7 +257,7 @@ the crop rectangle. Per page over the Pages selection:
   fidelity tradeoff; this is also what keeps detection within its <100ms/page budget, §16). No ink →
   no detected box for that page.
 
-A page with no detected box of its own is **not** left uncropped (bug #8/#9): it has no per-page
+A page with no detected box of its own is **not** left uncropped: it has no per-page
 anchor point, so instead of `auto_crop_rect`'s anchor-based placement it gets the shared union's
 own W×H, **centered** on the page — `centered_crop_rect` (geometry.ts). This applies everywhere the
 per-page auto-crop is resolved: committing (Crop), the live preview overlay, export of an
@@ -281,7 +281,7 @@ re-applied identically whenever the union is rebuilt after a rotate or a delete 
 cached (non-undoable AppModel state — §13).
 
 **Outlier tolerance**: Settings → Behaviour → "Ignore N outlier pages"
-(`DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]`, default 5). When N > 0, `W`/`H` are each the
+(`DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]`, default 2). When N > 0, `W`/`H` are each the
 `(N+1)`-th *largest* per-page width/height — sorted independently, so the page contributing `W`
 need not be the same page contributing `H` — instead of always the maximum; `gL`/`gT` (the min
 corner) are unaffected. This lets a handful of oversized pages (e.g. a few fold-out or
@@ -351,7 +351,7 @@ the moved left/top, so dragging one edge never drags its opposite. Width/height 
 
 This formula needs `B_p` (this page's own detected box) whenever an anchor is on. A page with no
 `B_p` (§5) instead gets `W,H` centered on the page — `x0=(w−W)/2, y0=(h−H)/2` — with no anchor/offset
-applied (bug #8/#9): there is no per-page point for `left_base`/`top_base` to be, or for an offset
+applied: there is no per-page point for `left_base`/`top_base` to be, or for an offset
 to nudge away from.
 
 ### 6.3 Mouse gestures (single crop, split = 1)
@@ -436,8 +436,7 @@ snap-on-release):
 
 A ratio-constrained edge that would leave the page clamps to the page and the *other* dimension
 re-derives from the clamped one — the anchor corner stays put and the ratio is held exactly, never
-deformed (this replaced an earlier bug where the final page-edge clamp touched only one edge,
-silently breaking the ratio for e.g. a 2-split window wider than half the page).
+deformed.
 
 ### 6.8 Committed-page crop coordinates
 
@@ -507,6 +506,11 @@ are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no `Shared
 dependency (GitHub Pages cannot set the COOP/COEP headers that would require). The **Dewarp
 supersample** setting (§14, default 2.0) renders the page larger before the mesh remap and
 downsamples after, trading time for less resampling blur.
+
+The ONNX pass runs against the page's own content, independent of its current display rotation —
+rotating a page that already has Dewarp&Deskew applied never re-runs it, only cheaply reorients the
+already-computed result. Only pressing the Dewarp & Deskew button computes it; only Undo removes
+it.
 
 ### 7.2 Filter modes (each 3 strengths)
 
@@ -583,7 +587,7 @@ JPG/PNG/TIFF still uses `render_output_image` like everything else. Box coordina
 app's current (rotation-adjusted) display frame to the source page's own native frame first, since
 the clip/embed operations below operate in that frame.
 
-Two paths, chosen for output size (bug #7 — see below), both batched per SOURCE DOCUMENT rather than
+Two paths, chosen for output size, both batched per SOURCE DOCUMENT rather than
 called once per page:
 
 - **Unsplit (one crop window per page, the common case):** `copyPages()` + `setCropBox()` clones the
@@ -657,8 +661,7 @@ exception surfaces as an error dialog (§19) and ends the batch cleanly.
 `BatchJob.total` (the bar's step count) and `display_total` (the counter's page count) can differ:
 an image export doubles `total` — render phase + encode phase — so the bar keeps moving instead of
 stalling at 100% while the zip is encoded, but the counter always shows real progress against
-`display_total`, never the doubled internal count (bug: export progress showing double the actual
-page count, with the counter appearing to jump erratically once it exceeds the real total).
+`display_total`, never the doubled internal count.
 
 ---
 
@@ -679,15 +682,18 @@ a checkpoint either — only **Crop** (`apply_crop()`) does. Undo continues to f
   every undoable mutation (Crop, offset commit, a completed drag resize, rotate) — see above for what
   is deliberately excluded. Restoring a snapshot drops only the cheap crop/split output preview (§7);
   the source and processed-page raster caches are content-addressed by (page, rotation, dewarp,
-  filter, strength) and are left alone, since a reverted combination naturally resolves to its own
-  cache entry — a hit if still resident, one clean recompute if it was evicted. Neither cache is ever
-  wiped wholesale by Undo/Redo (§7).
+  filter, strength) — except the Dewarp&Deskew result itself, addressed by page only, deliberately
+  not rotation (§7.1) — and are left alone, since a reverted combination naturally resolves to its
+  own cache entry — a hit if still resident, one clean recompute if it was evicted. Neither cache is
+  ever wiped wholesale by Undo/Redo (§7).
 - **Reset** — reloads the same input files (or the synthetic placeholder) and re-combines them,
   clearing all crops, rotation, detection, processing and history; returns Split to 1 and clears
   filter/dewarp highlights.
 - **Rotate** — a per-page rotation-angle map (0/90/180/270° CW). Adds 90°; rotation is part of the
-  source/processed-page cache key (§7), so the new angle simply resolves to a different cache entry
-  (re-rendered once, then cached) without needing to evict the old angle's entry — and drops that
+  source/filter cache key (§7), so the new angle simply resolves to a different cache entry
+  (re-rendered once, then cached) without needing to evict the old angle's entry — except a
+  Dewarp&Deskew result already computed for the page, which is never re-run: rotate only reorients
+  it (a cheap bitmap rotation, §7.1), never re-invokes the ONNX pass. Rotate also drops that
   page's crop/split output preview, since the committed crop and the cached detected box are
   carried through by rotating their coordinates 90° CW, so cropping survives a rotate. Offsets reset
   to default; the detection union is rebuilt (with the same `FULL_PAGE_FRAC` exclusion §5 applies at
@@ -721,7 +727,7 @@ Output
 Behaviour
   Remember last folder     [ on  ]
   Undo / redo depth        [ 2   v ]           preset dropdown, [1,2,4,8]
-  Ignore N outlier pages   [ 5   v ]           preset dropdown, [0,1,2,5,10], default 5 (auto-crop sizing, §5)
+  Ignore N outlier pages   [ 2   v ]           preset dropdown, [0,1,2,5,10], default 2 (auto-crop sizing, §5)
 Scan
   Dewarp supersample       [ 2.0 ]             quality lever for dewarp (§7.1); 1.0 = off
 ```
@@ -840,7 +846,7 @@ DEFAULT_COMPRESS_PRESET = "Original resolution"   DEFAULT_OUTPUT_COLOURS = "Orig
 DEFAULT_EXPORT_FORMAT = "PDF"    DEFAULT_OUTPUT_POSTFIX = "_cropped"
 DEFAULT_UNDO_DEPTH = 2    UNDO_DEPTH_OPTIONS = [1,2,4,8]    UNDO_DEPTH_MIN/MAX = 1 / 50
 DEFAULT_DEWARP_SUPERSAMPLE = 2.0
-DEFAULT_DETECT_OUTLIER = 5    DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]
+DEFAULT_DETECT_OUTLIER = 2    DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]
 # dewarp model (pstwh/docuwarp, two-stage ONNX)
 DEWARP_MODEL_W/H = 488 / 712   (fixed CNN input size, not tunable)
 ```
@@ -960,4 +966,4 @@ yes/no confirm dialog, single OK button), never a silent failure and never an au
 27. Navigating away before a page's bitmap fetch resolves never lets that late resolution become
     the shown bitmap — it is paired against whichever page is actually current when it lands, and a
     different rotation swaps width/height, so a stale bitmap there would show as a distorted page
-    for a moment (bug: fast-scroll after rotating). Only the fetch for the still-current page commits.
+    for a moment. Only the fetch for the still-current page commits.

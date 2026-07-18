@@ -20,6 +20,7 @@ function adapter(page_count = 3): RendererAdapter {
     }),
     get_source_image: () => Promise.resolve(bmp()),
     get_work_image: () => Promise.resolve(bmp()),
+    rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: () => Promise.resolve(bmp()),
     detect_content_box: (_i, w, h) => Promise.resolve({ x0: 0, y0: 0, x1: w, y1: h }),
     export_pdf: () => Promise.resolve(new Uint8Array()),

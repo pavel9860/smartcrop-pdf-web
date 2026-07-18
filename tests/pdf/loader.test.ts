@@ -15,8 +15,13 @@ vi.mock('pdfjs-dist', () => ({
   OPS: {
     constructPath: 1, fill: 2, eoFill: 3, fillStroke: 4, eoFillStroke: 5,
     stroke: 6, closeStroke: 7, closeFillStroke: 8, closeEOFillStroke: 9, shadingFill: 10,
+    save: 11, restore: 12, transform: 13, clip: 14, eoClip: 15, beginText: 16,
   },
-  Util: { transform: (_vp: number[], it: number[]): number[] => it },   // identity passthrough
+  Util: {
+    transform: (_vp: number[], it: number[]): number[] => it,   // identity passthrough
+    applyTransform: (p: [number, number], m: number[]): [number, number] =>
+      [p[0] * m[0]! + p[1] * m[2]! + m[4]!, p[0] * m[1]! + p[1] * m[3]! + m[5]!],
+  },
   getDocument: () => ({
     promise: shared.pdfQueue.length
       ? Promise.resolve(shared.pdfQueue.shift())
@@ -182,6 +187,68 @@ describe('render_output_image sizing (C2, spec-web §W2 row 8)', () => {
     await a.render_output_image(src, box, 200, 300, null, true)
     await a.render_output_image(src, box, 200, 300, null, false)
     expect(seen).toEqual(['grayscale(1)'])
+  })
+})
+
+describe('detect_text_box clip detection (ghost-width fix, spec-web §5)', () => {
+  it('clamps a single outlier item to the page\'s dominant content-stream clip', async () => {
+    // 3 items clustered at x1~560-562 (a normal text column) + 1 outlier item extending to
+    // x1=615 with nothing else near it (an unbroken long token overflowing the clip, e.g. a URL)
+    // — reproduces the real-world calibre-generated-PDF pattern (Deep Work.pdf pp.160/165/166).
+    const items = [
+      { str: 'aaaa', transform: [1, 0, 0, 12, 50, 12], width: 510 },   // x1 = 560
+      { str: 'bbbb', transform: [1, 0, 0, 12, 50, 12], width: 511 },   // x1 = 561
+      { str: 'cccc', transform: [1, 0, 0, 12, 50, 12], width: 512 },   // x1 = 562
+      { str: 'ddddddd', transform: [1, 0, 0, 12, 50, 12], width: 565 },   // x1 = 615, the outlier
+    ]
+    const OPS = { transform: 13, constructPath: 1, eoClip: 15, beginText: 16 }
+    const page = {
+      getViewport: ({ scale }: { scale: number }) =>
+        ({ width: 700, height: 850, scale, transform: [1, 0, 0, 1, 0, 0] }),
+      getTextContent: () => Promise.resolve({ items }),
+      getOperatorList: () => Promise.resolve({
+        fnArray: [OPS.transform, OPS.constructPath, OPS.eoClip, OPS.beginText],
+        argsArray: [
+          [1, 0, 0, 1, 0, 0],                 // identity — ctm stays page-space as-is
+          [[], [], [50, 0, 562, 800]],         // constructPath's 3rd arg: the clip rect's bbox
+          null,
+          null,
+        ],
+      }),
+      cleanup: () => { /* no-op */ },
+    }
+    shared.pdfQueue = [{
+      numPages: 1, destroy: vi.fn(() => Promise.resolve()), getPage: vi.fn(() => Promise.resolve(page)),
+    }]
+    const a = new PdfRendererAdapter()
+    await a.load_files([pdf_file('a.pdf')])
+    const box = await a.detect_text_box(0)
+    expect(box).not.toBeNull()
+    expect(box!.x1).toBe(562)   // clamped to the clip, not the outlier item's 615
+  })
+
+  it('leaves the box alone when no items are outliers (common case, no operator-list fetch)', async () => {
+    const items = [
+      { str: 'aaaa', transform: [1, 0, 0, 12, 50, 12], width: 510 },
+      { str: 'bbbb', transform: [1, 0, 0, 12, 50, 12], width: 505 },
+    ]
+    const getOperatorList = vi.fn()
+    const page = {
+      getViewport: ({ scale }: { scale: number }) =>
+        ({ width: 700, height: 850, scale, transform: [1, 0, 0, 1, 0, 0] }),
+      getTextContent: () => Promise.resolve({ items }),
+      getOperatorList,
+      cleanup: () => { /* no-op */ },
+    }
+    shared.pdfQueue = [{
+      numPages: 1, destroy: vi.fn(() => Promise.resolve()), getPage: vi.fn(() => Promise.resolve(page)),
+    }]
+    const a = new PdfRendererAdapter()
+    await a.load_files([pdf_file('a.pdf')])
+    const box = await a.detect_text_box(0)
+    expect(box).not.toBeNull()
+    expect(box!.x1).toBe(560)          // 50 + 510, the widest item — unclamped, no clip involved
+    expect(getOperatorList).not.toHaveBeenCalled()   // cheap path never pays for the operator-list walk
   })
 })
 

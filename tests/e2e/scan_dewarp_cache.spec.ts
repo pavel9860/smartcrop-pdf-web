@@ -9,35 +9,39 @@
 // several runs). This test instead checks the two things a real browser run can prove that a
 // mocked unit test can't: it doesn't hang, and the rendered result actually changed — the same
 // "generous ceiling, not a tight budget" pattern as tests/e2e/scan_simd.spec.ts.
-import { test, expect } from '@playwright/test'
+import { test, expect, type Page, type Locator } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 
 const SCAN_JPG = fileURLToPath(new URL('../assets/test_pdf_distorted_page-0001.jpg', import.meta.url))
 
-test('1-page SCANNED doc: Dewarp&Deskew, then switching filters, completes and renders correctly', async ({ page }) => {
-  test.setTimeout(400_000)   // 3 steps, each polled up to 120s under contention (see below)
+const checksum = (canvas: Locator): Promise<number> => canvas.evaluate((el: HTMLCanvasElement) => {
+  const d = (el.getContext('2d') as CanvasRenderingContext2D).getImageData(0, 0, el.width, el.height).data
+  let s = 0
+  for (let i = 0; i < d.length; i += 97) s = (s + (d[i] ?? 0) * (i + 1)) >>> 0
+  return s
+})
+
+async function load_scan(page: Page): Promise<void> {
   await page.goto('/')
   await page.setInputFiles('#pp-file', SCAN_JPG)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
   await expect(page.locator('#nav-total')).toHaveText('/ 1')
+}
 
+test('1-page SCANNED doc: Dewarp&Deskew, then switching filters, completes and renders correctly', async ({ page }) => {
+  test.setTimeout(400_000)   // 3 steps, each polled up to 120s under contention (see below)
+  await load_scan(page)
   const canvas = page.locator('canvas.page-canvas')
-  const checksum = (): Promise<number> => canvas.evaluate((el: HTMLCanvasElement) => {
-    const d = (el.getContext('2d') as CanvasRenderingContext2D).getImageData(0, 0, el.width, el.height).data
-    let s = 0
-    for (let i = 0; i < d.length; i += 97) s = (s + (d[i] ?? 0) * (i + 1)) >>> 0
-    return s
-  })
 
   // display_total===1 (single page) skips the progress overlay entirely (app.ts dispatch_job), so
   // it can't be used as a completion signal here (it may never appear, or may already be hidden
   // before the async work finishes) — poll the checksum itself instead, which is both the real
   // completion signal and the correctness assertion.
   const timed = async (click: () => Promise<void>): Promise<number> => {
-    const before = await checksum()
+    const before = await checksum(canvas)
     const t0 = Date.now()
     await click()
-    await expect.poll(checksum, { timeout: 120_000, intervals: [250] }).not.toBe(before)
+    await expect.poll(() => checksum(canvas), { timeout: 120_000, intervals: [250] }).not.toBe(before)
     return Date.now() - t0
   }
 
@@ -53,4 +57,31 @@ test('1-page SCANNED doc: Dewarp&Deskew, then switching filters, completes and r
   const filter2_ms = await timed(() => page.click('#sp-sharpen'))
   console.log(`[scan_dewarp_cache] dewarp: ${dewarp_ms}ms, filter after dewarp: ${filter_ms}ms, ` +
     `filter switch: ${filter2_ms}ms`)
+})
+
+test('rotating a Dewarp&Deskew page reuses the dewarped result instead of re-running ONNX '
+  + '(bug: rotate re-triggered a full multi-second dewarp pass, making the tab unresponsive)',
+async ({ page }) => {
+  test.setTimeout(200_000)
+  await load_scan(page)
+  const canvas = page.locator('canvas.page-canvas')
+
+  const before_dewarp = await checksum(canvas)
+  const t0 = Date.now()
+  await page.click('#sp-dewarp')
+  await expect.poll(() => checksum(canvas), { timeout: 120_000, intervals: [250] }).not.toBe(before_dewarp)
+  const dewarp_ms = Date.now() - t0
+
+  // Dewarp is keyed by content only, not rotation (spec-web §7) — the ONNX pass runs once, ever,
+  // for this page until Undo/Reset; rotate just re-orients the already-dewarped bitmap. Generous
+  // ceiling (not a tight budget, matching this file's other timing assertions), but nowhere near
+  // dewarp's own multi-second-plus cost — proves rotate did NOT re-trigger it.
+  const before_rotate = await checksum(canvas)
+  const t1 = Date.now()
+  await page.click('#cp-rotate')
+  await expect.poll(() => checksum(canvas), { timeout: 10_000, intervals: [100] }).not.toBe(before_rotate)
+  const rotate_ms = Date.now() - t1
+
+  console.log(`[scan_dewarp_cache] dewarp: ${dewarp_ms}ms, rotate-after-dewarp: ${rotate_ms}ms`)
+  expect(rotate_ms).toBeLessThan(3000)
 })

@@ -24,6 +24,7 @@ function make_adapter(): { adapter: RendererAdapter; calls: Record<string, numbe
     }),
     get_source_image: () => { bump('get_source_image'); return Promise.resolve(make_bitmap()) },
     get_work_image:   () => { bump('get_work_image');   return Promise.resolve(make_bitmap()) },
+    rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: () => Promise.resolve(make_bitmap()),
     detect_content_box: () => Promise.resolve({ x0: 20, y0: 20, x1: 120, y1: 280 }),
     export_pdf:    () => Promise.resolve(new Uint8Array()),

@@ -60,6 +60,10 @@ function make_mock_adapter(opts: MockOpts = {}): {
       bump('get_work_image')
       return Promise.resolve(make_bitmap(page_w, page_h))
     },
+    rotate_bitmap: (b): Promise<ImageBitmap> => {
+      bump('rotate_bitmap')
+      return Promise.resolve(b)
+    },
     render_output_image: (_src, box, _pw, _ph, target_dpi, greyscale): Promise<ImageBitmap> => {
       bump('render_output_image')
       render_args.push({ dpi: target_dpi, grey: greyscale })

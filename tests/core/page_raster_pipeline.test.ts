@@ -33,6 +33,8 @@ function adapter(overrides: Partial<RendererAdapter> = {}): RendererAdapter {
     }),
     get_source_image: () => Promise.resolve(bmp()),
     get_work_image: () => Promise.resolve(bmp()),
+    rotate_bitmap: (b, degrees) => Promise.resolve(
+      degrees % 180 === 90 ? bmp(b.height, b.width) : bmp(b.width, b.height)),
     render_output_image: (_s, b) => Promise.resolve(bmp(b.x1 - b.x0, b.y1 - b.y0)),
     detect_content_box: (_i, w, h) => Promise.resolve({ x0: 0, y0: 0, x1: w, y1: h }),
     export_pdf: () => Promise.resolve(new Uint8Array()),
@@ -103,6 +105,42 @@ describe('PageRasterPipeline.get_source / get_work', () => {
     expect(work_calls).toBe(1)
     expect(w1).toBe(w2)
     expect(w1.width).toBe(9)
+  })
+
+  it('SCANNED: rotating a dewarped page reuses the ONNX result via a cheap rotate_bitmap call, ' +
+     'never re-running get_work_image (spec-web §7 — rotate must never re-trigger Dewarp&Deskew)', async () => {
+    let dewarp_calls = 0, rotate_calls = 0
+    const a = adapter({
+      get_work_image: () => { dewarp_calls++; return Promise.resolve(bmp(9, 9)) },
+      rotate_bitmap: (b, degrees) => {
+        rotate_calls++
+        return Promise.resolve(degrees % 180 === 90 ? bmp(b.height, b.width) : bmp(b.width, b.height))
+      },
+    })
+    let rotation = 0
+    const p = pipeline(a, ctx({
+      mode: () => Mode.SCANNED, rotation: () => rotation,
+      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
+    }))
+
+    await p.get_work(0)                  // rotation 0: computes the canonical ONNX result
+    expect(dewarp_calls).toBe(1)
+    expect(rotate_calls).toBe(0)          // rotation 0 is served straight from the canonical cache
+
+    rotation = 90
+    const rotated = await p.get_work(0)
+    expect(dewarp_calls).toBe(1)          // still exactly once — rotate did NOT re-run ONNX
+    expect(rotate_calls).toBe(1)          // reoriented via the cheap path instead
+
+    rotation = 90
+    await p.get_work(0)                  // same rotation again: cache hit, no second rotate either
+    expect(dewarp_calls).toBe(1)
+    expect(rotate_calls).toBe(1)
+
+    rotation = 0
+    const back_to_zero = await p.get_work(0)   // rotating back: still the same canonical bitmap
+    expect(dewarp_calls).toBe(1)
+    expect(back_to_zero).not.toBe(rotated)
   })
 
   it('SCANNED: switching filters while dewarp stays on reuses the dewarped intermediate instead ' +

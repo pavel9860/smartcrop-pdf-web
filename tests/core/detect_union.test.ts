@@ -32,6 +32,7 @@ function make_adapter(page_sizes: PageSize[], detect_boxes: Box[]): {
     }),
     get_source_image: () => Promise.resolve(make_bitmap()),
     get_work_image:   () => Promise.resolve(make_bitmap()),
+    rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: (_s, box) => Promise.resolve(
       make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
     detect_content_box: () => {
@@ -219,11 +220,11 @@ describe('settings.detect_outlier_pages routes into the union (spec-web §5, #11
     expect(model.union).toEqual({ x0: 0, y0: 0, x1: 180, y1: 100 })
   })
 
-  it('defaults to 5, not Off (bug #4)', () => {
+  it('defaults to 2, not Off (bug #4)', () => {
     const model = new AppModel(make_adapter([{ width: 100, height: 100 }], [
       { x0: 0, y0: 0, x1: 10, y1: 10 },
     ]).adapter)
-    expect(model.detect_outlier_pages).toBe(5)
+    expect(model.detect_outlier_pages).toBe(2)
   })
 
   it('set_detect_outlier_pages clamps to a non-negative integer', () => {

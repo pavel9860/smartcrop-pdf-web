@@ -23,6 +23,7 @@ function make_adapter(): { adapter: RendererAdapter; long_px: (number | null)[] 
     }),
     get_source_image: () => Promise.resolve(make_bitmap()),
     get_work_image:   () => Promise.resolve(make_bitmap()),
+    rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: (_s, _b, _pw, _ph, target_long_px): Promise<ImageBitmap> => {
       long_px.push(target_long_px)
       return Promise.resolve(make_bitmap())

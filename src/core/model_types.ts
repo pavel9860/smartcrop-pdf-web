@@ -50,6 +50,11 @@ export interface RendererAdapter {
   // straight to processing — no second internal rasterization (spec-web §W2 row 5).
   get_work_image(source: ImageBitmap, intent: PageProcessIntent,
                  supersample: number): Promise<ImageBitmap>
+  // Re-orients an already-processed bitmap (e.g. a cached Dewarp&Deskew result) without
+  // re-deriving it — used so rotate never re-runs dewarp's ONNX pass (spec-web §7). Unlike the
+  // source-render path baking rotation into a fresh, single-use render, `bitmap` here may be a
+  // cached, reused resource, so this must never close/consume it.
+  rotate_bitmap(bitmap: ImageBitmap, degrees: number): Promise<ImageBitmap>
   // target_long_px: export sizing — the crop's long side scales to this many pixels
   // (= dpi × paper height, spec-web §W2 row 8); null = keep source resolution (and preview).
   render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,

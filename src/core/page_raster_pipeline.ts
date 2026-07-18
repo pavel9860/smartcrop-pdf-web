@@ -43,12 +43,21 @@ export class PageRasterPipeline {
   private _source_versions = new Map<number, LRUCache<string, ImageBitmap>>()
   private _work_versions   = new Map<number, LRUCache<string, ImageBitmap>>()
 
-  // Dewarp-only intermediate (post-Dewarp&Deskew, pre-filter), keyed by rotation+supersample only
-  // (no filter component) — switching the filter while dewarp stays on reuses this instead of
-  // re-running the ONNX dewarp pass, which dominates cost (multi-second CPU inference vs the
-  // filter's own ~200ms). Same version-bounded-per-page shape as _work_versions; an Undo/Redo that
-  // actually flips dewarp_on just resolves _work_key's `d0`/`d1` component to a different entry, no
-  // separate invalidation needed here either.
+  // The Dewarp&Deskew ONNX result at the page's UNROTATED (rotation=0) orientation — keyed by
+  // supersample only, never rotation. Computed exactly once per (page, supersample) no matter how
+  // many times the page is later rotated: rotate must never re-trigger the ONNX pass, only the
+  // Dewarp&Deskew button itself does (spec-web §7). `_dewarped_versions` below derives each
+  // rotation's view of this from a cheap bitmap rotation instead of re-running the model.
+  private _dewarp_canonical  = new Map<number, LRUCache<string, ImageBitmap>>()
+
+  // Dewarp-only intermediate AT THE PAGE'S CURRENT ROTATION (post-Dewarp&Deskew, pre-filter),
+  // keyed by rotation+supersample only (no filter component) — switching the filter while dewarp
+  // stays on reuses this instead of re-deriving it. Holds only the non-zero-rotation views: a
+  // rotation=0 request is served directly from `_dewarp_canonical` (see _get_dewarped) rather than
+  // duplicated in here too, avoiding two caches closing the same bitmap on eviction. Same
+  // version-bounded-per-page shape as _work_versions; an Undo/Redo that actually flips dewarp_on
+  // just resolves _work_key's `d0`/`d1` component to a different entry, no separate invalidation
+  // needed here either.
   private _dewarped_versions = new Map<number, LRUCache<string, ImageBitmap>>()
 
   // Pre-rendered output bitmaps for committed pages (keyed "page:split_idx"). Cheap to rebuild from
@@ -84,6 +93,7 @@ export class PageRasterPipeline {
   reset(): void {
     this._clear_versions(this._source_versions)
     this._clear_versions(this._work_versions)
+    this._clear_versions(this._dewarp_canonical)
     this._clear_versions(this._dewarped_versions)
     this._output_cache.clear()
     this._current = null
@@ -101,6 +111,7 @@ export class PageRasterPipeline {
   clear_ram(): void {
     this._clear_versions(this._source_versions)
     this._clear_versions(this._work_versions)
+    this._clear_versions(this._dewarp_canonical)
     this._clear_versions(this._dewarped_versions)
     this._output_cache.clear()
     this._current = null
@@ -133,7 +144,13 @@ export class PageRasterPipeline {
 
   // Raw page raster (before scan processing), rendered once per (page, rotation) and cached.
   async get_source(p: number): Promise<ImageBitmap> {
-    const rotation = this._ctx.rotation(p)
+    return this._get_source_at(p, this._ctx.rotation(p))
+  }
+
+  // Same as get_source, but at an EXPLICIT rotation rather than the page's current one — used to
+  // fetch the canonical (rotation=0) source Dewarp&Deskew's ONNX pass runs against, regardless of
+  // whatever rotation the page is currently displayed at (see _get_dewarped).
+  private async _get_source_at(p: number, rotation: number): Promise<ImageBitmap> {
     const cache = this._version_cache(this._source_versions, p)
     const key = String(rotation)
     const cached = cache.get(key)
@@ -185,13 +202,33 @@ export class PageRasterPipeline {
     return work
   }
 
+  // Resolves the page's Dewarp&Deskew result at its CURRENT rotation, deriving it from the
+  // canonical (rotation=0) ONNX result via a cheap bitmap rotation rather than re-running the
+  // model — rotate must never re-trigger Dewarp&Deskew's ONNX pass (spec-web §7).
   private async _get_dewarped(p: number, rotation: number, supersample: number): Promise<ImageBitmap> {
+    const canonical = await this._get_dewarp_canonical(p, supersample)
+    if (rotation === 0) return canonical
+
     const cache = this._version_cache(this._dewarped_versions, p)
     const key = this._dewarped_key(rotation, supersample)
     const cached = cache.get(key)
     if (cached) return cached
-    const src = await this.get_source(p)
-    const dewarped = await this._adapter.get_work_image(src, { dewarp: true, filter: null }, supersample)
+    const rotated = await this._adapter.rotate_bitmap(canonical, rotation)
+    cache.set(key, rotated)
+    return rotated
+  }
+
+  // The ONNX-processed Dewarp&Deskew result at rotation 0 — computed once per (page, supersample)
+  // no matter how many times the page is rotated afterward. Only run_dewarp() (the button) ever
+  // reaches this via a cache miss; every other caller (rotate, prefetch, page nav) hits the same
+  // entry or the cheap per-rotation derivation above.
+  private async _get_dewarp_canonical(p: number, supersample: number): Promise<ImageBitmap> {
+    const cache = this._version_cache(this._dewarp_canonical, p)
+    const key = String(supersample)
+    const cached = cache.get(key)
+    if (cached) return cached
+    const src0 = await this._get_source_at(p, 0)
+    const dewarped = await this._adapter.get_work_image(src0, { dewarp: true, filter: null }, supersample)
     cache.set(key, dewarped)
     return dewarped
   }
@@ -224,13 +261,17 @@ export class PageRasterPipeline {
     if (p < 0 || p >= this._page_index.length || this._prefetching.has(p)) return
     const intent = this._ctx.process_intent(p)
     const rotation = this._ctx.rotation(p)
-    // Mirrors get_work's own cache routing (dewarp-only aliases to _dewarped_versions, never
-    // duplicated into _work_versions) so an already-warm dewarp-only page isn't reported cold here.
+    const supersample = this._ctx.dewarp_supersample()
+    // Mirrors get_work's own cache routing (dewarp-only aliases to _dewarp_canonical/
+    // _dewarped_versions, never duplicated into _work_versions) so an already-warm dewarp-only
+    // page isn't reported cold here.
     const warm = this._ctx.mode() !== Mode.SCANNED || (!intent.dewarp && !intent.filter)
       ? (this._source_versions.get(p)?.has(String(rotation)) ?? false)
       : intent.filter
         ? (this._work_versions.get(p)?.has(this._work_key(intent, rotation)) ?? false)
-        : (this._dewarped_versions.get(p)?.has(this._dewarped_key(rotation, this._ctx.dewarp_supersample())) ?? false)
+        : rotation === 0
+          ? (this._dewarp_canonical.get(p)?.has(String(supersample)) ?? false)
+          : (this._dewarped_versions.get(p)?.has(this._dewarped_key(rotation, supersample)) ?? false)
     if (warm) return
     this._prefetching.add(p)
     void this.get_work(p).catch(() => { /* best-effort warm */ })

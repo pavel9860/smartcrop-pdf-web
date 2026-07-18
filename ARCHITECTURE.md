@@ -170,9 +170,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                                 document (not one per page) via `_copy_unsplit_pdf_pages`. Split
                                 pages / image-sourced pages: `embedPage`/`embedPng`/`embedJpg`,
                                 each source page embedded ONCE (not once per split box) and drawn N
-                                times at a per-box offset. Both batching fixes address bug #7 (an
-                                un-batched `copyPages`/`embedPage` call per page/box doesn't dedupe
-                                a resource shared across them — measured ~19.5×/~3.6× bloat). One
+                                times at a per-box offset. One
                                 pdf-lib parse per unique source PDF (`PDFDocumentProxy.getData()` →
                                 `PDFDocument.load()`), cached across all of that file's exported
                                 pages/boxes in one export call.
@@ -359,6 +357,7 @@ interface RendererAdapter {
   get_source_image(page_idx: number, dpi: number, rotation: number): Promise<ImageBitmap>
   get_work_image(page_idx: number, intent: PageProcessIntent, supersample: number,
                  rotation: number): Promise<ImageBitmap>
+  rotate_bitmap(bitmap: ImageBitmap, degrees: number): Promise<ImageBitmap>
   render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,
                       target_dpi: number | null, greyscale: boolean): Promise<ImageBitmap>
   detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode): Promise<Box>
@@ -372,8 +371,10 @@ interface RendererAdapter {
 The `rotation` parameter on `get_source_image`/`get_work_image` is the page's current absolute
 rotation angle (`document.rotation.get(p) ?? 0`, 0/90/180/270) — the adapter bakes it into the
 returned raster (§5a). It is NOT incremental; each call passes the full current angle and the
-adapter re-derives the raster from the unrotated source each time (caches are invalidated on
-rotate)
+adapter re-derives the raster from the unrotated source each time (caches resolve to a new key on
+rotate) — **except Dewarp&Deskew's ONNX result**, which is deliberately rotation-independent
+(§9a): `rotate_bitmap()` reorients an already-processed bitmap directly, without re-deriving it
+from any source.
 
 ---
 
@@ -488,9 +489,15 @@ Every call site that used to read `doc.page_sizes[p]` directly now goes through 
 The actual pixel rotation happens in the adapter, not `core/` (which must stay DOM-free):
 `pdf/loader.ts`'s `rotate_bitmap_cw()` draws the unrotated source raster onto a rotated,
 dimension-swapped `OffscreenCanvas` via `ctx.translate()`/`ctx.rotate()`.
-`AppModel._get_source()` passes the page's current
-rotation angle into `get_source_image()` on every (cache-missed) call; `get_work_image()` takes the
-already-rotated source bitmap, not a separate rotation parameter.
+`PageRasterPipeline.get_source()` passes the page's current rotation angle into
+`get_source_image()` on every (cache-missed) call; `get_work_image()` takes the already-rotated
+source bitmap, not a separate rotation parameter.
+
+**Rotate never re-triggers Dewarp&Deskew's ONNX pass.** Only the Dewarp&Deskew button computes it
+— see §9a's "Dewarped intermediate" for why the dewarp cache is deliberately NOT keyed by
+rotation, unlike source/filter: rotating a dewarped page reorients the already-computed result via
+the adapter's `rotate_bitmap()` (a plain canvas draw, non-destructive — the input may be a cached,
+reused bitmap, unlike `rotate_bitmap_cw()`'s single-use source renders above), never the model.
 
 `ViewSnapshot` fields:
 ```ts
@@ -724,24 +731,35 @@ goes through it.
   combination**; revisiting a combination past its own page's history is one clean recompute, never
   a disk read. Regression-guarded by `tests/core/work_cache.test.ts` and
   `tests/core/scan_orchestration_speed.test.ts`.
-- **Dewarped intermediate, cached separately from the filtered result.** Dewarp&Deskew (ONNX,
-  §7.1) costs orders of magnitude more than a filter pass (multi-second CPU inference vs. the
-  filter's own ~200ms OpenCV pass, §16) — re-running it every time the filter changes while dewarp
-  stays on made filter switching as slow as dewarp itself. `PageRasterPipeline._get_work` now
-  resolves dewarp and filter as two separate steps when both are requested: a dewarp-only call
-  (`get_work_image(source, {dewarp:true,filter:null}, supersample)`) cached in its own per-page LRU
-  (`_dewarped_versions`, keyed by rotation+supersample only, no filter component), then a
-  filter-only call (`get_work_image(dewarped, {dewarp:false,filter}, supersample)`) on that cached
-  bitmap, cached in `_work_versions` under the *full* intent key as before — so the addressable
-  cache entry still reflects true state, only the compute path is split. A dewarp-only intent (no
-  filter) returns the dewarped bitmap directly rather than duplicating it into `_work_versions`
-  (same double-close hazard as the NORMAL-mode source/work aliasing above). No separate
-  invalidation logic: like `_work_versions`, a state change (rotation, supersample, or Undo/Redo
-  landing on a different `dewarp_on`) simply resolves to a different key, never a stale entry.
-  Regression-guarded by `tests/core/page_raster_pipeline.test.ts` (exact dewarp-call-count
-  guarantee, mocked adapter) and `tests/e2e/scan_dewarp_cache.spec.ts` (real ONNX/OpenCV, doesn't
-  hang, renders correctly — real wall-clock timing is too noisy under parallel workers for a tight
-  or ratio budget there, see that file's header).
+- **Dewarped intermediate, cached separately from the filtered result AND rotation-independent.**
+  Dewarp&Deskew (ONNX, §7.1) costs orders of magnitude more than a filter pass (multi-second CPU
+  inference vs. the filter's own ~200ms OpenCV pass, §16) — re-running it every time the filter
+  changes while dewarp stays on made filter switching as slow as dewarp itself, and re-running it
+  on every Rotate (bug: rotating a dewarped page could take as long as the original dewarp pass,
+  with no progress feedback — "the tab becomes almost dead") was worse still, since rotate's own
+  dispatch isn't a tracked `BatchJob`. `PageRasterPipeline._get_dewarped` now resolves the ONNX
+  pass exactly once per (page, supersample), **not** per rotation: `_get_dewarp_canonical` runs it
+  against the page's UNROTATED (rotation=0) source, cached in its own per-page LRU
+  (`_dewarp_canonical`, keyed by supersample only); `_get_dewarped` then reorients that canonical
+  result to the page's current rotation via the adapter's `rotate_bitmap()` (a plain, non-
+  destructive canvas draw — see §5a), cached in `_dewarped_versions` (keyed by rotation+supersample,
+  holding only the non-zero-rotation views — rotation=0 is served straight from `_dewarp_canonical`
+  itself, avoiding two caches closing the same bitmap on eviction). The filter step is unaffected
+  and still resolves as before: a filter-only call
+  (`get_work_image(dewarped, {dewarp:false,filter}, supersample)`) on whichever (possibly rotated)
+  dewarped bitmap `_get_dewarped` returns, cached in `_work_versions` under the *full* intent key —
+  filter is cheap enough that re-running it per rotation is fine. A dewarp-only intent (no filter)
+  returns the dewarped bitmap directly rather than duplicating it into `_work_versions` (same
+  double-close hazard as the NORMAL-mode source/work aliasing above). No separate invalidation
+  logic: a state change (supersample, or Undo/Redo landing on a different `dewarp_on`) simply
+  resolves to a different key in `_dewarp_canonical`, never a stale entry — Rotate specifically
+  changes `document.rotation` only, which `_get_dewarped` reads on every call, so it can never
+  observe a stale rotation either. Regression-guarded by `tests/core/page_raster_pipeline.test.ts`
+  (exact dewarp-call-count guarantee across rotations, mocked adapter) and
+  `tests/e2e/scan_dewarp_cache.spec.ts` (real ONNX/OpenCV: doesn't hang, renders correctly, and
+  rotate-after-dewarp completes in well under a second even when the original dewarp took over a
+  minute under sibling-worker contention — real wall-clock timing is too noisy under parallel
+  workers for a tight or ratio budget there, see that file's header).
 
 Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spec-web §16).
 Regression-guarded by `tests/perf/scan_speed.test.ts` (`npm run test:perf`) and, end-to-end in a real

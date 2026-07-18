@@ -38,10 +38,7 @@ export const FULL_PAGE_FRAC = 0.97   // box >= this fraction of page → fallbac
 // per-page dimension instead of always the max, so N oversized pages don't inflate every crop.
 // N=0 = unchanged (max). Settings dropdown preset list.
 export const DETECT_OUTLIER_OPTIONS: readonly number[] = [0, 1, 2, 5, 10]
-// 2 was too low in practice: a book with a real-world small cluster of wider pages (e.g. a
-// bibliography/notes section with unbroken URLs, observed as 3 outlier pages inflating every
-// other page's crop — spec-web §5) needs more headroom than 2 gives.
-export const DEFAULT_DETECT_OUTLIER = 5
+export const DEFAULT_DETECT_OUTLIER = 2
 
 // Deskew
 export const DESKEW_MAX_DEG = 15.0
