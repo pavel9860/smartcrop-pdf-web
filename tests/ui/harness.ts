@@ -2,9 +2,27 @@
 // duck-typed AppController stand-in let panels run headless: no real PDF.js/OpenCV/canvas. The
 // fake controller invokes dispatched commands synchronously so a click exercises both the panel
 // wiring AND the underlying AppModel method, then records the call for assertions.
+import { vi } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo, type OutputPage } from '@core/model'
 import type { AppController } from '@ui/app'
 import { Mode } from '@core/enums'
+
+/** jsdom has no canvas backend (no getContext('2d')) and no ResizeObserver — CanvasView (and
+ * anything that constructs one, e.g. AppController) only needs permissive stand-ins for both, not
+ * real implementations. Call in a test that constructs one; pair with vi.restoreAllMocks() +
+ * vi.unstubAllGlobals() in afterEach. */
+export function stub_canvas_apis(): void {
+  const ctx = new Proxy({}, {
+    get: (_t, prop) => (prop === 'measureText' ? () => ({ width: 0 }) : (): void => { /* no-op */ }),
+  })
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext')
+    .mockReturnValue(ctx as unknown as CanvasRenderingContext2D)
+  vi.stubGlobal('ResizeObserver', class {
+    observe(): void { /* no-op */ }
+    unobserve(): void { /* no-op */ }
+    disconnect(): void { /* no-op */ }
+  })
+}
 
 export function make_bitmap(w = 200, h = 300): ImageBitmap {
   return { width: w, height: h, close: (): void => { /* no-op */ } } as unknown as ImageBitmap
@@ -78,6 +96,11 @@ export function make_ctrl(): FakeController {
     set_offline_enabled(b: unknown): void { rec('set_offline_enabled', b) },
     zoom(d: unknown): void { rec('zoom', d) },
     set_ui_scale(s: unknown): void { rec('set_ui_scale', s) },
+    // Real guard/confirm/dispatch (delete) and dispatch_job (export) logic lives on the real
+    // AppController now (app.test.ts covers it) — this fake only records that the panel wired
+    // its button to the right method, not the method's own internal behavior.
+    delete_selected_pages(): void { rec('delete_selected_pages') },
+    trigger_export(): void { rec('trigger_export') },
     get busy(): boolean { return false },
   }
   return { ctrl: obj as unknown as AppController, calls, set_confirm_result: (v: boolean) => { confirm_result = v } }

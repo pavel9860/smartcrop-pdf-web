@@ -16,11 +16,28 @@ import { open_idb, idb_req, idb_tx } from './idb'
 let _uvdoc_session: InferenceSession | null = null
 let _bilinear_session: InferenceSession | null = null
 
+// Cached in-flight init promise so concurrent callers (e.g. prefetching page N+1 while page N's
+// Dewarp&Deskew is still loading the model) share ONE ONNX session build instead of each racing
+// to create its own — same C3 race class ensure_cv() (cv.ts) guards against; without this, a
+// second concurrent session's resources are never released once the first caller's result
+// silently overwrites the module-level reference (no .release() call exists anywhere).
+let _onnx_init: Promise<void> | null = null
+
 // Loads both docuwarp ONNX sessions from same-origin /models/ (vite-plugin-static-copy, see
 // vite.config.ts), cached in IndexedDB after the first fetch. Model files are vendored into the
 // repo, not pulled from a CDN — see apply_dewarp()'s header comment for the licensing note.
-export async function ensure_onnx(): Promise<void> {
-  if (_uvdoc_session && _bilinear_session) return
+export function ensure_onnx(): Promise<void> {
+  if (_uvdoc_session && _bilinear_session) return Promise.resolve()
+  if (!_onnx_init) {
+    _onnx_init = _load_onnx_sessions().catch((e: unknown) => {
+      _onnx_init = null   // allow a retry rather than permanently caching a failed load
+      throw e
+    })
+  }
+  return _onnx_init
+}
+
+async function _load_onnx_sessions(): Promise<void> {
   try {
     const ort = await import('onnxruntime-web/webgpu')
     // GH Pages cannot send COOP/COEP, so SharedArrayBuffer (multi-threaded WASM) is
@@ -154,7 +171,13 @@ export function f16_data_to_f32_array(data: Uint16Array): Float32Array {
 // maxAbsDiff=3.5e-2 / meanAbsDiff=6.5e-6 on a [0,1] scale — consistent with expected benign
 // cross-engine floating-point noise through a 16M-parameter CNN, not an algorithmic error.
 export async function apply_dewarp(src: Mat, supersample: number): Promise<Mat> {
-  if (!_uvdoc_session || !_bilinear_session) return src   // caller already gates on this; defensive only
+  // The real guarantee is process_page_async's `await ensure_onnx()` before this is ever called
+  // (imaging.ts). Silently returning `src` unprocessed here would surface as a confusing no-op
+  // (user presses Dewarp & Deskew, nothing visibly happens) instead of a diagnosable error if that
+  // guarantee is ever violated by a future call site or refactor.
+  if (!_uvdoc_session || !_bilinear_session) {
+    throw new MissingDependencyError('apply_dewarp called before ensure_onnx() resolved')
+  }
 
   const ort = await import('onnxruntime-web/webgpu')
   const w = src.cols, h = src.rows

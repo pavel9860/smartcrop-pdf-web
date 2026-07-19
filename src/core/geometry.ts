@@ -46,6 +46,18 @@ export function point_in_box(box: Box, px: number, py: number): boolean {
   return px >= box.x0 && px <= box.x1 && py >= box.y0 && py <= box.y1
 }
 
+// Clamp each edge independently to [0, page_w] × [0, page_h] — no MIN_RECT, no size-preserving
+// shift (unlike clamp_box_shift/clamp_box_drag below): used for the hand-drawn window overlay,
+// which only needs to stay on the page, not obey a minimum size or a single-handle-drag contract.
+export function clamp_box_to_page(box: Box, page_w: number, page_h: number): Box {
+  return {
+    x0: Math.max(0, Math.min(box.x0, page_w)),
+    y0: Math.max(0, Math.min(box.y0, page_h)),
+    x1: Math.max(0, Math.min(box.x1, page_w)),
+    y1: Math.max(0, Math.min(box.y1, page_h)),
+  }
+}
+
 // Shift a box so it lies within [0, page_w] × [0, page_h], preserving W×H.
 // Only shrinks a dimension when W or H itself exceeds the page (spec §9.2).
 export function clamp_box_shift(box: Box, page_w: number, page_h: number): Box {
@@ -61,13 +73,34 @@ export function clamp_box_shift(box: Box, page_w: number, page_h: number): Box {
   return { x0, y0, x1, y1 }
 }
 
-// Clamp each edge independently to page bounds (used when dragging handles).
-// Enforces MIN_RECT so the box never inverts or collapses.
-export function clamp_box_drag(box: Box, page_w: number, page_h: number): Box {
-  const x0 = Math.max(0, Math.min(box.x0, page_w - MIN_RECT))
-  const y0 = Math.max(0, Math.min(box.y0, page_h - MIN_RECT))
-  const x1 = Math.max(x0 + MIN_RECT, Math.min(box.x1, page_w))
-  const y1 = Math.max(y0 + MIN_RECT, Math.min(box.y1, page_h))
+// Which edges `handle` actually moves — the other edge on each axis is pixel-stable and must not
+// be nudged by MIN_RECT/page-bound clamping (§22.2).
+function dragged_edges(handle: HandleId): { x0: boolean; x1: boolean; y0: boolean; y1: boolean } {
+  return {
+    x0: handle === 'TL' || handle === 'BL' || handle === 'L',
+    x1: handle === 'TR' || handle === 'BR' || handle === 'R',
+    y0: handle === 'TL' || handle === 'TR' || handle === 'T',
+    y1: handle === 'BL' || handle === 'BR' || handle === 'B',
+  }
+}
+
+// Clamp to page bounds, enforcing MIN_RECT so the box never inverts or collapses (used when
+// dragging handles). Without `handle`, every edge is independently free to move (a fresh
+// rubber-band draw, or same-size edge-delta propagation across a whole window — both have no
+// single anchored edge). With `handle`, only the edge(s) it actually drags absorb the clamp; the
+// other edge on each axis is pixel-stable, never moved to satisfy MIN_RECT/page bounds itself.
+export function clamp_box_drag(box: Box, page_w: number, page_h: number, handle?: HandleId): Box {
+  const free = handle ? dragged_edges(handle) : { x0: true, x1: true, y0: true, y1: true }
+  let { x0, y0, x1, y1 } = box
+
+  if (free.x0)      x0 = Math.max(0, Math.min(x0, x1 - MIN_RECT))
+  else if (free.x1) x1 = Math.min(page_w, Math.max(x1, x0 + MIN_RECT))
+  if (free.y0)      y0 = Math.max(0, Math.min(y0, y1 - MIN_RECT))
+  else if (free.y1) y1 = Math.min(page_h, Math.max(y1, y0 + MIN_RECT))
+
+  if (free.x0 && free.x1) x1 = Math.max(x0 + MIN_RECT, Math.min(x1, page_w))
+  if (free.y0 && free.y1) y1 = Math.max(y0 + MIN_RECT, Math.min(y1, page_h))
+
   return { x0, y0, x1, y1 }
 }
 
@@ -101,7 +134,7 @@ export function apply_handle_drag(
   // each edge independently. Using edge-clamp for a move shrank the box at the border (deform bug).
   return handle === 'move'
     ? clamp_box_shift({ x0, y0, x1, y1 }, page_w, page_h)
-    : clamp_box_drag({ x0, y0, x1, y1 }, page_w, page_h)
+    : clamp_box_drag({ x0, y0, x1, y1 }, page_w, page_h, handle)
 }
 
 // Compute the live auto-crop rectangle from detection results and offsets (spec §9.2).
@@ -243,9 +276,15 @@ export function keep_ratio_normalise(
   if (y1 > page_h) {
     y1 = page_h
     h = y1 - box.y0
-    const new_w = h * ratio
-    x1 = box.x0 + new_w
-    if (x1 > page_w) x1 = page_w
+    x1 = box.x0 + h * ratio
+  }
+  // Width may still overflow after the height clamp above (or overflow on its own with no height
+  // issue) — re-derive height from the width clamp so the ratio holds exactly either way, never
+  // just whichever axis happened to be checked last (§6.7).
+  if (x1 > page_w) {
+    x1 = page_w
+    h = (x1 - box.x0) / ratio
+    y1 = box.y0 + h
   }
 
   return { x0: box.x0, y0: box.y0, x1, y1 }
@@ -309,7 +348,7 @@ export function keep_ratio_anchored(
     }
     case 'move': break                                          // translation preserves the ratio
   }
-  return clamp_box_drag({ x0, y0, x1, y1 }, page_w, page_h)
+  return clamp_box_drag({ x0, y0, x1, y1 }, page_w, page_h, handle)
 }
 
 // Rotate a box 90° CW within a page (spec §13).
@@ -435,6 +474,16 @@ export function split_rects_grid(n: 1 | 2 | 4, page_w: number, page_h: number): 
     { x0: hw, y0: 0,  x1: page_w, y1: hh      }, // 3 TR
     { x0: hw, y0: hh, x1: page_w, y1: page_h  }, // 4 BR
   ]
+}
+
+// Column/row of split index i within an n-window grid, read directly off split_rects_grid's own
+// box order (not a parallel re-derivation of it) — same-size propagation (CropController) mirrors
+// deltas by this parity, so deriving it from the actual grid keeps the two from silently desyncing
+// if the grid order above ever changes. Any page size works; only which half each box falls in
+// (relative to the page center) matters.
+export function split_grid_position(n: 1 | 2 | 4, i: number): { col: number; row: number } {
+  const box = split_rects_grid(n, 2, 2)[i]
+  return { col: box && box.x0 > 0 ? 1 : 0, row: box && box.y0 > 0 ? 1 : 0 }
 }
 
 // Reindex a per-page map after page deletion.

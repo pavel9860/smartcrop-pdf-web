@@ -43,14 +43,27 @@ self.onmessage = async (ev: MessageEvent<Req>): Promise<void> => {
 
 async function build_pdf(pages: OutputPage[], quality: number): Promise<Uint8Array> {
   const doc = await PDFDocument.create()
-  for (const p of pages) {
-    const jpeg  = await bitmap_to_jpeg(p.bitmap, quality)
-    const img   = await doc.embedJpg(jpeg)
-    const page  = doc.addPage([p.width, p.height])
-    page.drawImage(img, { x: 0, y: 0, width: p.width, height: p.height })
-    p.bitmap.close()
+  try {
+    for (const p of pages) {
+      const jpeg  = await bitmap_to_jpeg(p.bitmap, quality)
+      const img   = await doc.embedJpg(jpeg)
+      const page  = doc.addPage([p.width, p.height])
+      page.drawImage(img, { x: 0, y: 0, width: p.width, height: p.height })
+      p.bitmap.close()
+    }
+  } catch (e) {
+    // A mid-batch failure (e.g. context unavailable for one page) must not leak every
+    // not-yet-processed page's bitmap — close what's left, then let the error propagate.
+    for (const p of pages) close_quietly(p.bitmap)
+    throw e
   }
   return doc.save({ useObjectStreams: true })
+}
+
+// ImageBitmap.close() on an already-closed bitmap is a no-op in every real implementation but
+// isn't spec-guaranteed — swallow a double-close rather than let cleanup itself throw.
+function close_quietly(b: ImageBitmap): void {
+  try { b.close() } catch { /* already closed */ }
 }
 
 // Encode every output page and pack into ONE zip (spec-web §W: image formats deliver a single
@@ -66,20 +79,27 @@ async function zip_images(
   const total = pages.length
   const entries: Zippable = {}
   let i = 0
-  for (const p of pages) {
-    const idx = String(++i).padStart(3, '0')
-    entries[`${base}_${idx}.${ext}`] = [await encode_page(p, format, quality), { level }]
-    on_progress(i, total)
+  try {
+    for (const p of pages) {
+      const idx = String(++i).padStart(3, '0')
+      entries[`${base}_${idx}.${ext}`] = [await encode_page(p, format, quality), { level }]
+      on_progress(i, total)
+    }
+  } catch (e) {
+    // Mirrors build_pdf's cleanup: a mid-batch failure must not leak the remaining pages'
+    // bitmaps (encode_page already closes the one it was working on via its own finally).
+    for (const p of pages) close_quietly(p.bitmap)
+    throw e
   }
   return zipSync(entries)
 }
 
 async function encode_page(p: OutputPage, format: ImageFormat, quality: number): Promise<Uint8Array> {
-  const canvas = new OffscreenCanvas(p.width, p.height)
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
-  ctx.drawImage(p.bitmap, 0, 0)
   try {
+    const canvas = new OffscreenCanvas(p.width, p.height)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
+    ctx.drawImage(p.bitmap, 0, 0)
     if (format === 'TIFF') {
       const { data } = ctx.getImageData(0, 0, p.width, p.height)
       return encode_tiff(data, p.width, p.height)

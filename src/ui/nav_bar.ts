@@ -2,7 +2,7 @@
 
 import type { AppModel } from '@core/model'
 import type { AppController } from './app'
-import { requireEl } from './dom'
+import { requireEl, syncInputValue } from './dom'
 
 export class NavBar {
   private readonly _undo_btn:  HTMLButtonElement
@@ -75,9 +75,7 @@ export class NavBar {
     this._reset_btn.disabled = busy || !model.has_document
     this._prev_btn.disabled  = busy || model.view_position <= 1
     this._next_btn.disabled  = busy || model.view_position >= model.view_total
-    if (document.activeElement !== this._page_inp) {
-      this._page_inp.value = String(model.view_position)
-    }
+    syncInputValue(this._page_inp, String(model.view_position))
     this._page_inp.max       = String(model.view_total)
     this._page_inp.disabled  = busy || !model.has_document
     this._total_el.textContent = `/ ${model.view_total}`

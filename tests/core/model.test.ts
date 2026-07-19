@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
 import { Mode, FilterMode, PagesMode } from '@core/enums'
-import { Ok } from '@core/batch'
+import { Ok, Failed } from '@core/batch'
 import {
   NoDocumentError, EmptySelectionError, InvalidSplitError, DeleteAllPagesError,
 } from '@core/errors'
@@ -551,8 +551,10 @@ describe('scan processing (toggle flips instantly; warm batch behavior in scan_b
     adapter.get_work_image = (): Promise<ImageBitmap> => Promise.reject(new Error('boom'))
     const model = new AppModel(adapter)
     await model.load_files([FILE()])
-    expect(() => { model.run_dewarp() }).not.toThrow()   // intent recorded; job fails async
+    let job
+    expect(() => { job = model.run_dewarp() }).not.toThrow()   // intent recorded; job fails async
     expect(model.dewarp_on).toBe(true)
+    expect(await job!.result()).toBeInstanceOf(Failed)
   })
 })
 

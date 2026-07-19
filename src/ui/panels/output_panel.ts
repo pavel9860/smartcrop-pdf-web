@@ -66,10 +66,7 @@ export class OutputPanel {
     this._format_sel.addEventListener('change', () => {
       ctrl.dispatch(() => { model.set_export_format(this._format_sel.value) })
     })
-    this._export_btn.addEventListener('click', () => {
-      const name = model.suggested_export_name()
-      ctrl.dispatch_job(() => model.export(name))
-    })
+    this._export_btn.addEventListener('click', () => { ctrl.trigger_export() })
   }
 
   refresh(model: AppModel, busy: boolean): void {

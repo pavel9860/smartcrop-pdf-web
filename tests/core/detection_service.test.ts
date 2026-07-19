@@ -1,14 +1,14 @@
 // DetectionService tests (§18 AppModel decomposition, step 5/7): direct unit coverage of
 // Auto-detect, independent of AppModel (which exercises it indirectly through its own suite).
 import { describe, it, expect, vi } from 'vitest'
-import { DetectionService, type DetectionContext, type RegionDetectionState } from '@core/detection_service'
+import { DetectionService, type DetectionContext } from '@core/detection_service'
 import type { DetectionState } from '@core/page_ops_service'
 import { PageIndexMap } from '@core/page_index_map'
 import { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { History } from '@core/history'
 import { default_document_state, type DocumentState } from '@core/document_state'
 import { Mode } from '@core/enums'
-import { Failed, Cancelled } from '@core/batch'
+import { Ok, Failed, Cancelled } from '@core/batch'
 import type { RendererAdapter, PageSize } from '@core/model'
 import type { Box } from '@core/geometry'
 import { make_adapter } from './harness'
@@ -27,7 +27,6 @@ function setup(opts: {
   svc: DetectionService
   doc: DocumentState
   detection: DetectionState
-  region_detection: RegionDetectionState
   anchor: { left: boolean; top: boolean }
   keep_ratio: { v: boolean }
   ratio: { v: number }
@@ -46,7 +45,6 @@ function setup(opts: {
   })
   const doc = default_document_state()
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
-  const region_detection: RegionDetectionState = { unions: [] }
   const anchor = { left: true, top: true }
   const keep_ratio = { v: false }
   const ratio = { v: 1 }
@@ -61,8 +59,6 @@ function setup(opts: {
     mode: () => opts.mode ?? Mode.NORMAL,
     detection: () => detection,
     set_detection: (d) => { detection.cache = d.cache; detection.union = d.union; detection.auto_active = d.auto_active },
-    region_detection: () => region_detection,
-    set_region_detection: (d) => { region_detection.unions = d.unions },
     split_count: () => opts.split_count ?? 1,
     same_size: () => opts.same_size ?? false,
     current_page: () => opts.current_page ?? 0,
@@ -75,7 +71,7 @@ function setup(opts: {
     set_drawn: (box) => { drawn.v = box },
   }
   const svc = new DetectionService(adapter, history, raster, idx, ctx)
-  return { svc, doc, detection, region_detection, anchor, keep_ratio, ratio, invalidated, drawn }
+  return { svc, doc, detection, anchor, keep_ratio, ratio, invalidated, drawn }
 }
 
 describe('DetectionService.detect — NORMAL mode', () => {
@@ -87,7 +83,7 @@ describe('DetectionService.detect — NORMAL mode', () => {
       adapter: { detect_text_box: text_box, get_source_image: get_source },
     })
     const result = await svc.detect([0]).result()
-    expect(result).toBeInstanceOf(Object) // Ok
+    expect(result).toBeInstanceOf(Ok)
     expect(text_box).toHaveBeenCalledTimes(1)
     expect(get_source).not.toHaveBeenCalled()
     expect(detection.cache.get(0)).toEqual({ x0: 5, y0: 5, x1: 100, y1: 100 })
@@ -193,17 +189,13 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
     // Mock: "detected content" is the region inset by 10px on every side.
     const content_box = vi.fn((_i: unknown, _w: number, _h: number, _m: unknown, region: Box) =>
       Promise.resolve({ x0: region.x0 + 10, y0: region.y0 + 10, x1: region.x1 - 10, y1: region.y1 - 10 } as Box))
-    const { svc, doc, region_detection } = setup({
+    const { svc, doc } = setup({
       mode: Mode.SCANNED, split_count: 2, page_count: 1,
       adapter: { detect_content_box: content_box },
     })
     const result = await svc.detect([0]).result()
-    expect(result).toBeInstanceOf(Object)   // Ok
+    expect(result).toBeInstanceOf(Ok)
     expect(content_box).toHaveBeenCalledTimes(2)   // once per region
-    expect(region_detection.unions).toEqual([
-      { x0: 10, y0: 10, x1: 90, y1: 290 },
-      { x0: 110, y0: 10, x1: 190, y1: 290 },
-    ])
     expect(doc.crop_rects).toEqual([
       { x0: 10, y0: 10, x1: 90, y1: 290 },
       { x0: 110, y0: 10, x1: 190, y1: 290 },
@@ -262,12 +254,11 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
       Promise.resolve(region.x0 === 0
         ? { x0: region.x0, y0: region.y0, x1: region.x1, y1: region.y1 }   // full-region -> excluded by FULL_PAGE_FRAC
         : { x0: region.x0 + 10, y0: region.y0 + 10, x1: region.x1 - 10, y1: region.y1 - 10 } as Box))
-    const { svc, doc, region_detection } = setup({
+    const { svc, doc } = setup({
       mode: Mode.SCANNED, split_count: 2, page_count: 1,
       adapter: { detect_content_box: content_box },
     })
     await svc.detect([0]).result()
-    expect(region_detection.unions[0]).toBeNull()
     expect(doc.crop_rects[0]).toEqual({ x0: 0, y0: 0, x1: 100, y1: 300 })   // the raw left region
   })
 
@@ -279,22 +270,20 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
     // from the (page-independent) region union alone.
     const content_box = vi.fn((_i: unknown, _w: number, _h: number, _m: unknown, region: Box) =>
       Promise.resolve({ x0: region.x0 + 10, y0: region.y0 + 10, x1: region.x1 - 10, y1: region.y1 - 10 } as Box))
-    const { svc, doc, region_detection } = setup({
+    const { svc, doc } = setup({
       mode: Mode.SCANNED, split_count: 2, page_count: 2, current_page: 0,
       adapter: { detect_content_box: content_box },
     })
     await svc.detect([0, 1]).result()
     const from_page0 = [...doc.crop_rects]
-    const unions0 = [...region_detection.unions]
 
-    const { svc: svc2, doc: doc2, region_detection: rd2 } = setup({
+    const { svc: svc2, doc: doc2 } = setup({
       mode: Mode.SCANNED, split_count: 2, page_count: 2, current_page: 1,
       adapter: { detect_content_box: content_box },
     })
     await svc2.detect([0, 1]).result()
 
     expect(doc2.crop_rects).toEqual(from_page0)
-    expect(rd2.unions).toEqual(unions0)
   })
 
   it('regression: adjacent regions\' windows meet exactly at the split boundary — no gap (a prior ' +

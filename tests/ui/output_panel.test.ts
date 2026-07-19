@@ -39,9 +39,9 @@ describe('OutputPanel', () => {
     expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBeGreaterThanOrEqual(2)
   })
 
-  it('export button dispatches a job', () => {
+  it('export button calls the shared trigger_export (dispatch_job behavior tested on AppController, app.test.ts)', () => {
     root.querySelector<HTMLButtonElement>('#op-export')!.click()
-    expect(fc.calls.some(c => c.kind === 'dispatch_job')).toBe(true)
+    expect(fc.calls.some(c => c.kind === 'trigger_export')).toBe(true)
   })
 
   it('busy disables export', () => {

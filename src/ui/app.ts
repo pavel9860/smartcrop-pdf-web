@@ -1,7 +1,7 @@
 // AppController — owns AppModel, drives BatchJobs, single error-catch site (ARCHITECTURE §6).
 // Wires the three-column layout (sidebar | detail panel | canvas).
 
-import { AppModel } from '@core/model'
+import { AppModel, type RendererAdapter } from '@core/model'
 import type { BatchJob } from '@core/batch'
 import { Failed } from '@core/batch'
 import { PdfRendererAdapter } from '@pdf/loader'
@@ -38,7 +38,7 @@ export interface UIConfig {
 
 export class AppController {
   private readonly _model: AppModel
-  private readonly _adapter: PdfRendererAdapter
+  private readonly _adapter: RendererAdapter
   private _current_job: BatchJob | null = null
 
   // Layout elements
@@ -57,8 +57,10 @@ export class AppController {
   private readonly _nav_bar: NavBar
   private readonly _detail_panel: DetailPanel
 
-  constructor(root: HTMLElement) {
-    this._adapter = new PdfRendererAdapter()
+  // adapter: injectable for tests (mock RendererAdapter, no real PDF.js/OpenCV/ONNX); production
+  // (main.ts) always omits it and gets the real PdfRendererAdapter.
+  constructor(root: HTMLElement, adapter: RendererAdapter = new PdfRendererAdapter()) {
+    this._adapter = adapter
     this._model   = new AppModel(this._adapter)
     this._restore_output_prefs()   // apply persisted output-quality settings before first render
 
@@ -260,6 +262,9 @@ export class AppController {
     col.addEventListener('drop', ev => {
       ev.preventDefault()
       this._drop_zone.classList.remove('drag-over')
+      // Same guard as the sidebar Load button (pages_panel.ts disables it while busy): a batch
+      // job in flight must not have its document/history replaced out from under it.
+      if (this.busy) return
       const files = Array.from(ev.dataTransfer?.files ?? [])
       if (files.length) this.dispatch_async(() => this._model.load_files(files))
     })
@@ -401,20 +406,32 @@ export class AppController {
   // ---------------------------------------------------------------------------
 
   private _on_shortcut = (ev: KeyboardEvent): void => {
-    // Delete/Backspace deletes the Pages selection, mirroring crop_panel's Delete button — skip
-    // when a text input has focus so Backspace still edits the page-jump box normally.
-    if ((ev.key === 'Delete' || ev.key === 'Backspace')
-      && !(ev.target instanceof HTMLInputElement || ev.target instanceof HTMLTextAreaElement)) {
+    // A text input/textarea has focus — every shortcut below is left to the field (and the
+    // browser's own Ctrl+Z/Y undo-redo within it) rather than hijacked for app-level commands.
+    const typing = ev.target instanceof HTMLInputElement || ev.target instanceof HTMLTextAreaElement
+    // Delete/Backspace deletes the Pages selection, mirroring crop_panel's Delete button.
+    // ev.repeat guarded so holding the key doesn't stack a confirm dialog per OS key-repeat tick.
+    if ((ev.key === 'Delete' || ev.key === 'Backspace') && !typing && !ev.repeat) {
       ev.preventDefault()
-      this._delete_selected_pages()
+      this.delete_selected_pages()
       return
     }
+    // Left/Right/PgUp/PgDn navigate pages, same as the canvas mouse wheel (spec-web §20) — left
+    // alone while typing so arrow-key cursor movement inside a field still works normally.
+    if (!typing) {
+      if (ev.key === 'ArrowLeft' || ev.key === 'PageUp') {
+        ev.preventDefault(); this.dispatch(() => { this._model.prev_page() }); return
+      }
+      if (ev.key === 'ArrowRight' || ev.key === 'PageDown') {
+        ev.preventDefault(); this.dispatch(() => { this._model.next_page() }); return
+      }
+    }
     const ctrl = ev.ctrlKey || ev.metaKey
-    if (!ctrl) return
+    if (!ctrl || typing) return
     switch (ev.key) {
       case 'o': ev.preventDefault(); this._pages_panel.trigger_load(); break
       case 'Enter': ev.preventDefault(); this.dispatch(() => { this._model.apply_crop() }); break
-      case 's': ev.preventDefault(); this._trigger_export(); break
+      case 's': ev.preventDefault(); this.trigger_export(); break
       case 'z': ev.preventDefault(); this.dispatch(() => { this._model.undo() }); break
       case 'y': ev.preventDefault(); this.dispatch(() => { this._model.redo() }); break
       case '=': case '+': ev.preventDefault(); this.zoom(1); break
@@ -423,14 +440,16 @@ export class AppController {
     }
   }
 
-  private _trigger_export(): void {
+  // Public: shared by the Ctrl+S keyboard shortcut and output_panel.ts's Export button.
+  trigger_export(): void {
     const name = this._model.suggested_export_name()
     this.dispatch_job(() => this._model.export(name))
   }
 
-  // Same guard/confirm/dispatch as crop_panel's Delete button — reused by the Delete/Backspace
-  // keyboard shortcut.
-  private _delete_selected_pages(): void {
+  // Public: shared by the Delete/Backspace keyboard shortcut and crop_panel.ts's Delete button.
+  delete_selected_pages(): void {
+    // Deleting every page always fails (DeleteAllPagesError) — check first so that case gets a
+    // plain info notice, not a confirm dialog for an action that was never going to happen.
     if (this._model.resolve_pages().length >= this._model.page_count()) {
       void this.alert('Cannot delete all pages.', 'info')
       return

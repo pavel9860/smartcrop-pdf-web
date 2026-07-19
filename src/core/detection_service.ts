@@ -22,16 +22,6 @@ import type { PageIndexMap } from './page_index_map'
 import type { PageRasterPipeline } from './page_raster_pipeline'
 import type { DetectionState } from './page_ops_service'
 
-// Per-region detection results (split = 2/4, spec §5a) — parallel to DetectionState above but one
-// entry per split region instead of one shared page-wide result. Non-undoable AppModel state, same
-// tier as DetectionState (spec-web §12). Only the aggregated union is kept: unlike split=1 (where
-// each page resolves its OWN crop from its own cached box at apply time, spec §6.2), split mode's
-// crop_rects is a single template shared by every page (§5a) — there is no per-page anchor to read
-// a per-page cache back out for, so retaining one would be dead state.
-export interface RegionDetectionState {
-  unions: (Box | null)[]   // per region index: cross-page union, spec §5
-}
-
 export interface DetectionContext {
   has_document(): boolean
   document(): DocumentState
@@ -39,8 +29,6 @@ export interface DetectionContext {
   mode(): Mode
   detection(): DetectionState
   set_detection(d: DetectionState): void
-  region_detection(): RegionDetectionState
-  set_region_detection(d: RegionDetectionState): void
   split_count(): 1 | 2 | 4
   same_size(): boolean
   current_page(): number
@@ -212,7 +200,6 @@ export class DetectionService {
     }
 
     this._history.push(this._ctx.document())
-    this._ctx.set_region_detection({ unions })
     this._write_split_crop_rects(pages, n, unions)
 
     ctrl.complete(new Ok())
@@ -236,7 +223,10 @@ export class DetectionService {
   // handles a region too small to fit it).
   private _write_split_crop_rects(pages: readonly number[], n: 2 | 4, unions: (Box | null)[]): void {
     if (!this._ctx.anchor_left() && !this._ctx.anchor_top()) return
-    const sz = this._ctx.page_dims(this._ctx.current_page())
+    // Any page in the actual detected selection, not the currently-viewed page — crop_rects is one
+    // shared template (see comment above), and `current_page()` need not even be in `pages` (spec
+    // §5a: anchoring template geometry to incidental navigation state was a confirmed real bug).
+    const sz = this._ctx.page_dims(pages[0] ?? this._ctx.current_page())
     const regions = split_rects_grid(n, sz.width, sz.height)
     const same_size = this._ctx.same_size()
     const max_w = same_size ? Math.max(0, ...unions.map(u => u ? box_width(u) : 0)) : 0

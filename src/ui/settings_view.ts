@@ -8,7 +8,7 @@ import {
   CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DETECT_OUTLIER_OPTIONS,
 } from '@core/constants'
 import { FONT_SIZE_PRESETS, ZOOM_PRESETS, THEMES } from './constants'
-import { requireEl, syncCustomReveal } from './dom'
+import { requireEl, syncCustomReveal, syncInputValue } from './dom'
 
 export class SettingsView {
   private readonly _el: HTMLElement
@@ -199,10 +199,8 @@ export class SettingsView {
     // an approximated "nearest" preset).
     this._zoom_sel.value = String(ui.ui_scale)
 
-    if (document.activeElement !== this._postfix_inp) this._postfix_inp.value = model.output_postfix
-    if (document.activeElement !== this._custom_dpi_inp) {
-      this._custom_dpi_inp.value = String(model.custom_dpi)
-    }
+    syncInputValue(this._postfix_inp, model.output_postfix)
+    syncInputValue(this._custom_dpi_inp, String(model.custom_dpi))
     this._paper_sel.value = model.paper_size
     syncCustomReveal(this._paper_sel, this._custom_paper_row, this._custom_paper_inp,
       CUSTOM_PAPER_PRESET, String(model.custom_paper_in))
@@ -212,9 +210,7 @@ export class SettingsView {
     this._undo_sel.value = String(model.undo_depth)
     this._outlier_sel.value = String(model.detect_outlier_pages)
 
-    if (document.activeElement !== this._supersample_inp) {
-      this._supersample_inp.value = model.dewarp_supersample.toFixed(1)
-    }
+    syncInputValue(this._supersample_inp, model.dewarp_supersample.toFixed(1))
   }
 
   get el(): HTMLElement { return this._el }

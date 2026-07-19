@@ -54,10 +54,18 @@ export function ensure_cv(): Promise<void> {
     // (cv.Mat is typed as an always-present constructor but is genuinely undefined pre-init —
     // read through an optional view so the runtime guard isn't type-narrowed away.)
     const cv_ready = (cv as { Mat?: unknown }).Mat != null
-    _cv_init = cv_ready ? Promise.resolve() : new Promise<void>((resolve): void => {
+    _cv_init = cv_ready ? Promise.resolve() : new Promise<void>((resolve, reject): void => {
       cv.onRuntimeInitialized = (): void => { resolve() }
-      // Fallback timeout in case the callback doesn't fire (matches prior behaviour)
-      setTimeout(resolve, 10_000)
+      // Fallback timeout in case the callback doesn't fire (matches prior behaviour) — but only
+      // resolve if init actually completed by then; otherwise reject with a diagnosable error
+      // instead of silently proceeding into a "cv.Mat is not a constructor" crash downstream, and
+      // clear the cache so the NEXT call re-checks cv.Mat / re-arms the callback rather than
+      // permanently failing every future call just because init finished a moment late.
+      setTimeout(() => {
+        if ((cv as { Mat?: unknown }).Mat != null) { resolve(); return }
+        _cv_init = null
+        reject(new Error('OpenCV.js failed to initialize within 10s'))
+      }, 10_000)
     })
   }
   return _cv_init

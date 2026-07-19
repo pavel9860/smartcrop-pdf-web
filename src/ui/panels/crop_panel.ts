@@ -2,7 +2,7 @@
 
 import type { AppModel } from '@core/model'
 import type { AppController } from '../app'
-import { requireEl } from '../dom'
+import { requireEl, syncInputValue } from '../dom'
 
 export class CropPanel {
   // Split
@@ -136,17 +136,7 @@ export class CropPanel {
       { ctrl.dispatch(() => { model.apply_crop() }) })
     this._rotate_btn.addEventListener('click', () =>
       { ctrl.dispatch(() => { model.rotate_pages() }) })
-    this._delete_btn.addEventListener('click', () => {
-      // Deleting every page always fails (DeleteAllPagesError) — check first so that case gets a
-      // plain info notice, not a confirm dialog for an action that was never going to happen.
-      if (model.resolve_pages().length >= model.page_count()) {
-        void ctrl.alert('Cannot delete all pages.', 'info')
-        return
-      }
-      void ctrl.confirm('Delete selected pages?', 'Delete').then(ok => {
-        if (ok) ctrl.dispatch(() => { model.delete_pages() })
-      })
-    })
+    this._delete_btn.addEventListener('click', () => { ctrl.delete_selected_pages() })
   }
 
   refresh(model: AppModel, busy: boolean): void {
@@ -168,19 +158,17 @@ export class CropPanel {
     this._anchor_t.disabled    = busy
     this._keep_ratio_sw.checked  = model.keep_ratio
     this._ratio_inp.disabled     = busy
-    if (document.activeElement !== this._ratio_inp) {
-      this._ratio_inp.value = model.ratio.toFixed(3)
-    }
+    syncInputValue(this._ratio_inp, model.ratio.toFixed(3))
 
     // L/T/R/B fields (spec-web §4.6): shown only while a window is hand-drawn (split = 1), edit
     // its position relative to each page side, % — no separate switch, no seeded default.
     const o = model.drawn_offsets
     this._offset_body.classList.toggle('hidden', !o)
     if (o) {
-      if (document.activeElement !== this._offset_l) this._offset_l.value = o.left.toFixed(1)
-      if (document.activeElement !== this._offset_t) this._offset_t.value = o.top.toFixed(1)
-      if (document.activeElement !== this._offset_r) this._offset_r.value = o.right.toFixed(1)
-      if (document.activeElement !== this._offset_b) this._offset_b.value = o.bottom.toFixed(1)
+      syncInputValue(this._offset_l, o.left.toFixed(1))
+      syncInputValue(this._offset_t, o.top.toFixed(1))
+      syncInputValue(this._offset_r, o.right.toFixed(1))
+      syncInputValue(this._offset_b, o.bottom.toFixed(1))
     }
     this._offset_l.disabled = this._offset_t.disabled =
     this._offset_r.disabled = this._offset_b.disabled = busy || !o

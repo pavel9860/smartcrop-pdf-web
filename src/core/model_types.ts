@@ -47,7 +47,10 @@ export interface RendererAdapter {
   get_source_image(page_idx: number, dpi: number, rotation: number): Promise<ImageBitmap>
   // Scan processing (dewarp/filter) applied to an ALREADY-rendered source bitmap. Taking the
   // source (not a page index) means the model renders each page exactly once and hands that raster
-  // straight to processing — no second internal rasterization (spec-web §W2 row 5).
+  // straight to processing — no second internal rasterization (spec-web §W2 row 5). With a no-op
+  // intent (no dewarp, no filter) this returns `source` itself, not a fresh bitmap — deliberate,
+  // to avoid a pointless copy on the common case — so a caller must never close the result while
+  // still holding `source` for its own use (same aliasing contract as `rotate_bitmap` below).
   get_work_image(source: ImageBitmap, intent: PageProcessIntent,
                  supersample: number): Promise<ImageBitmap>
   // Re-orients an already-processed bitmap (e.g. a cached Dewarp&Deskew result) without

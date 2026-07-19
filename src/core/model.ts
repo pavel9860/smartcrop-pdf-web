@@ -12,7 +12,7 @@ import { PageIndexMap } from './page_index_map'
 import { PageRasterPipeline } from './page_raster_pipeline'
 import { CropController } from './crop_controller'
 import { PageOpsService, type DetectionState } from './page_ops_service'
-import { DetectionService, type RegionDetectionState } from './detection_service'
+import { DetectionService } from './detection_service'
 import { ScanProcessingService } from './scan_processing_service'
 import { ExportService } from './export_service'
 import { ViewSnapshotBuilder } from './view_snapshot_builder'
@@ -72,13 +72,6 @@ export class AppModel {
   private _detect_cache = new Map<number, Box>()   // per-page content box from last detect
   private _union:        Box | null = null   // aggregate detection union (§5)
   private _auto_active   = false             // auto-detect was run at least once
-
-  // Per-region detection results (split = 2/4, spec §5a) — same non-undoable tier as the fields
-  // above, one union per split region instead of one shared union. Cleared alongside them (reset/
-  // set_split) and on rotate/delete (PageOpsService) rather than rebuilt: a rotation reshuffles
-  // which region is "top-left" and a delete changes per-page content, so a stale per-region union
-  // is more likely to mislead than a forced re-detect.
-  private _region_unions: (Box | null)[] = []
 
   // NORMAL-mode preview render DPI (spec-web §2), resolved from the canvas' actual display size
   // via set_display_scale() — never below NORMAL_DPI, never above NORMAL_DISPLAY_DPI_MAX. Purely
@@ -178,8 +171,6 @@ export class AppModel {
       mode: (): Mode => this._mode,
       detection: detection_state,
       set_detection: set_detection_state,
-      region_detection: (): RegionDetectionState => ({ unions: this._region_unions }),
-      set_region_detection: (d): void => { this._region_unions = d.unions },
       split_count: (): 1 | 2 | 4 => this._crop.split_count,
       same_size: (): boolean => this._crop.same_size,
       anchor_left: (): boolean => this._crop.anchor_left,
@@ -250,7 +241,6 @@ export class AppModel {
     this._detect_cache = new Map()
     this._union = null
     this._auto_active = false
-    this._region_unions = []
     this._raster.reset()
     this._page_index.reset(this._doc ? this._doc.page_count : 0)
     // Keep-ratio initialises to the first page's real w/h, not a bare 1.0, so the ratio field
@@ -353,16 +343,22 @@ export class AppModel {
         `Need exactly ${this._crop.split_count} split rectangles; have ${this.document.crop_rects.length}`)
     }
 
-    this.history.push(this.document)
-
-    for (const p of pages) {
-      if (this._crop.split_count === 1) {
-        const boxes = this._crop.compute_crop_boxes_for_page(p)
-        if (boxes) {
-          this.document.applied.set(p, boxes)
-          this._invalidate_output_cache(p)
-        }
-      } else {
+    if (this._crop.split_count === 1) {
+      // Resolve every page's crop boxes BEFORE touching history — with no drawn window and no
+      // anchored auto-crop, every page resolves to null and nothing is committed: a true no-op
+      // must take no history snapshot (spec-web §10.2), not push one and then find nothing to do.
+      const writes = pages
+        .map((p): [number, Box[] | null] => [p, this._crop.compute_crop_boxes_for_page(p)])
+        .filter((entry): entry is [number, Box[]] => entry[1] !== null)
+      if (writes.length === 0) return
+      this.history.push(this.document)
+      for (const [p, boxes] of writes) {
+        this.document.applied.set(p, boxes)
+        this._invalidate_output_cache(p)
+      }
+    } else {
+      this.history.push(this.document)
+      for (const p of pages) {
         this.document.applied.set(p, [...this.document.crop_rects])
         this._invalidate_output_cache(p)
       }
@@ -376,12 +372,7 @@ export class AppModel {
   set_anchor(left: boolean | null, top: boolean | null): void { this._crop.set_anchor(left, top) }
   set_drawn_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_drawn_offset(edge, value) }
   set_keep_ratio(on: boolean, ratio?: number): void { this._crop.set_keep_ratio(on, ratio) }
-  // A split-count change reshuffles region definitions entirely (region 0 no longer means the
-  // same slice) — clear any prior per-region detect result rather than let it silently mismatch.
-  set_split(n: 1 | 2 | 4): void {
-    this._crop.set_split(n)
-    this._region_unions = []
-  }
+  set_split(n: 1 | 2 | 4): void { this._crop.set_split(n) }
   set_same_size(on: boolean): void { this._crop.set_same_size(on) }
   begin_drag(px: number, py: number, tol: number): void { this._crop.begin_drag(px, py, tol) }
   update_drag(px: number, py: number): void { this._crop.update_drag(px, py) }
@@ -473,18 +464,9 @@ export class AppModel {
   // ---------------------------------------------------------------------------
 
   // Rotate/delete (spec-web §6.10) are owned by PageOpsService (§18) — 1-line delegations so
-  // ui/ keeps calling AppModel's public surface unchanged. Per-region detect state (split = 2/4,
-  // spec §5a) isn't rebuilt like the single-crop union is (PageOpsService) — a rotation reshuffles
-  // which region is "top-left" and a delete changes per-page content, so it's simplest and always
-  // correct to just clear it and require a fresh Auto-detect press, rather than rebuild it wrong.
-  rotate_pages(): void {
-    this._page_ops.rotate(this._require_pages())
-    this._region_unions = []
-  }
-  delete_pages(): void {
-    this._page_ops.delete(this._require_pages())
-    this._region_unions = []
-  }
+  // ui/ keeps calling AppModel's public surface unchanged.
+  rotate_pages(): void { this._page_ops.rotate(this._require_pages()) }
+  delete_pages(): void { this._page_ops.delete(this._require_pages()) }
 
   // ---------------------------------------------------------------------------
   // Export

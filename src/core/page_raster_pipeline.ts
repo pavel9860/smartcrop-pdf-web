@@ -166,18 +166,16 @@ export class PageRasterPipeline {
   }
 
   async get_work(p: number): Promise<ImageBitmap> {
-    if (this._ctx.mode() !== Mode.SCANNED) {
-      // NORMAL: the work raster IS the source raster. Do NOT also store it in the work cache — the
-      // same bitmap in two close-on-evict caches gets double-closed, detaching a bitmap the other
-      // cache still serves (root of the "image source is detached" crash). It stays in the source cache.
+    const slot = this._work_slot(p)
+    if (slot === 'source') {
+      // NORMAL, or a no-op intent: the work raster IS the source raster. Do NOT also store it in
+      // the work cache — the same bitmap in two close-on-evict caches gets double-closed,
+      // detaching a bitmap the other cache still serves (root of the "image source is detached"
+      // crash). It stays in the source cache.
       return this.get_source(p)
     }
 
-    // A no-op intent (no dewarp, no filter) has no work raster distinct from the source — return
-    // src directly rather than caching a duplicate (same double-close hazard as NORMAL).
     const intent = this._ctx.process_intent(p)
-    if (!intent.dewarp && !intent.filter) return this.get_source(p)
-
     const rotation = this._ctx.rotation(p)
     const supersample = this._ctx.dewarp_supersample()
 
@@ -187,19 +185,36 @@ export class PageRasterPipeline {
     // of re-running the dewarp pass on every filter change.
     const base = intent.dewarp ? await this._get_dewarped(p, rotation, supersample) : await this.get_source(p)
     // Dewarp-only (no filter): the dewarped raster IS the work result — same double-close hazard as
-    // NORMAL's aliasing above, don't also store it in _work_versions.
+    // the source-aliasing case above, don't also store it in _work_versions.
     if (!intent.filter) return base
 
-    const cache = this._version_cache(this._work_versions, p)
-    const key = this._work_key(intent, rotation)
-    const cached = cache.get(key)
+    const cache = this._version_cache(slot.map, p)
+    const cached = cache.get(slot.key)
     if (cached) return cached
 
     // dewarp:false — `base` already carries the dewarp step (or never needed one); this call does
     // filter-only work.
     const work = await this._adapter.get_work_image(base, { dewarp: false, filter: intent.filter }, supersample)
-    cache.set(key, work)
+    cache.set(slot.key, work)
     return work
+  }
+
+  // Which cache map + key get_work(p) resolves to for its CURRENT process_intent/rotation — the
+  // single source of truth for cache routing, used by get_work itself (the final work_versions
+  // step) and by prefetch's warmth check below, so the two can never independently drift on what
+  // counts as "already cached." Read-only: never creates a cache entry (unlike _version_cache).
+  private _work_slot(p: number): { map: Map<number, LRUCache<string, ImageBitmap>>; key: string } | 'source' {
+    if (this._ctx.mode() !== Mode.SCANNED) return 'source'
+    const intent = this._ctx.process_intent(p)
+    if (!intent.dewarp && !intent.filter) return 'source'
+    const rotation = this._ctx.rotation(p)
+    const supersample = this._ctx.dewarp_supersample()
+    if (!intent.filter) {
+      return rotation === 0
+        ? { map: this._dewarp_canonical, key: String(supersample) }
+        : { map: this._dewarped_versions, key: this._dewarped_key(rotation, supersample) }
+    }
+    return { map: this._work_versions, key: this._work_key(intent, rotation) }
   }
 
   // Resolves the page's Dewarp&Deskew result at its CURRENT rotation, deriving it from the
@@ -259,19 +274,10 @@ export class PageRasterPipeline {
   // flash while the (potentially heavy, scanned-mode) work raster renders on demand.
   prefetch(p: number): void {
     if (p < 0 || p >= this._page_index.length || this._prefetching.has(p)) return
-    const intent = this._ctx.process_intent(p)
-    const rotation = this._ctx.rotation(p)
-    const supersample = this._ctx.dewarp_supersample()
-    // Mirrors get_work's own cache routing (dewarp-only aliases to _dewarp_canonical/
-    // _dewarped_versions, never duplicated into _work_versions) so an already-warm dewarp-only
-    // page isn't reported cold here.
-    const warm = this._ctx.mode() !== Mode.SCANNED || (!intent.dewarp && !intent.filter)
-      ? (this._source_versions.get(p)?.has(String(rotation)) ?? false)
-      : intent.filter
-        ? (this._work_versions.get(p)?.has(this._work_key(intent, rotation)) ?? false)
-        : rotation === 0
-          ? (this._dewarp_canonical.get(p)?.has(String(supersample)) ?? false)
-          : (this._dewarped_versions.get(p)?.has(this._dewarped_key(rotation, supersample)) ?? false)
+    const slot = this._work_slot(p)
+    const warm = slot === 'source'
+      ? (this._source_versions.get(p)?.has(String(this._ctx.rotation(p))) ?? false)
+      : (slot.map.get(p)?.has(slot.key) ?? false)
     if (warm) return
     this._prefetching.add(p)
     void this.get_work(p).catch(() => { /* best-effort warm */ })

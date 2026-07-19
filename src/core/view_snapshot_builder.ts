@@ -3,7 +3,7 @@
 // §W8). Synchronous; reads only pre-fetched bitmaps from the raster cache (prepare_current_view()
 // must run first, still owned by AppModel, since it's async cache-warming, not view computation).
 import type { Box } from './geometry'
-import { box_width, box_height, auto_crop_rect, centered_crop_rect, keep_ratio_normalise } from './geometry'
+import { box_width, box_height, auto_crop_rect, centered_crop_rect, keep_ratio_normalise, clamp_box_to_page } from './geometry'
 import type { DocumentState } from './document_state'
 import { view_to_source } from './viewmodel'
 import { SYNTH_W, SYNTH_H } from './constants'
@@ -104,12 +104,7 @@ export class ViewSnapshotBuilder {
     const drawn = this._ctx.drawn()
     if (drawn) {
       const sz = this._ctx.page_dims(p)
-      out.push({ kind: 'committed', box: {
-        x0: Math.max(0, Math.min(drawn.x0, sz.width)),
-        y0: Math.max(0, Math.min(drawn.y0, sz.height)),
-        x1: Math.max(0, Math.min(drawn.x1, sz.width)),
-        y1: Math.max(0, Math.min(drawn.y1, sz.height)),
-      } })
+      out.push({ kind: 'committed', box: clamp_box_to_page(drawn, sz.width, sz.height) })
       return out
     }
 

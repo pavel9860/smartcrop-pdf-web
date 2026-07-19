@@ -367,7 +367,11 @@ export class CanvasView {
     if (ev.ctrlKey || ev.metaKey) return   // Ctrl/⌘+wheel is browser zoom — don't also page-navigate
     if (ev.deltaY > 0) this._model.next_page()
     else this._model.prev_page()
-    this._notify()
+    // Throttled, not a plain notify(): a fast trackpad swipe fires wheel at pointermove-like
+    // rates, and each notify() triggers app.ts's full _refresh_async — the same cost _notify_
+    // throttled's leading+trailing throttle already exists to cap for drags (#7), reused here
+    // rather than a second parallel throttle mechanism.
+    this._notify_throttled()
   }
 
   private _on_key = (ev: KeyboardEvent): void => {

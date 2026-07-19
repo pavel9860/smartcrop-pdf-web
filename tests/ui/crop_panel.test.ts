@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { CropPanel } from '@ui/panels/crop_panel'
 import { make_model, make_ctrl, mount, assert_all_have_tooltips, type FakeController } from './harness'
 import type { AppModel } from '@core/model'
-import { PagesMode } from '@core/enums'
 
 describe('CropPanel', () => {
   let model: AppModel
@@ -80,35 +79,12 @@ describe('CropPanel', () => {
     expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBeGreaterThanOrEqual(3)
   })
 
-  it('crop / rotate dispatch; delete asks for confirmation first (L1: themed dialog, not window.confirm)', async () => {
-    model.set_pages_mode(PagesMode.SELECT)
-    model.set_select_pattern('1')   // fewer than all 3 pages — confirm path, not the all-pages alert
-    fc.set_confirm_result(true)
+  it('crop / rotate dispatch; Delete calls the shared delete_selected_pages (guard/confirm/dispatch tested on AppController, app.test.ts)', () => {
     root.querySelector<HTMLButtonElement>('#cp-crop')!.click()
     root.querySelector<HTMLButtonElement>('#cp-rotate')!.click()
     root.querySelector<HTMLButtonElement>('#cp-delete')!.click()
-    expect(fc.calls.filter(c => c.kind === 'confirm')).toHaveLength(1)
-    await Promise.resolve()   // ctrl.confirm() resolves via a microtask before delete_pages dispatches
-    expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBeGreaterThanOrEqual(3)
-  })
-
-  it('deleting every page shows an info alert instead of the confirm dialog (bug 18)', () => {
-    // Default "Pages to Process" is All, and make_model()'s default document has 3 pages.
-    root.querySelector<HTMLButtonElement>('#cp-delete')!.click()
-    expect(fc.calls.filter(c => c.kind === 'confirm')).toHaveLength(0)
-    const alerts = fc.calls.filter(c => c.kind === 'alert')
-    expect(alerts).toHaveLength(1)
-    expect((alerts[0]!.arg as { variant: string }).variant).toBe('info')
-  })
-
-  it('declining the delete confirm does not dispatch', async () => {
-    model.set_pages_mode(PagesMode.SELECT)
-    model.set_select_pattern('1')
-    fc.set_confirm_result(false)
-    const before = fc.calls.filter(c => c.kind === 'dispatch').length
-    root.querySelector<HTMLButtonElement>('#cp-delete')!.click()
-    await Promise.resolve()
-    expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBe(before)
+    expect(fc.calls.filter(c => c.kind === 'dispatch').length).toBeGreaterThanOrEqual(2)
+    expect(fc.calls.some(c => c.kind === 'delete_selected_pages')).toBe(true)
   })
 
   it('busy disables the action buttons', () => {

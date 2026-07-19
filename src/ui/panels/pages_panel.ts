@@ -3,7 +3,7 @@
 import type { AppModel } from '@core/model'
 import type { AppController } from '../app'
 import { PagesMode } from '@core/enums'
-import { requireEl } from '../dom'
+import { requireEl, syncInputValue } from '../dom'
 
 export class PagesPanel {
   private readonly _badge: HTMLElement
@@ -111,9 +111,7 @@ export class PagesPanel {
     this._pattern_row.classList.toggle('hidden', !is_select)
 
     if (is_select) {
-      if (document.activeElement !== this._pattern_inp) {
-        this._pattern_inp.value = model.select_pattern
-      }
+      syncInputValue(this._pattern_inp, model.select_pattern)
       this._current_btn.classList.toggle('active', model.current_follow)
       this._current_btn.disabled = busy
       this._pattern_inp.disabled = busy

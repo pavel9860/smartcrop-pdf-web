@@ -28,4 +28,23 @@ describe('ensure_cv (C3)', () => {
     await race
     expect(settled).toBe(true)
   })
+
+  it('rejects if the runtime never fires within the fallback window, and retries cleanly after', async () => {
+    vi.useFakeTimers()
+    try {
+      const { ensure_cv } = await import('@pdf/cv')
+      const p1 = ensure_cv()
+      const assertion = expect(p1).rejects.toThrow('OpenCV.js failed to initialize within 10s')
+      await vi.advanceTimersByTimeAsync(10_000)
+      await assertion
+
+      // A retry after the runtime actually finishes initializing must succeed, not keep
+      // returning the stale rejected promise from the failed attempt.
+      cv_mock.Mat = function (): void { /* stub constructor */ }
+      await expect(ensure_cv()).resolves.toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+      delete cv_mock.Mat
+    }
+  })
 })

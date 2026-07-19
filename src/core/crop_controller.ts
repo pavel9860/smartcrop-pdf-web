@@ -8,8 +8,8 @@
 import type { Box } from './geometry'
 import {
   hit_handle, apply_handle_drag, auto_crop_rect, centered_crop_rect,
-  offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
-  split_rects_grid, edge_deltas, apply_edge_deltas, clamp_edge_deltas,
+  offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag, clamp_box_to_page,
+  split_rects_grid, split_grid_position, edge_deltas, apply_edge_deltas, clamp_edge_deltas,
   drawn_offset_rect, offsets_from_drawn_rect,
   MIN_RECT, box_width, box_height,
 } from './geometry'
@@ -111,14 +111,7 @@ export class CropController {
     const sz = this._ctx.page_dims(p)
 
     const drawn = this._ctx.drawn()
-    if (drawn) {
-      return [{
-        x0: Math.max(0, Math.min(drawn.x0, sz.width)),
-        y0: Math.max(0, Math.min(drawn.y0, sz.height)),
-        x1: Math.max(0, Math.min(drawn.x1, sz.width)),
-        y1: Math.max(0, Math.min(drawn.y1, sz.height)),
-      }]
-    }
+    if (drawn) return [clamp_box_to_page(drawn, sz.width, sz.height)]
 
     const detected = this._ctx.detected(p)
     const union    = this._ctx.union()
@@ -378,13 +371,15 @@ export class CropController {
   // Same-size RESIZE (spec-web §W2 row 10): the dragged window's raw edge deltas mirror by grid
   // parity onto every OTHER window's own drag-start rect — column mirror (opposite column) swaps+
   // negates the x pair, row mirror (opposite row) the y pair; same column/row copies that axis
-  // unchanged (n=2 [left,right] shares one row always; n=4 [TL,BL,TR,BR]: col=idx>>1, row=idx&1).
+  // unchanged. Parity read off split_grid_position (geometry.ts), not re-derived here, so it can't
+  // drift from split_rects_grid's actual layout.
   // Deltas are capped up front to every window's own headroom (bug #2) so growth simply stops at
   // the tightest window's page-edge limit instead of a partner needing to jump/deform afterward.
   private _propagate_same_size(drag: SplitDrag, updated: Box, rects: Box[]): void {
     const n = rects.length
-    const col = (i: number): number => (n === 2 ? i : i >> 1)
-    const row = (i: number): number => (n === 2 ? 0 : i & 1)
+    const grid_n: 1 | 2 | 4 = n === 4 ? 4 : n === 2 ? 2 : 1
+    const col = (i: number): number => split_grid_position(grid_n, i).col
+    const row = (i: number): number => split_grid_position(grid_n, i).row
     const mirror_cols = rects.map((_, i) => col(i) !== col(drag.idx))
     const mirror_rows = rects.map((_, i) => row(i) !== row(drag.idx))
     const raw = edge_deltas(drag.rect0, updated)

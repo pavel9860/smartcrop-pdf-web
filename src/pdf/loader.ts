@@ -186,6 +186,14 @@ class RpcWorker {
       if (type === 'ok') p.resolve((ev.data as { payload: unknown }).payload)
       else p.reject(new Error((ev.data as { message: string }).message))
     }
+    // A worker-level failure (e.g. the module fails to evaluate before it ever calls onmessage)
+    // fires 'error', not 'message' — without this, every already-pending call() would hang
+    // forever instead of surfacing the failure.
+    this._w.onerror = (ev: ErrorEvent): void => {
+      const err = new Error(ev.message || 'Worker error')
+      for (const p of this._pending.values()) p.reject(err)
+      this._pending.clear()
+    }
   }
 
   call<T>(
