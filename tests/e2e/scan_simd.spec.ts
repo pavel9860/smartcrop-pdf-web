@@ -1,4 +1,4 @@
-// In-browser SIMD verification (#4): loads a real scanned PDF, applies the B/W filter (the
+// In-browser SIMD verification (#4): loads a real scanned page image, applies the B/W filter (the
 // same OpenCV.js path detect/dewarp use), and checks it both renders correctly and completes in
 // real browser wall-clock time — not just that the WASM module loads. Complements the byte-level
 // SIMD disassembly check and the Node timing in tests/perf/scan_speed.test.ts (see
@@ -6,7 +6,10 @@
 import { test, expect } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 
-const SCAN_PDF = fileURLToPath(new URL('../assets/test_pdf_scan.pdf', import.meta.url))
+// An image file (not a PDF) always classifies SCANNED (spec §4) and exercises the identical
+// OpenCV.js pipeline — no PDF rasterization step needed for this test's purpose.
+const SCAN_PDF = fileURLToPath(
+  new URL('../assets/Learning Python, 5th Edition_cropped_015.png', import.meta.url))
 
 test('a scanned PDF loads as SCANNED mode and the B/W filter renders correctly', async ({ page }) => {
   await page.goto('/')

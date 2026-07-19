@@ -34,6 +34,15 @@ export const BORDER_FRAC    = 0.02   // outer margin excluded from component kee
 export const MIN_COMP_FRAC  = 2.5e-4 // component area fraction threshold
 export const FULL_PAGE_FRAC = 0.97   // box >= this fraction of page → fallback, excluded from aggregate
 
+// Pre-labeling merge (spec §8): individual glyphs rarely touch their neighbours at DETECT_MAX_PX
+// resolution, so without this every letter is its own connected component and none clears
+// MIN_COMP_FRAC on its own — real body text was being discarded entirely, leaving only incidental
+// large components (a rule line, an image) to define the content box. A horizontal-biased
+// morphological close bridges inter-letter/inter-word gaps so a text LINE becomes one component,
+// without merging separate lines into one paragraph-sized blob. Width in scaled-canvas px.
+export const DETECT_CLOSE_W = 9
+export const DETECT_CLOSE_H = 3
+
 // Auto-detect outlier tolerance (spec-web §5): detection_union's W/H use the (N+1)-th largest
 // per-page dimension instead of always the max, so N oversized pages don't inflate every crop.
 // N=0 = unchanged (max). Settings dropdown preset list.

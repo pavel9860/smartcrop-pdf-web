@@ -222,7 +222,6 @@ C:/DOCS/Code/SmartCroPDF-Web/
       overlay.ts            Progress overlay — a <div> centred over the canvas, shown only when
                               batch total > 1. Displays title, determinate bar, page counter, Cancel.
                               Driven by BatchJob.onProgress(). Hides on job completion.
-
       panels/
         pages_panel.ts      "Document & State" + "Pages to Process" cards.
                               Load Files button (File input, multi-select, PDF+images).
@@ -687,7 +686,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | Illumination flatten | `illumination_flatten()`: `cv.morphologyEx(MORPH_CLOSE)` **on a 1/`BG_DOWNSCALE` copy, upscaled** (`morph_close_background`) + divide | Implemented, shared by detect and both filter modes. The large-kernel close is estimated on a downscale then upscaled (spec-web §16): opencv.js's single-thread morphology is O(pixels·kernel²) with no large-kernel optimization and, full-res, dominated everything (0.6–9 s/page). ~36× faster,
 | `clean_document_bilevel` | `clean_document_bilevel()`: flatten → Sauvola → single-pass label-LUT despeckle | Implemented for both `detect_content()` (strength-2 params, downscaled) and the B/W filter (per-strength `k`/`min_area` from `BW_STRENGTH`) — same function backs both, as spec-web §5 requires |
 | Connected-component despeckle | `cv.connectedComponentsWithStats` → per-label keep array → one `O(pixels)` LUT pass (not per-component `cv.compare`, which would be `O(components·pixels)` and miss the spec-web §16 "single-pass despeckle" performance target) | Implemented |
-| `content_box()` | bounding rect of kept components, border-touching fallback | Implemented |
+| `content_box()` | `cv.morphologyEx(MORPH_CLOSE)` (elliptical `DETECT_CLOSE_W`×`DETECT_CLOSE_H` kernel) bridges inter-glyph gaps into text-line components, then bounding rect of kept components, border-touching fallback | Implemented — the close step is a **web-only addition**, not a desktop port: at `DETECT_MAX_PX` resolution individual glyphs rarely touch, so without it `MIN_COMP_FRAC` filtered out every real text component and only incidental large ones (rule lines, images) survived — confirmed on real scanned book pages, not a hypothetical |
 | Unsharp mask (Sharpen) | `cv.bilateralFilter` (strength-scaled `d`/`sigmaColor`/`sigmaSpace` from `SHARPEN_STRENGTH`) → `cv.GaussianBlur` (strength-scaled radius) → `cv.addWeighted` (`CLEAN_AMOUNT` gain) | Implemented, strength now drives denoise/blur radius **and** gain|
 | DPI-scaled kernels | — | **Not ported.** `imaging.py`'s `_dpi_scale()` scales the Sauvola window / bg-kernel / min-area by source DPI (0.5×–4× clamp) so scans at different resolutions binarize comparably. The web always uses the base `SAUVOLA_WINDOW`/`BG_KERNEL_SIZE` regardless of DPI. Low-severity residual gap — SRC_DPI is fixed at 200 in the web (no variable-DPI source rasters), so this mainly affects the B/W filter's absolute kernel size relative to `imaging.py`'s 150 DPI reference, not correctness. |
 | 2× supersample refinement | — | **Not ported.** `clean_document_bilevel` upscales 2× before thresholding then downsamples for a cleaner edge; the web version thresholds at native resolution. Cosmetic quality difference only. |
@@ -700,8 +699,7 @@ counts (not Sauvola, and not shared with the filter). Both are fixed.
 
 ### 9a. Scan pipeline dataflow and the three-tier work cache
 
-The scan pipeline was ~10–20× too slow; profiling (not the SIMD width — see §7b) found four causes,
-all fixed. The model (`core/model.ts`) rasterizes each page **exactly once** through `_get_source(p)`
+The model (`core/model.ts`) rasterizes each page **exactly once** through `_get_source(p)`
 (cached in the RAM source LRU); every consumer — NORMAL view, SCANNED work pipeline, Auto-detect —
 goes through it.
 
@@ -715,30 +713,16 @@ goes through it.
   pipeline per page and then discarding most of it by downscaling to `DETECT_MAX_PX`.
 - **RAM-only, per-page, content-addressed processed-raster cache.** Each page owns its OWN small
   version-history LRU in `_work_versions`/`_source_versions` (`Map<page, LRUCache<key, bitmap>>`),
-  not one cache shared across all pages — a shared capacity would evict OTHER pages' bitmaps just
-  from paging through a long document, so walking through N pages would cost more than walking
-  through 1. Each page's own LRU is capacity `settings.undo_depth + 1` (the current combination
+  Each page's own LRU is capacity `settings.undo_depth + 1` (the current combination
   plus as many prior ones as Undo can still reach) — there is no separate cache-size constant to
   keep in sync with the Undo/redo-depth setting. Keyed by rotation (source) / full intent (dewarp,
   filter mode/strength) + rotation + supersample (work), not bare page number: a settings or
   rotation change simply resolves to a different key within that page's own history (never a stale
   raster), and Undo/Redo — which do not touch these caches at all (see History below) — re-hit an
-  already-computed entry when it is still within reach instead of recomputing. An earlier design
-  used one shared, disk-backed (IndexedDB, `pdf/work_store.ts`) cache; both the sharing and the disk
-  tier were removed as unnecessary complexity — a bitmap persisted to disk buys nothing for a
-  RAM-bounded, in-session cache, and a shared capacity actively worked against "walking N pages
-  costs the same as 1." Net effect: each page is processed **at most once per distinct
-  combination**; revisiting a combination past its own page's history is one clean recompute, never
-  a disk read. Regression-guarded by `tests/core/work_cache.test.ts` and
-  `tests/core/scan_orchestration_speed.test.ts`.
+  already-computed entry when it is still within reach instead of recomputing. 
+
 - **Dewarped intermediate, cached separately from the filtered result AND rotation-independent.**
-  Dewarp&Deskew (ONNX, §7.1) costs orders of magnitude more than a filter pass (multi-second CPU
-  inference vs. the filter's own ~200ms OpenCV pass, §16) — re-running it every time the filter
-  changes while dewarp stays on made filter switching as slow as dewarp itself, and re-running it
-  on every Rotate (bug: rotating a dewarped page could take as long as the original dewarp pass,
-  with no progress feedback — "the tab becomes almost dead") was worse still, since rotate's own
-  dispatch isn't a tracked `BatchJob`. `PageRasterPipeline._get_dewarped` now resolves the ONNX
-  pass exactly once per (page, supersample), **not** per rotation: `_get_dewarp_canonical` runs it
+  Resolves the ONNX pass exactly once per (page, supersample), `_get_dewarp_canonical` runs it
   against the page's UNROTATED (rotation=0) source, cached in its own per-page LRU
   (`_dewarp_canonical`, keyed by supersample only); `_get_dewarped` then reorients that canonical
   result to the page's current rotation via the adapter's `rotate_bitmap()` (a plain, non-
@@ -754,12 +738,7 @@ goes through it.
   logic: a state change (supersample, or Undo/Redo landing on a different `dewarp_on`) simply
   resolves to a different key in `_dewarp_canonical`, never a stale entry — Rotate specifically
   changes `document.rotation` only, which `_get_dewarped` reads on every call, so it can never
-  observe a stale rotation either. Regression-guarded by `tests/core/page_raster_pipeline.test.ts`
-  (exact dewarp-call-count guarantee across rotations, mocked adapter) and
-  `tests/e2e/scan_dewarp_cache.spec.ts` (real ONNX/OpenCV: doesn't hang, renders correctly, and
-  rotate-after-dewarp completes in well under a second even when the original dewarp took over a
-  minute under sibling-worker contention — real wall-clock timing is too noisy under parallel
-  workers for a tight or ratio budget there, see that file's header).
+  observe a stale rotation either.
 
 Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spec-web §16).
 Regression-guarded by `tests/perf/scan_speed.test.ts` (`npm run test:perf`) and, end-to-end in a real

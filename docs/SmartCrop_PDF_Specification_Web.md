@@ -7,7 +7,6 @@ document is the behavioral contract: architecture, UI, algorithms, state and acc
 `ARCHITECTURE.md` explains *how* this is implemented (module layout, dependency graph, worker
 model, build/deploy); this document explains *what the user experiences*. Where a fact could belong
 to either, ask "does the user experience this?" — if yes, here; if no, ARCHITECTURE.md.
-`docs/app_design_screenshots/` is a further reference for exact layout/icon/spacing fidelity.
 
 Out of scope: OCR / searchable text, a thumbnail page picker, N×M auto-grid split.
 
@@ -294,12 +293,21 @@ detect and to every union rebuild (rotate, delete) — no separate tolerance-awa
 
 ```
 ink        = bilevel < threshold
-components = connected_components(ink, 8-connectivity)
+merged     = morphological_close(ink, DETECT_CLOSE_W × DETECT_CLOSE_H)  # bridge inter-glyph gaps
+components = connected_components(merged, 8-connectivity)
 keep       = components with area >= MIN_COMP_FRAC · page_area
                  AND not touching the outer BORDER_FRAC margin
 if keep is empty:  keep = components with area >= MIN_COMP_FRAC · page_area   # fallback
 box        = bounding rectangle of the kept pixels
 ```
+
+The close step is required, not cosmetic: at `DETECT_MAX_PX` resolution individual glyphs rarely
+touch their neighbours, so without it every letter is its own component and none clears
+`MIN_COMP_FRAC` on its own — real body text was discarded entirely, leaving only incidental large
+components (a rule line, an image) to define the box. The close is horizontal-biased (bridges
+inter-letter/inter-word gaps within a line) without merging separate lines into one blob — each
+kept component is still a text line, not a whole paragraph; the bounding rectangle over all of them
+gives the same tight paragraph-level box as before.
 
 Detection is non-destructive and deterministic; it is always safe to re-run.
 

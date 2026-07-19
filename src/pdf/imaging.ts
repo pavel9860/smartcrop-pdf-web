@@ -10,7 +10,7 @@ import { CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import {
   BORDER_FRAC, MIN_COMP_FRAC, DETECT_MAX_PX, CLEAN_AMOUNT,
   CC_CONNECTIVITY, BG_KERNEL_SIZE, BG_DOWNSCALE, SAUVOLA_WINDOW, SAUVOLA_R,
-  BW_STRENGTH, SHARPEN_STRENGTH,
+  BW_STRENGTH, SHARPEN_STRENGTH, DETECT_CLOSE_W, DETECT_CLOSE_H,
 } from '@core/constants'
 import { cv, type Mat, ensure_cv } from './cv'
 import { ensure_onnx, apply_dewarp } from './dewarp'
@@ -215,11 +215,19 @@ function detect_content(bitmap: ImageBitmap, page_w: number, page_h: number): Bo
   cv.threshold(bilevel, ink, 127, 255, Number(cv.THRESH_BINARY_INV))   // ink(0) -> 255
   bilevel.delete()
 
+  // Bridge inter-letter/inter-word gaps so a text LINE forms one connected component (see
+  // DETECT_CLOSE_W/H) — without this, individual glyphs never clear MIN_COMP_FRAC and real text
+  // is discarded from the content box entirely.
+  const se = cv.getStructuringElement(Number(cv.MORPH_ELLIPSE), new cv.Size(DETECT_CLOSE_W, DETECT_CLOSE_H))
+  const closed = new cv.Mat()
+  cv.morphologyEx(ink, closed, Number(cv.MORPH_CLOSE), se)
+  se.delete(); ink.delete()
+
   const labels  = new cv.Mat()
   const stats   = new cv.Mat()
   const ctroids = new cv.Mat()
-  cv.connectedComponentsWithStats(ink, labels, stats, ctroids, CC_CONNECTIVITY, Number(cv.CV_32S))
-  ink.delete()
+  cv.connectedComponentsWithStats(closed, labels, stats, ctroids, CC_CONNECTIVITY, Number(cv.CV_32S))
+  closed.delete()
 
   const page_area = dw * dh
   const min_area  = Math.max(8, MIN_COMP_FRAC * page_area)
