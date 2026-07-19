@@ -12,7 +12,7 @@ proposed `AppModel` decomposition, not yet implemented as of this revision.
 | Path | Files | Constraint |
 |---|---|---|
 | `src/core/` | `constants, enums, errors, geometry, parsing, lru, viewmodel, document_state, settings, history, drag, batch, model`.ts | Zero DOM/Worker/pdf-lib/pdfjs-dist — enforced by `tests/architecture.test.ts` |
-| `src/pdf/` | `loader.ts, imaging.ts, work_store.ts` | Main thread, DOM allowed, imports `@core/*` + `@workers/*` |
+| `src/pdf/` | `loader.ts, imaging.ts, cv.ts, dewarp.ts, idb.ts` | Main thread, DOM allowed, imports `@core/*` + `@workers/*` |
 | `src/workers/` | `export.worker.ts, tiff.ts` | Only real Worker in the app; zero `window`/`document` |
 | `src/ui/` | `app.ts, canvas_view.ts, constants.ts, dom.ts, detail_panel.ts, help_view.ts, nav_bar.ts, overlay.ts, persist.ts, settings_view.ts, theme.ts` | Imports `@core/*` + `@pdf/*`; core never imports ui |
 | `src/ui/panels/` | `pages_panel.ts, crop_panel.ts, scan_panel.ts, output_panel.ts` | per `app.ts`'s `./panels/*` imports |
@@ -29,9 +29,9 @@ core/document_state, settings, history, drag, batch          (pure, depend on le
         ▲
 core/model.ts (AppModel)  ── injected RendererAdapter interface, implemented by pdf/loader.ts
         ▲
-pdf/loader.ts ──uses──► pdf/imaging.ts ──uses──► onnxruntime-web, @techstark/opencv-js
+pdf/loader.ts ──uses──► pdf/imaging.ts ──uses──► pdf/cv.ts, pdf/dewarp.ts ──uses──► pdf/idb.ts
      │                        │
-     └──uses──► pdf/work_store.ts (IndexedDB)
+     │                        └──uses──► onnxruntime-web (dewarp.ts), @techstark/opencv-js (cv.ts)
      └──spawns──► workers/export.worker.ts ──uses──► pdf-lib, fflate, workers/tiff.ts
         ▲
 ui/app.ts (AppController) ──owns──► AppModel + PdfRendererAdapter
@@ -91,21 +91,25 @@ main.ts
 | `clamp_box_drag(box,pw,ph)` | 66 | clamp each edge independently, enforces `MIN_RECT` (used for resize) |
 | `apply_handle_drag(handle,rect0,start,cur,pw,ph)` | 76 | core drag math: moves only the dragged edges, dispatches to shift-clamp (move) or drag-clamp (resize) |
 | `auto_crop_rect(detected,union,offsets,pw,ph,anchor_l,anchor_t)` | 108 | compute live auto-crop rect from detection + offsets (§9.2) |
-| `offsets_from_rect(rect,detected,union,pw,ph,anchor_l,anchor_t)` | 131 | inverse of above — back-derive offsets from a dragged rect |
-| `detection_union(boxes)` | 156 | spec-web §5 aggregate: `gL=min(x0), gT=min(y0), W=max(w), H=max(h)` — NOT a bbox union |
-| `union_box(boxes)` | 170 | standard bbox union (non-detection uses) |
-| `keep_ratio_normalise(box,ratio,pw,ph)` | 184 | top-left-anchored ratio lock (static sources: live auto-crop, fresh-draw release) |
-| `keep_ratio_anchored(box,ratio,handle,pw,ph)` | 216 | ratio lock anchored opposite the dragged handle, live during drag (spec-web §6.7); one long function per its own comment — 4 corners + 2 symmetric edge pairs each need a distinct page-wall clamp |
-| `rotate_box_cw(box,page_h)` | 269 | 90° CW box rotation for `rotate_pages()` |
-| `rotate_box_ccw(box,page_w)` | 282 | algebraic inverse of `rotate_box_cw` — one CW step undone, composition-verified |
-| `to_native_frame(box,pw,ph,rotation)` | 297 | current (rotation-applied) display frame → source's native rotation=0 frame; used by vector export (`loader.ts::export_pdf_vector`) to convert a box before `embedPage`'s clip |
-| `edge_deltas(rect0,updated)` | 313 | per-edge deltas of a resize, for same-size propagation |
-| `apply_edge_deltas(base,d,mirror_cols,mirror_rows,pw,ph)` | 327 | apply mirrored deltas to a partner window |
-| `clamp_axis_deltas` (module-private) | 339 | one-axis headroom clamp, shared by X/Y in `clamp_edge_deltas` |
-| `clamp_edge_deltas(d,rects0,mirror_cols,mirror_rows,pw,ph)` | 362 | cap same-size resize deltas so every window's own headroom is respected before applying |
-| `split_rects_grid(n,pw,ph)` | 374 | initial 1/2/4 grid; order TL,BL,TR,BR for n=4 |
-| `reindex_map(map,deleted)` | 394 | shift per-page `Map` keys after page deletion |
-| `box_width/box_height/box_area` | 405–407 | trivial |
+| `centered_crop_rect(union,pw,ph)` | 135 | fallback auto-crop rect for a page with no detected content of its own (spec-web §5) |
+| `offsets_from_rect(rect,detected,union,pw,ph,anchor_l,anchor_t)` | 144 | inverse of `auto_crop_rect` — back-derive offsets from a dragged rect |
+| `drawn_offset_rect(offsets,pw,ph)` | 171 | recomputes the hand-drawn window from an edge-offset edit (spec-web §4.6) |
+| `offsets_from_drawn_rect(rect,pw,ph)` | 182 | inverse of `drawn_offset_rect` — derives offsets from the current drawn box |
+| `detection_union(boxes)` | 198 | spec-web §5 aggregate: `gL=min(x0), gT=min(y0), W=max(w), H=max(h)` — NOT a bbox union |
+| `union_box(boxes)` | 218 | standard bbox union (non-detection uses) |
+| `keep_ratio_normalise(box,ratio,pw,ph)` | 232 | top-left-anchored ratio lock (static sources: live auto-crop, fresh-draw release) |
+| `keep_ratio_anchored(box,ratio,handle,pw,ph)` | 264 | ratio lock anchored opposite the dragged handle, live during drag (spec-web §6.7); one long function per its own comment — 4 corners + 2 symmetric edge pairs each need a distinct page-wall clamp |
+| `rotate_box_cw(box,page_h)` | 317 | 90° CW box rotation for `rotate_pages()` |
+| `rotate_box_ccw(box,page_w)` | 330 | algebraic inverse of `rotate_box_cw` — one CW step undone, composition-verified |
+| `to_native_frame(box,pw,ph,rotation)` | 345 | current (rotation-applied) display frame → source's native rotation=0 frame; used by vector export (`loader.ts::export_pdf_vector`) to convert a box before `embedPage`'s clip |
+| `edge_deltas(rect0,updated)` | 361 | per-edge deltas of a resize, for same-size propagation |
+| `apply_edge_deltas(base,d,mirror_cols,mirror_rows,pw,ph)` | 375 | apply mirrored deltas to a partner window |
+| `clamp_axis_deltas` (module-private) | 391 | one-axis headroom clamp, shared by X/Y in `clamp_edge_deltas` |
+| `clamp_edge_deltas(d,rects0,mirror_cols,mirror_rows,pw,ph)` | 410 | cap same-size resize deltas so every window's own headroom is respected before applying |
+| `split_rects_grid(n,pw,ph)` | 422 | initial 1/2/4 grid; order TL,BL,TR,BR for n=4 |
+| `reindex_map(map,deleted)` | 444 | shift per-page `Map` keys after page deletion |
+| `box_width/box_height/box_area` | 458–460 | trivial |
+| `translate_box(b,dx,dy)` | 464 | shift a box by `(dx,dy)`, dimensions unchanged |
 
 **Callers:** almost all of these are called from `model.ts` (drag helpers, `apply_crop`, `_rotate_page`, `delete_pages`, `set_split`, `_compute_detection_union`). `keep_ratio_anchored` is also invoked directly for `DrawnDrag`/`SplitDrag` live-ratio updates.
 
@@ -118,7 +122,7 @@ sub-sections below (§6.1–6.13) describe the facade's method GROUPS by public 
 unchanged by that decomposition, not which file each method's body currently lives in — see §18
 for the actual per-file breakdown.
 
-`RendererAdapter` injected via constructor (`pdf/loader.ts`'s `PdfRendererAdapter` is the only implementation). Full interface: `load_files, get_source_image, get_work_image, render_output_image, detect_content_box, detect_text_box?, load_work?/persist_work?/clear_work_cache?, export_pdf, export_pdf_vector?, export_images, make_synth_page, close`. `VectorExportPage` (`orig_page, boxes, page_w, page_h, rotation`) is the payload type for `export_pdf_vector`.
+`RendererAdapter` injected via constructor (`pdf/loader.ts`'s `PdfRendererAdapter` is the only implementation). Full interface: `load_files, get_source_image, get_work_image, rotate_bitmap, render_output_image, detect_content_box, detect_text_box?, export_pdf, export_pdf_vector?, export_images, make_synth_page, close`. No disk-tier raster cache exists — per-page rasters are RAM-only (§16.2). `VectorExportPage` (`orig_page, boxes, page_w, page_h, rotation`) is the payload type for `export_pdf_vector`.
 
 ### 6.1 Document lifecycle
 
@@ -126,7 +130,7 @@ for the actual per-file breakdown.
 |---|---|---|---|
 | `load_files(files)` async | 247 | `adapter.load_files` → `_reset_state()` | `pages_panel.ts` file input (`dispatch_async`), `app.ts` initial `load_files([])`, drag-drop in `app.ts` |
 | `reset()` async | 254 | `adapter.load_files([])` (re-opens same `_files`) → `_reset_state()` | `nav_bar.ts` Reset button (`dispatch_async`) |
-| `_reset_state()` private | 262 | clears document/history/all 3 caches, resets `_drawn/_detect_cache/_union/_auto_active`, bumps `_doc_gen`, fire-and-forget `adapter.clear_work_cache?.()`, reseeds `_ratio` from page 0 aspect | internal only |
+| `_reset_state()` private | 262 | clears document/history/all 3 caches, resets `_drawn/_detect_cache/_union/_auto_active`, bumps `_doc_gen`, reseeds `_ratio` from page 0 aspect | internal only |
 | `has_document` get | 299 | | gates nearly every panel's `refresh(busy)` |
 | `page_count()` | 300 | returns `_page_map.length` | |
 | `document_name` get | 304 | "" / name / "first.pdf +N more" | `pages_panel.ts` doc-name card |
@@ -291,58 +295,62 @@ Called every mutation by `app.ts::_refresh_async()`.
 |---|---|---|
 | `_page_dims(p)` | 1369 | translates `p` (logical, post-delete) → original index via `_page_map`, swaps w/h if rotation is 90/270. **The one function everything reads page size through** — never read `doc.page_sizes[p]` directly. |
 | `_get_source(p)` async | 1383 | RAM-cached (`_source_cache`, LRU `CACHE_WINDOW`); real doc → `adapter.get_source_image`; synthetic → `adapter.make_synth_page`. Every raster is rendered here exactly once per (page,rotation) — detect, NORMAL view, and the SCANNED work pipeline all funnel through this. |
-| `_get_work(p)` async | 1398 | NORMAL mode: returns `src` directly, **not** re-cached in `_work_cache` (explicit double-close hazard comment — two close-on-evict caches holding the same bitmap would double-`close()` it). SCANNED + no-op intent: same short-circuit. SCANNED + real intent: disk-tier check (`_persisted_keys.has(key)`) → `adapter.get_work_image` → `_cache_work`. |
-| `_cache_work/_page_process_intent/_work_disk_key/_load_work_from_disk` | 1430/1435/1447/1454 | disk key = `g{gen}|{origpage}|d{0,1}|f{mode-strength}|r{rot}|s{supersample}` — namespaced so a settings change or new document can never read a stale/wrong raster |
+| `_get_work(p)` async | 1398 | NORMAL mode: returns `src` directly, **not** re-cached in `_work_cache` (explicit double-close hazard comment — two close-on-evict caches holding the same bitmap would double-`close()` it). SCANNED + no-op intent: same short-circuit. SCANNED + real intent: `adapter.get_work_image` → `_cache_work` (RAM only — no disk tier, §16.2). |
+| `_cache_work/_page_process_intent` | 1430/1435 | cache key = `g{gen}|{origpage}|d{0,1}|f{mode-strength}|r{rot}|s{supersample}` — namespaced so a settings change or new document can never read a stale/wrong raster |
 | `_live_auto_crop_for(p)` | 1460 | same math as `_build_overlay`'s auto branch (canvas preview only, spec-web §10.6) |
 
 ---
 
-## 7. `pdf/imaging.ts` (731 lines) — OpenCV.js + ONNX, main thread by design (§7a)
+## 7. `pdf/imaging.ts` (378 lines), `pdf/cv.ts` (64), `pdf/dewarp.ts` (284), `pdf/idb.ts` (26) — OpenCV.js + ONNX, main thread by design (§7a)
 
-Entry points called from `loader.ts` directly (no `postMessage`):
+Entry points called from `loader.ts` directly (no `postMessage`); OpenCV init lives in `cv.ts`,
+ONNX/dewarp lives in `dewarp.ts`, the small IndexedDB helper lives in `idb.ts` — `imaging.ts`
+itself holds detection + the OpenCV filter pipeline:
 
 ```
-detect_content_async(bitmap,page_w,page_h,mode)  [L126]
-  → ensure_cv() [L66]  (module-cached init promise, fast-path if cv.Mat already exists)
-  → detect_content(bitmap,page_w,page_h) [L375, module-private]
-       → downscale to DETECT_MAX_PX → clean_document_bilevel(gray, BW_STRENGTH[2].k/minArea, ...) [L340]
-            → illumination_flatten(gray,kernel) [L296] → morph_close_background [L313] (downscaled 1/BG_DOWNSCALE, spec-web §16)
-            → sauvola_ink_mask(flat,window,k) [L230, in truncated 156-246 region — box-filter mean/std, T=mean·(1+k·(std/R−1))]
+detect_content_async(bitmap,page_w,page_h,mode,region?)  [imaging.ts:22]
+  → ensure_cv() [cv.ts:48]  (module-cached init promise, fast-path if cv.Mat already exists)
+  → detect_content(bitmap,page_w,page_h,region?) [imaging.ts:195, module-private]
+       → downscale to DETECT_MAX_PX → clean_document_bilevel(gray, BW_STRENGTH[2].k/minArea, ...) [imaging.ts:156]
+            → illumination_flatten(gray,kernel) [imaging.ts:112] → morph_close_background [imaging.ts:129] (downscaled 1/BG_DOWNSCALE, spec-web §16)
+            → sauvola_ink_mask(flat,window,k) [imaging.ts:46 — box-filter mean/std, T=mean·(1+k·(std/R−1))]
             → connectedComponentsWithStats → single-pass LUT despeckle by min_area
        → cv.connectedComponentsWithStats again on the bilevel ink → border-exclude + area-filter → bbox (border-touch fallback if nothing survives) → scale back up
 
-process_page_async(bitmap,intent,supersample)  [L133]
-  → ensure_cv(); if intent.dewarp: ensure_onnx() [L87]
-  → process_page(bitmap,intent,supersample) [L464, module-private]
-       → if dewarp: apply_dewarp(mat,supersample) [L571]
-            stage 1: mat_to_resized_chw_f32 → f32→f16 → uvdoc.onnx → warp-field grid (handles both
-                     Float16Array and Uint16Array ORT output shapes — bug 21 fix)
-            stage 2: mat_to_chw_f32(full-res) + grid → bilinear_unwarping.onnx (GridSample) →
-                     chw_f32_to_rgba_mat → optional cv.resize down if supersample≠1
-       → if filter: apply_filter_mat(mat,mode,strength) [L501]
+process_page_async(bitmap,intent,supersample)  [imaging.ts:29]
+  → ensure_cv(); if intent.dewarp: ensure_onnx() [dewarp.ts:22]
+  → process_page(bitmap,intent,supersample) [imaging.ts:299, module-private]
+       → if dewarp: apply_dewarp(mat,supersample) [dewarp.ts:156]
+            stage 1: mat_to_resized_chw_f32 [dewarp.ts:235] → f32→f16 [dewarp.ts:107] → uvdoc.onnx → warp-field grid
+                     (handles both Float16Array and Uint16Array ORT output shapes)
+            stage 2: mat_to_chw_f32(full-res) [dewarp.ts:219] + grid → bilinear_unwarping.onnx (GridSample) →
+                     chw_f32_to_rgba_mat [dewarp.ts:244] → optional cv.resize down if supersample≠1
+       → if filter: apply_filter_mat(mat,mode,strength) [imaging.ts:338]
             BW      → clean_document_bilevel(gray, BW_STRENGTH[strength], ...) → grey2rgba
             SHARPEN → illumination_flatten → bilateralFilter(denoise, strength-scaled) →
                       GaussianBlur(strength-scaled) → addWeighted(unsharp, CLEAN_AMOUNT[strength]) → grey2rgba
        → copy mat.data into a fresh Uint8ClampedArray (NOT mat.data.buffer directly — that's the
-         whole WASM heap and threw IndexSizeError, bug 3) → OffscreenCanvas → ImageBitmap
+         whole WASM heap and throws IndexSizeError) → OffscreenCanvas → ImageBitmap
 
-fetch_with_idb_cache(key,url)  [L691]  — used only for the two dewarp .onnx model files
-  → open_idb (db 'smartcrop-models') → try cache → else fetch() (a failed fetch is NEVER cached,
-    bug M3) → put → return bytes
+fetch_with_idb_cache(key,url)  [dewarp.ts:267]  — used only for the two dewarp .onnx model files
+  → open_idb(db_name,store_name) [idb.ts:4] (db 'smartcrop-models') → try cache → else fetch()
+    (a failed fetch is NEVER cached) → put → return bytes
 ```
 
-f16↔f32 conversion helpers (`f32_to_f16_bits, f16_bits_to_f32, f32_array_to_f16_bits, f16_data_to_f32_array`, L154–229) are self-contained bit-twiddling, verified against numpy.float16 per their header comment — not re-read line-by-line for this map, treat as a stable black box unless a task specifically touches ONNX tensor packing.
+f16↔f32 conversion helpers (`f32_bits_to_f16_bits` dewarp.ts:62, `f16_bits_to_f32_bits` dewarp.ts:86,
+`f32_array_to_f16_bits` dewarp.ts:107, `f16_data_to_f32_array` dewarp.ts:118) are self-contained
+bit-twiddling — not re-read line-by-line for this map, treat as a stable black box unless a task
+specifically touches ONNX tensor packing.
 
 ---
 
-## 8. `pdf/loader.ts` (503 lines) — `PdfRendererAdapter implements RendererAdapter`
+## 8. `pdf/loader.ts` (651 lines) — `PdfRendererAdapter implements RendererAdapter`
 
 | Method | Line | Notes |
 |---|---|---|
 | `load_files(files)` async | 168 | empty `files` + prior `_files` → reload (used by `reset()`); truly empty → synthetic doc (`SYNTH_PAGES=1` page); else builds `_pages: PageSource[]` (`{kind:'pdf',pdf,page_num}` or `{kind:'image',blob}`) — **this is what makes multi-file + mixed PDF/image documents work** (spec-web §9); classifies NORMAL if any page is native (`is_native_page`) |
 | `get_source_image(page_idx,dpi,rotation)` async | 253 | image page: `createImageBitmap` direct, dpi ignored; PDF page: `page.getViewport({scale:dpi/72})` → render → `rotate_bitmap_cw` bakes rotation into pixels |
-| `get_work_image(source,intent,supersample)` async | 277 | takes the **already-rendered** bitmap (not a page index) — single rasterization, spec-web §7; no-op intent short-circuits to `source` |
-| `load_work/persist_work/clear_work_cache` | ~310 | thin delegates to `pdf/work_store.ts`'s `WorkRasterStore` |
+| `get_work_image(source,intent,supersample)` async | 277 | takes the **already-rendered** bitmap (not a page index) — single rasterization, spec-web §7; no-op intent short-circuits to `source`, returning it unclosed (aliasing — caller must not close the result while still holding `source`) |
 | `render_output_image(src,box,pw,ph,target_long_px,greyscale)` | 295 | the WYSIWYG raster path — used by preview always, and by export whenever export rasterizes (SCANNED any format; NORMAL JPG/PNG/TIFF). NOT used for NORMAL-mode PDF export (see `export_pdf_vector`). `out_scale = target_long_px / max(crop_w,crop_h)` when sizing for export, else native `src.width/page_w`. Greyscale via manual luma weights on `getImageData`. |
 | `detect_content_box` | 337 | thin delegate to `imaging.ts::detect_content_async`. SCANNED only, called by `_detect_each_page`. |
 | `detect_text_box(page_idx)` | 350 | NORMAL-mode ONLY detection path: unions text-run boxes straight from `page.getTextContent()` + `pdfjs.Util.transform`; returns `null` for image pages, no usable text, or a degenerate <4px box — no raster fallback exists for NORMAL mode anymore (spec-web §5) |
@@ -367,7 +375,9 @@ f16↔f32 conversion helpers (`f32_to_f16_bits, f16_bits_to_f32, f32_array_to_f1
 | `core/lru.ts` | `LRUCache<K,V>` | `Map`-based, re-insert-on-get for LRU order; `onEvict` vs `onCapacityEvict` distinction is what makes the work-cache write-back tier possible (§6.13) |
 | `core/parsing.ts` | `resolve_pages` | ALL/ODD/EVEN trivial; SELECT → `parse_pattern` → per-comma-part dispatch to `parse_range` (`a-b`) or `parse_slice` (`start:stop:step`, all optional) or bare int; 1-indexed input, 0-indexed output, deduped+sorted `Set` |
 | `core/viewmodel.ts` | `output_page_count, view_to_source, source_to_first_view, source_to_view_range` | pure math converting between source-page index and 1-based output-view position, accounting for committed splits expanding one page into N views |
-| `pdf/work_store.ts` | `WorkRasterStore` | IndexedDB PNG-blob store; every method best-effort (storage failure → no-op/null, never throws to caller); `put` snapshots pixels via `drawImage` synchronously before any `await` so a same-tick LRU eviction can't race the encode |
+| `pdf/cv.ts` | `ensure_cv` | module-cached OpenCV.js init promise; 10s `onRuntimeInitialized` fallback resolves unconditionally without re-checking `cv.Mat` exists |
+| `pdf/dewarp.ts` | `ensure_onnx, apply_dewarp, fetch_with_idb_cache`, f16↔f32 helpers | ONNX session init/inference for Dewarp&Deskew (two-stage uvdoc/bilinear_unwarping models, §9a); `ensure_onnx` has no in-flight-promise cache, unlike `ensure_cv` |
+| `pdf/idb.ts` | `open_idb, idb_req, idb_tx` | thin IndexedDB promise wrappers — used only by `dewarp.ts::fetch_with_idb_cache` to cache the two `.onnx` model downloads, not for page rasters |
 | `ui/dom.ts` | `requireEl, syncCustomReveal` | `requireEl` throws instead of silent-null (replaces `querySelector!`); `syncCustomReveal` is the one shared "Custom…" reveal/sync pattern used by both Output Quality's Custom DPI and Settings' Custom paper height |
 | `ui/persist.ts` | `load_output_prefs, save_output_prefs` | `localStorage` key `scw.output.v1`; load degrades to `{}` on any error (private mode, quota, corrupt JSON), never throws |
 | `ui/theme.ts` | `apply_theme, current_theme` | injects `DARK`/`LIGHT` CSS-custom-property tables onto `documentElement`; `'system'` wires a live `matchMedia` listener |

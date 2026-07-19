@@ -105,8 +105,32 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               Web version: result() returns Promise<BatchResult>; progress via
                               onProgress(cb) callback instead of cooperative step()
 
-      model.ts              AppModel — single facade,
-                              Owns: document state, history, settings, drag, LRU caches.
+      model_types.ts         Public contract types (RendererAdapter, DocInfo, OutputPage,
+                              VectorExportPage, ViewSnapshot) — split out of model.ts purely to
+                              keep it under the project's line limit; no behavior, types only.
+
+      page_index_map.ts      PageIndexMap — logical page index → original adapter page index;
+                              every adapter call taking a page index translates through it.
+
+      page_raster_pipeline.ts PageRasterPipeline — source/work/output raster caches, disk-tier
+                              bookkeeping, currently-displayed bitmap.
+
+      crop_controller.ts     CropController — anchors/offsets/keep-ratio/split/same-size + the
+                              drag gesture state machine.
+
+      page_ops_service.ts    PageOpsService — rotate/delete.
+
+      detection_service.ts   DetectionService — auto-detect algorithm (§5a).
+
+      scan_processing_service.ts  ScanProcessingService — dewarp/filter toggles.
+
+      export_service.ts      ExportService — PDF/image export.
+
+      view_snapshot_builder.ts    ViewSnapshotBuilder — ViewSnapshot computation.
+
+      model.ts              AppModel — facade. Owns document state, history, settings, drag, LRU
+                              caches directly, and composes the collaborators above (each wired
+                              with live callbacks, never captured state) for everything else.
                               All render/imaging calls go through pdf/ and workers/ via injected
                               async adapters (see §5).
 
@@ -359,15 +383,20 @@ Actual interface (`core/model.ts`, kept current — this is the real signature l
 interface RendererAdapter {
   load_files(files: File[]): Promise<DocInfo>
   get_source_image(page_idx: number, dpi: number, rotation: number): Promise<ImageBitmap>
-  get_work_image(page_idx: number, intent: PageProcessIntent, supersample: number,
-                 rotation: number): Promise<ImageBitmap>
+  // Takes the already-rendered SOURCE bitmap, not a page index — the model renders each page
+  // exactly once and hands that raster straight to processing (spec-web §W2 row 5).
+  get_work_image(source: ImageBitmap, intent: PageProcessIntent, supersample: number): Promise<ImageBitmap>
   rotate_bitmap(bitmap: ImageBitmap, degrees: number): Promise<ImageBitmap>
   render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,
-                      target_dpi: number | null, greyscale: boolean): Promise<ImageBitmap>
+                      target_long_px: number | null, greyscale: boolean): Promise<ImageBitmap>
   detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode, region?: Box): Promise<Box>
   detect_text_box?(page_idx: number, region?: Box): Promise<Box | null>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
-  export_images(pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string): Promise<Uint8Array>  // single .zip
+  // Vector PDF export for NORMAL-mode (spec-web §W9.3) — optional; adapters without it (test
+  // mocks) fall back to the raster export path.
+  export_pdf_vector?(pages: readonly VectorExportPage[]): Promise<Uint8Array>
+  export_images(pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
+               on_progress?: (done: number, total: number) => void): Promise<Uint8Array>  // single .zip
   make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>
   close(): void
 }
@@ -406,6 +435,10 @@ class AppModel {
 
   // queries
   view_snapshot(): ViewSnapshot         // side-effect-free; returns frozen bundle
+  async prepare_current_view(): Promise<void>  // warms the current page's raster ahead of a
+                                                // view_snapshot() call
+  set_display_scale(px_per_page_unit: number): void  // never below NORMAL_DPI, never above
+                                                       // NORMAL_DISPLAY_DPI_MAX
   get can_detect(): boolean
   get can_apply(): boolean
   get can_undo(): boolean
@@ -466,9 +499,13 @@ class AppModel {
   set_undo_depth(depth: number): void
   set_output_postfix(postfix: string): void
   set_dewarp_supersample(factor: number): void
+  set_detect_outlier_pages(n: number): void
+  get detect_outlier_pages(): number
 
   // export
   suggested_export_name(): string
+  set_download_handlers(pdf: (bytes: Uint8Array, name: string) => void,
+                        zip: (bytes: Uint8Array, base: string) => void): void
   export(filename: string): BatchJob     // drives export.worker (raster path) or
                                           // loader.ts::export_pdf_vector (NORMAL+PDF, spec-web §10.3)
 }

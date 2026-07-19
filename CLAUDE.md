@@ -20,10 +20,9 @@ passes. See "Verify, don't trust" under Process — it governs every claim of ga
 - Dependency direction is one-way: core/ → pdf/ + workers/ → ui/ → main.ts. core/ never imports ui/.
 - Every AppModel public method has ≥1 test that uses only the public interface. No assertions on
   private fields (model._document, model._drag, etc.).
-- No function over 30 lines without a why-comment explaining why it cannot be split.
 - No magic numbers inline — domain tunables in src/core/constants.ts, presentation tunables in
   src/ui/constants.ts.
-- No god-like objects or files more than 600 lines of code.
+- No god-like objects or files more than 600 lines(without comments) of code.
 - render_output_image() in pdf/loader.ts is the ONE raster image path for preview (both modes) and
   for export whenever export rasterizes: SCANNED mode always, NORMAL mode for JPG/PNG/TIFF. It is
   NOT used for NORMAL-mode PDF export, which produces no raster at all — see export_pdf_vector
@@ -71,8 +70,8 @@ core/model.ts into a session.
   Prefer the smallest correct change over rewriting large parts of the code.
 - Reuse, don't duplicate: a bug fixed in NORMAL mode but left broken in SCANNED, or three
   near-copies of a split-count-conditional path, is a defect even if each copy individually works.
-  Unify shared logic behind one code path; if a real special-case is unavoidable, say why in a
-  comment. If you spot a monkeypatch, duplication, over-complication, or non-senior solution while
+  Unify shared logic behind one code path.
+- If you spot a monkeypatch, duplication, over-complication, or non-senior solution while
   in a file for an unrelated reason, flag it to the user rather than silently fixing it outside the
   current task's scope (or silently leaving it).
 - Ask before guessing on any real ambiguity or spec conflict — a wrong guess compounds across
@@ -90,7 +89,7 @@ core/model.ts into a session.
   the check yourself in the same session before relying on or propagating it, and correct the doc
   as part of the work, not as a followup. Do not rewrite spec or ARCHITECTURE.md prose unrelated to
   the change, except a status claim verified false.
-- New behaviour → unit test for the pure part first (tests/core/); e2e test in tests/e2e/ if it
+- New behavior → unit test for the pure part first (tests/core/); e2e test in tests/e2e/ if it
   spans DOM/canvas/worker boundaries.
 - Before writing a helper: grep for an existing one, then check for a native/platform op, then
   write it. Make both directions of a symmetric operation (encode/decode, get/set) agree.
