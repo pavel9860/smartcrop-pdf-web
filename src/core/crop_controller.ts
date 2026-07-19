@@ -10,12 +10,12 @@ import {
   hit_handle, apply_handle_drag, auto_crop_rect, centered_crop_rect,
   offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
   split_rects_grid, edge_deltas, apply_edge_deltas, clamp_edge_deltas,
-  manual_offset_rect, offsets_from_manual_rect,
+  drawn_offset_rect, offsets_from_drawn_rect,
   MIN_RECT, box_width, box_height,
 } from './geometry'
 import type { DocumentState, Offsets } from './document_state'
 import type { History } from './history'
-import { OFFSET_LIMIT, MANUAL_OFFSET_DEFAULT } from './constants'
+import { OFFSET_LIMIT } from './constants'
 import type { PageSize } from './model'
 import { type DragState, type AutoDrag, type SplitDrag, type DrawDrag, type DrawnDrag } from './drag'
 
@@ -46,11 +46,6 @@ export class CropController {
   private _same_size    = false
   private _drag:      DragState | null = null
   private _draw_rect: Box | null = null
-  // Manual-offsets mode (spec-web §4.6) — same tier as the anchor flags above (non-undoable
-  // CropController state), not a DocumentState field. The window itself is the existing `drawn`
-  // window (CropContext), not separate stored state: compute_crop_boxes_for_page() already gives
-  // `drawn` top priority over auto-crop, so nothing else needs to change to make it authoritative.
-  private _manual_offsets_on = false
 
   constructor(
     private readonly _history: History,
@@ -64,7 +59,6 @@ export class CropController {
   get split_count():  1 | 2 | 4     { return this._split_count }
   get same_size():    boolean       { return this._same_size }
   get draw_rect():    Box | null    { return this._draw_rect }
-  get manual_offsets_on(): boolean  { return this._manual_offsets_on }
 
   reset(initial_ratio: number): void {
     this._split_count = 1
@@ -75,39 +69,22 @@ export class CropController {
     this._same_size = false
     this._drag = null
     this._draw_rect = null
-    this._manual_offsets_on = false
   }
 
-  // Turning on seeds the predefined MANUAL_OFFSET_DEFAULT% margin as the current page's `drawn`
-  // window; turning off drops it (falls back to auto-crop/nothing, matching "auto-detect is
-  // disabled only while manual mode is on").
-  set_manual_offsets_on(on: boolean): void {
-    this._manual_offsets_on = on
-    if (!this._ctx.has_document()) return
-    const sz = this._ctx.page_dims(this._ctx.current_page())
-    this._ctx.set_drawn(on
-      ? manual_offset_rect(
-          { left: MANUAL_OFFSET_DEFAULT, top: MANUAL_OFFSET_DEFAULT,
-            right: MANUAL_OFFSET_DEFAULT, bottom: MANUAL_OFFSET_DEFAULT },
-          sz.width, sz.height)
-      : null)
-  }
-
-  // Live view onto the current `drawn` window as edge percentages — not separately stored, so a
-  // drag-resize and a field edit can never disagree about the window's position.
-  manual_offsets(): Offsets {
+  // Live view onto the current `drawn` window as edge percentages (spec-web §4.6) — not separately
+  // stored, so a drag-resize and a field edit can never disagree about the window's position. Null
+  // when no window is drawn: the fields have nothing to show/edit until one exists (split = 1 only
+  // — `drawn` is always null at split > 1, see set_split below).
+  drawn_offsets(): Offsets | null {
     const drawn = this._ctx.drawn()
-    if (!drawn || !this._ctx.has_document()) {
-      return { left: MANUAL_OFFSET_DEFAULT, top: MANUAL_OFFSET_DEFAULT,
-        right: MANUAL_OFFSET_DEFAULT, bottom: MANUAL_OFFSET_DEFAULT }
-    }
+    if (!drawn || !this._ctx.has_document()) return null
     const sz = this._ctx.page_dims(this._ctx.current_page())
-    return offsets_from_manual_rect(drawn, sz.width, sz.height)
+    return offsets_from_drawn_rect(drawn, sz.width, sz.height)
   }
 
-  set_manual_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void {
-    if (!this._ctx.has_document() || !this._manual_offsets_on) return
-    const o = this.manual_offsets()
+  set_drawn_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void {
+    const o = this.drawn_offsets()
+    if (!o) return   // no drawn window to edit
     const clamped = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, value))
     const next: Offsets = {
       left:   edge === 'L' ? clamped : o.left,
@@ -116,7 +93,7 @@ export class CropController {
       bottom: edge === 'B' ? clamped : o.bottom,
     }
     const sz = this._ctx.page_dims(this._ctx.current_page())
-    this._ctx.set_drawn(manual_offset_rect(next, sz.width, sz.height))
+    this._ctx.set_drawn(drawn_offset_rect(next, sz.width, sz.height))
   }
 
   // Ratio source after a fresh detect is the detection UNION's aspect ratio, not the page's
@@ -212,7 +189,6 @@ export class CropController {
     const doc = this._ctx.document()
     doc.applied.clear()
     this._ctx.set_drawn(null)
-    this._manual_offsets_on = false   // the manual window belongs to split=1, same as `drawn` above
     this._split_count = n
     if (this._ctx.has_document()) {
       const sz = this._ctx.page_dims(this._ctx.current_page())
@@ -274,9 +250,6 @@ export class CropController {
         } satisfies DrawnDrag
         return
       }
-      // Manual-offsets mode (spec-web §4.6): the window can be resized/moved but never dropped —
-      // no free-draw replacement, no auto-detect fallback (both explicitly disabled while it's on).
-      if (this._manual_offsets_on) return
       this._begin_draw_drag(pt, sz)   // outside the window → drop it, start a fresh draw
       return
     }
@@ -468,9 +441,6 @@ export class CropController {
     this._draw_rect = null
 
     if (!drag) {
-      // Manual-offsets mode disables dropping/redrawing the window entirely (spec-web §4.6) —
-      // same guard as begin_drag's click-outside case.
-      if (this._manual_offsets_on) return
       // Esc / right-click drops the drawn window if one exists (bug 5); else deactivates the
       // auto-detect frame instead (spec-web §6.2) — its cached result survives and re-activates
       // on the next Auto-detect press.

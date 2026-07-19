@@ -176,12 +176,12 @@ Called by `crop_panel.ts`: Auto-detect button (`dispatch_job`), Crop button (`di
 | `set_anchor(left,top)` | 503 | either arg `null` = leave unchanged |
 | `set_keep_ratio(on,ratio?)` | 544 | explicit `ratio` wins; else off→on populates from `_default_ratio()` — comment flags a real prior bug (dead-code branch from checking `_keep_ratio` **after** mutating it) |
 | `_default_ratio()` private | 561 | precedence: `crop_rects[0]` (split>1) → `_drawn` (split=1) → `_union` → current page aspect → `1.0` |
-| `set_split(n)` | 578 | no-op if unchanged; clears `applied` + `drawn` + `manual_offsets_on` (committed crops and the manual-offsets window both belong to the old layout); reseeds `crop_rects` via `split_rects_grid`; re-derives ratio if keep-ratio is on (does NOT carry the old ratio proportionally — deliberate, spec-web §6.7) |
+| `set_split(n)` | 578 | no-op if unchanged; clears `applied` + `drawn` (committed crops and any drawn window both belong to the old layout); reseeds `crop_rects` via `split_rects_grid`; re-derives ratio if keep-ratio is on (does NOT carry the old ratio proportionally — deliberate, spec-web §6.7) |
 | `set_same_size(on)` | 605 | turning ON immediately normalizes every window to window[0]'s w×h, capped to each window's own headroom |
-| `set_manual_offsets_on(on)` / `set_manual_offset(edge,value)` / `manual_offsets()` | — | spec-web §4.6, replaces the old "Advanced" accordion. Reuses the `drawn` window (not a new DocumentState field): on seeds it at `MANUAL_OFFSET_DEFAULT`% margin via `manual_offset_rect`; off clears it. `manual_offsets()` is a live view via `offsets_from_manual_rect`, not separately stored. |
+| `set_drawn_offset(edge,value)` / `drawn_offsets()` | — | spec-web §4.6, no separate switch. Reuses the `drawn` window (not a new DocumentState field): `drawn_offsets()` is a live view via `offsets_from_drawn_rect` (null when no window is drawn); `set_drawn_offset` is a no-op with no drawn window, else recomputes it via `drawn_offset_rect`. |
 
-Called by `crop_panel.ts` (Split 1/2/4, Same-size toggle, Anchor L/T checkboxes, Set offsets manual
-switch + L/T/R/B fields, Keep-ratio toggle + ratio field).
+Called by `crop_panel.ts` (Split 1/2/4, Same-size toggle, Anchor L/T checkboxes, drawn-window
+L/T/R/B fields, Keep-ratio toggle + ratio field).
 
 ### 6.6 Drag gesture state machine
 
@@ -441,7 +441,7 @@ All four follow the identical shape: constructor builds `innerHTML` cards + `req
 | Panel | Cards built | Key model calls |
 |---|---|---|
 | `pages_panel.ts` | doc-name card, Document & State, Pages to Process | `load_files` (dispatch_async), `set_pages_mode`, `set_select_pattern`, `set_current_follow` |
-| `crop_panel.ts` | Split, Detect Text Borders (incl. Set offsets manual switch + L/T/R/B fields, spec-web §4.6), Actions | `set_split`, `set_same_size`, `detect_content` (dispatch_job), `set_anchor`×2, `set_keep_ratio`×2 (toggle + ratio field), `set_manual_offsets_on`, `set_manual_offset` (on blur/Enter, one closure per edge), `apply_crop`, `rotate_pages`, `delete_pages` (pre-checked against deleting every page → `ctrl.alert()`, else behind `ctrl.confirm()`) |
+| `crop_panel.ts` | Split, Detect Text Borders (incl. drawn-window L/T/R/B fields, spec-web §4.6), Actions | `set_split`, `set_same_size`, `detect_content` (dispatch_job), `set_anchor`×2, `set_keep_ratio`×2 (toggle + ratio field), `set_drawn_offset` (on blur/Enter, one closure per edge), `apply_crop`, `rotate_pages`, `delete_pages` (pre-checked against deleting every page → `ctrl.alert()`, else behind `ctrl.confirm()`) |
 | `scan_panel.ts` | Scan Processing (hidden unless `mode===SCANNED`) | `run_dewarp`, `set_filter_mode`(BW/SHARPEN), `set_filter_strength` — **all three via `dispatch_job`**, not `dispatch`, since the toggle is eager-but-warms-cache under a `BatchJob` |
 | `output_panel.ts` | Output Quality, Export | `set_compress_preset`, `set_custom_dpi`, `set_output_colours`, `set_export_format`, `export` (dispatch_job, via `suggested_export_name()`) |
 

@@ -25,7 +25,6 @@ export const HANDLE_R     = 10    // handle hit-radius px
 export const HANDLE_SLACK = 6     // extra tolerance around handle
 export const CANVAS_MARGIN = 0    // page fills the canvas height edge-to-edge (bug 9, desktop parity)
 export const OFFSET_LIMIT  = 100.0 // max ±% for any single edge offset
-export const MANUAL_OFFSET_DEFAULT = 10.0 // manual-offsets mode's predefined margin, % per edge
 
 // Classification / detection thresholds (spec §4, §8)
 export const MODE_TEXT_MIN  = 8       // chars below this = image-only page

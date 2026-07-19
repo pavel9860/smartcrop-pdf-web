@@ -45,66 +45,49 @@ describe('CropController anchors/offsets', () => {
 
 })
 
-describe('CropController manual offsets (spec-web §4.6, replaces the old Advanced accordion)', () => {
-  function manual_controller(): { c: CropController; drawn: () => Box | null } {
-    let drawn: Box | null = null
+describe('CropController drawn-window L/T/R/B fields (spec-web §4.6, no separate switch)', () => {
+  function drawn_controller(initial: Box | null = null): { c: CropController; drawn: () => Box | null } {
+    let drawn: Box | null = initial
     const { c } = controller({ drawn: () => drawn, set_drawn: (b) => { drawn = b } })
     return { c, drawn: () => drawn }
   }
 
-  it('turning on seeds a default 10%-margin window via set_drawn', () => {
-    const { c, drawn } = manual_controller()
-    c.set_manual_offsets_on(true)
-    expect(c.manual_offsets_on).toBe(true)
-    expect(drawn()).toEqual({ x0: 20, y0: 30, x1: 180, y1: 270 })   // 10% of 200x300 each edge
-    expect(c.manual_offsets()).toEqual({ left: 10, top: 10, right: 10, bottom: 10 })
+  it('drawn_offsets is null when no window is drawn', () => {
+    const { c } = drawn_controller()
+    expect(c.drawn_offsets()).toBeNull()
   })
 
-  it('turning off drops the window', () => {
-    const { c, drawn } = manual_controller()
-    c.set_manual_offsets_on(true)
-    c.set_manual_offsets_on(false)
-    expect(c.manual_offsets_on).toBe(false)
+  it('drawn_offsets reflects an existing drawn window as edge percentages', () => {
+    const { c } = drawn_controller({ x0: 20, y0: 30, x1: 180, y1: 270 })   // 10% margin, 200x300
+    expect(c.drawn_offsets()).toEqual({ left: 10, top: 10, right: 10, bottom: 10 })
+  })
+
+  it('set_drawn_offset is a no-op with no drawn window', () => {
+    const { c, drawn } = drawn_controller()
+    c.set_drawn_offset('L', 20)
     expect(drawn()).toBeNull()
   })
 
-  it('set_manual_offset updates one edge and recomputes the window; a no-op while off', () => {
-    const { c, drawn } = manual_controller()
-    c.set_manual_offset('L', 20)   // off — no window to move, no-op
-    expect(drawn()).toBeNull()
-
-    c.set_manual_offsets_on(true)
-    c.set_manual_offset('L', 20)
-    expect(c.manual_offsets()).toEqual({ left: 20, top: 10, right: 10, bottom: 10 })
+  it('set_drawn_offset updates one edge and recomputes the window', () => {
+    const { c, drawn } = drawn_controller({ x0: 20, y0: 30, x1: 180, y1: 270 })
+    c.set_drawn_offset('L', 20)
+    expect(c.drawn_offsets()).toEqual({ left: 20, top: 10, right: 10, bottom: 10 })
     expect(drawn()!.x0).toBeCloseTo(40)   // 20% of page_w=200
   })
 
-  it('clicking outside the manual window does not drop it (no free-draw replacement)', () => {
-    const { c, drawn } = manual_controller()
-    c.set_manual_offsets_on(true)
-    const before = drawn()
-    c.begin_drag(1, 1, 5)   // page corner, well outside the 20..180 x 30..270 window
-    c.update_drag(50, 50)
-    c.end_drag()
-    expect(drawn()).toEqual(before)   // untouched — begin_drag was a no-op
-  })
-
-  it('Esc/right-click (no drag in progress) does not drop the manual window either', () => {
-    const { c, drawn } = manual_controller()
-    c.set_manual_offsets_on(true)
-    const before = drawn()
-    c.cancel_drag()
-    expect(drawn()).toEqual(before)   // untouched — same guard as click-outside
-  })
-
-  it('a handle-drag still resizes the manual window', () => {
-    const { c, drawn } = manual_controller()
-    c.set_manual_offsets_on(true)
-    c.begin_drag(20, 30, 5)   // top-left handle of the seeded window
+  it('a handle-drag still resizes the drawn window, kept in sync with the fields', () => {
+    const { c, drawn } = drawn_controller({ x0: 20, y0: 30, x1: 180, y1: 270 })
+    c.begin_drag(20, 30, 5)   // top-left handle
     c.update_drag(10, 10)
     c.end_drag()
     expect(drawn()).not.toBeNull()
     expect(drawn()!.x0).toBeLessThan(20)
+  })
+
+  it('clicking outside a drawn window drops it and starts a fresh draw (no manual-mode lock)', () => {
+    const { c, drawn } = drawn_controller({ x0: 20, y0: 30, x1: 180, y1: 270 })
+    c.begin_drag(1, 1, 5)   // page corner, outside the window
+    expect(drawn()).toBeNull()   // dropped immediately, same as any other drawn window
   })
 })
 

@@ -363,8 +363,7 @@ export class AppModel {
   // (spec-web §6.5/§6.6), are owned by CropController (§18) — these are 1-line delegations so
   // ui/ keeps calling AppModel's public surface unchanged.
   set_anchor(left: boolean | null, top: boolean | null): void { this._crop.set_anchor(left, top) }
-  set_manual_offsets_on(on: boolean): void { this._crop.set_manual_offsets_on(on) }
-  set_manual_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_manual_offset(edge, value) }
+  set_drawn_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_drawn_offset(edge, value) }
   set_keep_ratio(on: boolean, ratio?: number): void { this._crop.set_keep_ratio(on, ratio) }
   set_split(n: 1 | 2 | 4): void { this._crop.set_split(n) }
   set_same_size(on: boolean): void { this._crop.set_same_size(on) }
@@ -555,8 +554,7 @@ export class AppModel {
   get same_size(): boolean { return this._crop.same_size }
   get anchor_left(): boolean { return this._crop.anchor_left }
   get anchor_top(): boolean { return this._crop.anchor_top }
-  get manual_offsets_on(): boolean { return this._crop.manual_offsets_on }
-  get manual_offsets(): Offsets { return this._crop.manual_offsets() }
+  get drawn_offsets(): Offsets | null { return this._crop.drawn_offsets() }
   get keep_ratio(): boolean { return this._crop.keep_ratio }
   get ratio(): number { return this._crop.ratio }
   get pages_mode(): PagesMode { return this._pages_mode }

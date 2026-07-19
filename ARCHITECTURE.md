@@ -230,9 +230,9 @@ C:/DOCS/Code/SmartCroPDF-Web/
 
         crop_panel.ts       "Split Each Page Into" + "Detect Text Borders" + "Actions" cards.
                               Split 1/2/4 segmented; Same size toggle; Keep ratio + ratio field.
-                              Auto-detect button; Anchor Left/Top toggles; Set offsets manual switch
-                              (spec-web §4.6) + its L/T/R/B fields, all in the Detect Text Borders
-                              card — replaces the old collapsible "Advanced" section.
+                              Auto-detect button; Anchor Left/Top toggles; drawn-window L/T/R/B
+                              fields (spec-web §4.6, shown only while a window is hand-drawn — no
+                              switch), all in the Detect Text Borders card.
                               Crop (full-width) + Rotate + Delete action buttons.
 
         scan_panel.ts       "Scan Processing" card — shown only in SCANNED mode.
@@ -424,13 +424,9 @@ class AppModel {
                                            // main thread, not a worker (§7a)
   apply_crop(): void                      // raises InvalidSplitError / EmptySelectionError
   set_anchor(left: boolean | null, top: boolean | null): void
-  set_offset(edge: 'L'|'T'|'R'|'B', value: number): void   // auto-crop offset (union-relative) —
-  commit_offsets(): void                                   // UI trigger removed (spec-web §4.6 is
-                                                             // now manual-offsets mode below); kept
-                                                             // as a domain method, flagged to the
-                                                             // user as a candidate for full removal
-  set_manual_offsets_on(on: boolean): void   // spec-web §4.6 — page-relative, replaces "Advanced"
-  set_manual_offset(edge: 'L'|'T'|'R'|'B', value: number): void
+  set_drawn_offset(edge: 'L'|'T'|'R'|'B', value: number): void   // spec-web §4.6 — no-op with no
+                                                                   // drawn window; page-relative,
+                                                                   // not union-relative
   set_keep_ratio(on: boolean, ratio?: number): void
   set_split(n: number): void
   set_same_size(on: boolean): void

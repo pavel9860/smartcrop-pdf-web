@@ -1,4 +1,4 @@
-// Split + Detect Text Borders (incl. manual-offsets mode) + Actions cards (spec §7.3, §7.4, §7.7).
+// Split + Detect Text Borders (incl. drawn-window L/T/R/B fields) + Actions cards (spec §7.3, §7.4, §7.7).
 
 import type { AppModel } from '@core/model'
 import type { AppController } from '../app'
@@ -15,8 +15,7 @@ export class CropPanel {
   private readonly _anchor_t: HTMLInputElement
   private readonly _keep_ratio_sw: HTMLInputElement
   private readonly _ratio_inp: HTMLInputElement
-  // Manual offsets (spec-web §4.6)
-  private readonly _manual_sw: HTMLInputElement
+  // Drawn-window L/T/R/B fields (spec-web §4.6)
   private readonly _offset_body: HTMLElement
   private readonly _offset_l: HTMLInputElement
   private readonly _offset_t: HTMLInputElement
@@ -62,14 +61,11 @@ export class CropPanel {
           <input type="checkbox" id="cp-anchor-t" checked title="Pin the top edge to this page's own content instead of the shared union" /> Anchor Top
         </label>
       </div>
-      <label class="toggle-label">
-        <input type="checkbox" id="cp-manual" title="Set the crop window directly by L/T/R/B page margins — disables auto-detect and drawing a new window" /> Set offsets manual
-      </label>
       <div class="offset-grid hidden" id="cp-offset-body">
-        <label>L <input class="offset-inp" id="cp-off-l" type="number" step="0.1" value="0" title="Left edge offset, % of page width" /></label>
-        <label>T <input class="offset-inp" id="cp-off-t" type="number" step="0.1" value="0" title="Top edge offset, % of page height" /></label>
-        <label>R <input class="offset-inp" id="cp-off-r" type="number" step="0.1" value="0" title="Right edge offset, % of page width" /></label>
-        <label>B <input class="offset-inp" id="cp-off-b" type="number" step="0.1" value="0" title="Bottom edge offset, % of page height" /></label>
+        <label>L <input class="offset-inp" id="cp-off-l" type="number" step="0.1" value="0" title="Left edge position, % of page width from the left" /></label>
+        <label>T <input class="offset-inp" id="cp-off-t" type="number" step="0.1" value="0" title="Top edge position, % of page height from the top" /></label>
+        <label>R <input class="offset-inp" id="cp-off-r" type="number" step="0.1" value="0" title="Right edge position, % of page width from the right" /></label>
+        <label>B <input class="offset-inp" id="cp-off-b" type="number" step="0.1" value="0" title="Bottom edge position, % of page height from the bottom" /></label>
       </div>`
     container.appendChild(detect_card)
 
@@ -92,7 +88,6 @@ export class CropPanel {
     this._anchor_t      = requireEl(detect_card, '#cp-anchor-t')
     this._keep_ratio_sw = requireEl(split_card, '#cp-keep-ratio')
     this._ratio_inp     = requireEl(split_card, '#cp-ratio')
-    this._manual_sw     = requireEl(detect_card, '#cp-manual')
     this._offset_body   = requireEl(detect_card, '#cp-offset-body')
     this._offset_l      = requireEl(detect_card, '#cp-off-l')
     this._offset_t      = requireEl(detect_card, '#cp-off-t')
@@ -126,14 +121,10 @@ export class CropPanel {
       if (r > 0) ctrl.dispatch(() => { model.set_keep_ratio(model.keep_ratio, r) })
     })
 
-    // Manual offsets (spec-web §4.6)
-    this._manual_sw.addEventListener('change', () =>
-      { ctrl.dispatch(() => { model.set_manual_offsets_on(this._manual_sw.checked) }) })
-
-    // Offsets (commit on blur / Enter)
+    // Drawn-window L/T/R/B fields (spec-web §4.6, commit on blur / Enter)
     const commit_offset = (edge: 'L'|'T'|'R'|'B', inp: HTMLInputElement): () => void => () => {
       const v = parseFloat(inp.value)
-      if (!isNaN(v)) ctrl.dispatch(() => { model.set_manual_offset(edge, v) })
+      if (!isNaN(v)) ctrl.dispatch(() => { model.set_drawn_offset(edge, v) })
     }
     this._offset_l.addEventListener('change', commit_offset('L', this._offset_l))
     this._offset_t.addEventListener('change', commit_offset('T', this._offset_t))
@@ -169,8 +160,7 @@ export class CropPanel {
     this._same_size_sw.disabled = busy
 
     const detect_only = n === 1
-    const manual = model.manual_offsets_on
-    this._detect_btn.disabled  = busy || !model.can_detect || !detect_only || manual
+    this._detect_btn.disabled  = busy || !model.can_detect || !detect_only
     this._anchor_l.checked     = model.anchor_left
     this._anchor_t.checked     = model.anchor_top
     this._anchor_l.disabled    = busy || !detect_only
@@ -181,17 +171,18 @@ export class CropPanel {
       this._ratio_inp.value = model.ratio.toFixed(3)
     }
 
-    this._manual_sw.checked  = manual
-    this._manual_sw.disabled = busy || !detect_only
-    this._offset_body.classList.toggle('hidden', !manual)
-
-    const o = model.manual_offsets
-    if (document.activeElement !== this._offset_l) this._offset_l.value = o.left.toFixed(1)
-    if (document.activeElement !== this._offset_t) this._offset_t.value = o.top.toFixed(1)
-    if (document.activeElement !== this._offset_r) this._offset_r.value = o.right.toFixed(1)
-    if (document.activeElement !== this._offset_b) this._offset_b.value = o.bottom.toFixed(1)
+    // L/T/R/B fields (spec-web §4.6): shown only while a window is hand-drawn (split = 1), edit
+    // its position relative to each page side, % — no separate switch, no seeded default.
+    const o = model.drawn_offsets
+    this._offset_body.classList.toggle('hidden', !o)
+    if (o) {
+      if (document.activeElement !== this._offset_l) this._offset_l.value = o.left.toFixed(1)
+      if (document.activeElement !== this._offset_t) this._offset_t.value = o.top.toFixed(1)
+      if (document.activeElement !== this._offset_r) this._offset_r.value = o.right.toFixed(1)
+      if (document.activeElement !== this._offset_b) this._offset_b.value = o.bottom.toFixed(1)
+    }
     this._offset_l.disabled = this._offset_t.disabled =
-    this._offset_r.disabled = this._offset_b.disabled = busy || !manual
+    this._offset_r.disabled = this._offset_b.disabled = busy || !o
 
     // Crop button label changes when split > 1 (spec TODO §16)
     this._crop_btn.textContent = n > 1 ? '✂️  Split & Crop' : '✂️  Crop'

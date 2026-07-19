@@ -57,11 +57,9 @@ const SECTIONS: readonly HelpSection[] = [
     body: "Anchor Left and Anchor Top (in the Detect card) pin that edge of the shared crop "
       + "to each page's own content rather than the union of all pages. "
       + 'Useful when margins differ across pages. At least one anchor must stay on.\n\n'
-      + 'Set offsets manual (in the Detect card) seeds a crop window at a fixed margin and shows '
-      + 'four offset fields (L T R B), each nudging one edge by a percentage of the page size — '
-      + 'positive shrinks the crop, negative expands it, and out-of-range values snap to the page '
-      + 'border automatically. While it\'s on, Auto-detect and dropping/redrawing the window are '
-      + 'disabled; only the fields and the window\'s own handles can change it.\n\n'
+      + "When a window is hand-drawn (Draw, above), four fields (L T R B) appear in the Detect "
+      + "card showing that window's edges as a percentage of the page size from each side — "
+      + 'editing a field and dragging a handle always agree about the window\'s position.\n\n'
       + "If a few pages have unusually large content (e.g. a fold-out), Settings → "
       + '"Ignore N outlier pages" excludes that many of the largest pages when sizing the shared '
       + 'crop, so they stop inflating the crop on every other page. Defaults to 2.',
