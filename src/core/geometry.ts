@@ -458,3 +458,9 @@ export function reindex_map<V>(map: Map<number, V>, deleted: readonly number[]):
 export function box_width(b: Box): number { return b.x1 - b.x0 }
 export function box_height(b: Box): number { return b.y1 - b.y0 }
 export function box_area(b: Box): number { return box_width(b) * box_height(b) }
+
+// Shift a box by (dx, dy) — used to move a box between a split region's local frame (origin at
+// the region's own top-left) and the page's global frame, e.g. split-region auto-detect (spec §5a).
+export function translate_box(b: Box, dx: number, dy: number): Box {
+  return { x0: b.x0 + dx, y0: b.y0 + dy, x1: b.x1 + dx, y1: b.y1 + dy }
+}

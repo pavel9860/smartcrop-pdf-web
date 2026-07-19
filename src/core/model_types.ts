@@ -59,10 +59,13 @@ export interface RendererAdapter {
   // (= dpi × paper height, spec-web §W2 row 8); null = keep source resolution (and preview).
   render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,
                       target_long_px: number | null, greyscale: boolean): Promise<ImageBitmap>
-  detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode): Promise<Box>
+  // `region`, if given (split 2/4 per-region detect, spec §5a), scopes detection to that
+  // page-unit sub-rectangle instead of the whole page; the returned box is still in page (not
+  // region-local) coordinates.
+  detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode, region?: Box): Promise<Box>
   // Fast NORMAL-mode detection from the PDF text layer (desktop detect.py normal_page_box) — no
   // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
-  detect_text_box?(page_idx: number): Promise<Box | null>
+  detect_text_box?(page_idx: number, region?: Box): Promise<Box | null>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
   // Lossless vector PDF export for NORMAL-mode documents (spec-web §W9.3): crops/rotates/splits
   // via the ORIGINAL PDF page content (pdf-lib embedPage), never rasterizes. Optional — an adapter

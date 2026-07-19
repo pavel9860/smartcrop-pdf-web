@@ -159,12 +159,13 @@ export class CropPanel {
     this._same_size_sw.checked  = model.same_size
     this._same_size_sw.disabled = busy
 
-    const detect_only = n === 1
-    this._detect_btn.disabled  = busy || !model.can_detect || !detect_only
+    // Auto-detect/anchors work at every split count (spec §4.5/§5a: split 2/4 detects within
+    // each region independently) — only the drawn-window L/T/R/B fields below stay split=1 only.
+    this._detect_btn.disabled  = busy || !model.can_detect
     this._anchor_l.checked     = model.anchor_left
     this._anchor_t.checked     = model.anchor_top
-    this._anchor_l.disabled    = busy || !detect_only
-    this._anchor_t.disabled    = busy || !detect_only
+    this._anchor_l.disabled    = busy
+    this._anchor_t.disabled    = busy
     this._keep_ratio_sw.checked  = model.keep_ratio
     this._ratio_inp.disabled     = busy
     if (document.activeElement !== this._ratio_inp) {

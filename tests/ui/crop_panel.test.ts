@@ -35,6 +35,14 @@ describe('CropPanel', () => {
     expect(root.querySelector('#cp-crop')!.textContent).toContain('Split & Crop')
   })
 
+  it('Auto-detect and the anchor toggles stay enabled at split=2/4 (spec §4.5/§5a)', () => {
+    root.querySelector<HTMLButtonElement>('[data-n="2"]')!.click()
+    panel.refresh(model, false)
+    expect(root.querySelector<HTMLButtonElement>('#cp-detect')!.disabled).toBe(false)
+    expect(root.querySelector<HTMLInputElement>('#cp-anchor-l')!.disabled).toBe(false)
+    expect(root.querySelector<HTMLInputElement>('#cp-anchor-t')!.disabled).toBe(false)
+  })
+
   it('the offset grid is hidden with no drawn window, and shown/populated once one exists ' +
      '(spec-web §4.6: no separate switch, appears only for a hand-drawn crop window)', () => {
     const body = root.querySelector('#cp-offset-body')!

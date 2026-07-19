@@ -181,23 +181,27 @@ explicitly undone; there is no separate "reverse" gesture on the same button (§
 
 ### 4.4 Split Each Page Into
 
-`1 / 2 / 4` → that many output pages per source page (§7.4). N > 1 disables Detect/anchors/offsets
-(manual split is the crop source) and reveals **Same size**. Changing the split count clears any
-committed crop from the previous layout and re-seeds an even grid of N windows (§7.4).
+`1 / 2 / 4` → that many output pages per source page (§7.4). N > 1 reveals **Same size** and
+switches Detect/anchors to per-region detection (§4.5, §5a) — the drawn-window L/T/R/B fields
+(§4.6) stay split = 1 only, since a hand-drawn window is a single global rectangle with no notion
+of "region". Changing the split count clears any committed crop from the previous layout and
+re-seeds an even grid of N windows (§7.4), and discards any prior per-region detect result (the
+regions themselves changed shape/count) — Auto-detect needs a fresh press after a split-count
+change.
 
 **Keep ratio** (toggle + numeric field): when on, the crop height is locked to `width / ratio` for
 every crop source in both modes (§7.7). The field pre-populates from whatever crop shape is
 currently on screen when the toggle turns on.
 
-### 4.5 Detect Text Borders *(split = 1)*
+### 4.5 Detect Text Borders
 
 | Control | Action |
 |---|---|
-| Auto-detect | Runs detection over the Pages selection (§6). An action, not a toggle — never highlighted, always re-pressable. Disabled when split > 1, both anchors are off, or a batch is running. Pressing it drops any hand-drawn window (§6.1) and replaces it with the fresh detected union, same as always. |
-| Anchor Left / Anchor Top | Left/top edge from this page's own detected content (on) or the shared union edge (off). At least one anchor must be on for a crop to exist. |
+| Auto-detect | Runs detection over the Pages selection (§6). An action, not a toggle — never highlighted, always re-pressable. Disabled when both anchors are off or a batch is running. At split = 1, drops any hand-drawn window (§6.1) and replaces it with the fresh detected union. At split = 2/4, replaces `crop_rects` with a fresh detected-and-anchored set of N windows (§5a) — same effect on the split layout a fresh drag would have. |
+| Anchor Left / Anchor Top | Left/top edge from this page's (or, at split > 1, this region's) own detected content (on) or the shared union edge (off). At least one anchor must be on for a crop to exist. |
 
 Re-running Auto-detect refreshes an already-committed page's crop to the fresh box instead of
-dropping it (§4.5, §7.4).
+dropping it (§4.5, §7.4) — split = 1 and split > 1 alike.
 
 ### 4.6 Drawn-window L/T/R/B fields *(split = 1)*
 
@@ -315,6 +319,59 @@ Detection is non-destructive and deterministic; it is always safe to re-run.
 space: the SCANNED path reads the already-rotated work raster; the NORMAL path reads the document's
 (unrotated) text layer and the caller accounts for rotation when caching. Detecting after a rotation
 therefore equals rotating after a detection.
+
+### 5a. Auto-detect at split = 2/4
+
+Detection runs independently within each of the N regions of the even grid `split_rects_grid`
+seeds (§7.4, §9.6) — a page's left half never influences its right half's detected box, and
+vice versa. Per region:
+
+- **SCANNED:** the same Sauvola/connected-components `content_box` as §5, run only over that
+  region's pixels (the source raster cropped to the region first) — border/min-area exclusion is
+  judged against the *region's* size, not the whole page, so a box spanning the whole region (not
+  the whole page) is what counts as a "full page" fallback to exclude from that region's union.
+- **NORMAL:** the same text-run union as §5, but only over runs whose centre falls inside the
+  region (a run straddling the boundary belongs to whichever region contains its centre, never
+  both).
+
+Each region then aggregates its own cross-page union exactly as §5's `gL/gT/W/H` does (same
+`detection_union`, same outlier tolerance, same FULL_PAGE_FRAC exclusion — just judged region-by-
+region instead of once for the whole page).
+
+**Resolving into `crop_rects`.** Unlike split = 1 — where each page can get its own slightly
+different auto-crop position (anchored to that page's own content) — `crop_rects` is one shared
+set of N windows applied identically to every page (§7.3, §9.6), so there is no per-page variation
+to compute here. Auto-detect instead recomputes that shared template once, using the *current*
+page's own per-region detected boxes for anchoring (mirroring how a fresh split drag or
+`split_rects_grid`'s blind seed already work off a single page's dims):
+
+```
+per region r:
+  region_r = split_rects_grid(n)[r]                       # this region's slice of the current page
+  base   = AnchorLeft/Top ? detected_r(current_page).x0/y0 : union_r.x0/y0
+  W, H   = SameSize ? (max width, max height across all N regions' own unions) : union_r's own W,H
+  rect_r = box at `base`, sized W×H, extended outward from `base` (§6.2's own overhang/clamp rule),
+           clamped to region_r — or centered within region_r if the current page has no detected
+           box of its own in this region (§5's centered-fallback rule, scoped to the region)
+```
+
+`Same size` OFF: every region simply gets its own union's size. `Same size` ON: every region grows
+to the *largest* union size found across all N regions, each still extended outward from its own
+anchor corner — a region that was already the largest is unaffected; smaller regions grow without
+moving their anchored corner.
+
+A region with no detected content on ANY page (union is null — nothing survived the min-area/
+border/FULL_PAGE_FRAC filters anywhere) falls back to that region's own raw slice, unresized —
+the same "detection found nothing, don't fabricate a box" principle as whole-page detect.
+
+Re-running Auto-detect at split > 1 refreshes already-committed split pages' `applied` entries to
+the fresh `crop_rects`, same as §4.5 does for split = 1.
+
+**Rotate/delete residual note.** A rotation reshuffles which grid cell is "top-left" and a delete
+changes which pages exist; rather than rebuild each region's cross-page union against the new
+layout (as §12 does for the single-crop union), rotate/delete simply discard the per-region detect
+result and require a fresh Auto-detect press — simpler, and never silently wrong, at the cost of an
+extra click.
 
 ---
 
@@ -678,12 +735,16 @@ stalling at 100% while the zip is encoded, but the counter always shows real pro
 `DocumentState`'s undo boundary is exactly 8 fields: `applied` (committed crop/split), `crop_rects`
 (live split layout), `rotation`, `processed` (scan-processing intent), `offsets`, `dewarp_on`,
 `filter_mode`, `filter_strength`. Auto-detect's results (the per-page detected-box cache, the union,
-whether detection has run at all) and the in-progress hand-drawn window are **non-undoable**
-`AppModel` fields, not `DocumentState` fields — they are scaffolding used to *arrive* at a committed
-operation, not an operation themselves. Concretely: pressing Undo immediately after Auto-detect,
-before anything is committed via Crop, is a no-op; finishing a rubber-band draw (§6.4) does not push
-a checkpoint either — only **Crop** (`apply_crop()`) does. Undo continues to fully revert
-`applied`/`rotation`/`offsets`/(SCANNED-mode) `processed`/`dewarp_on`/`filter_mode`/`filter_strength`.
+whether detection has run at all — plus, at split > 1, the per-region equivalents, §5a) and the
+in-progress hand-drawn window are **non-undoable** `AppModel` fields, not `DocumentState` fields —
+they are scaffolding used to *arrive* at a committed operation, not an operation themselves.
+Concretely: pressing Undo immediately after Auto-detect, before anything is committed via Crop, is
+a no-op; finishing a rubber-band draw (§6.4) does not push a checkpoint either — only **Crop**
+(`apply_crop()`) does. Undo continues to fully revert
+`applied`/`rotation`/`offsets`/(SCANNED-mode) `processed`/`dewarp_on`/`filter_mode`/`filter_strength`
+— `crop_rects` too, since Auto-detect at split > 1 writes it directly (§5a), same as a split drag.
+Rotate/delete rebuild the split=1 union against the new page layout (below) but simply discard the
+split>1 per-region result instead (§5a's residual note) — the next Auto-detect press rebuilds it.
 
 - **Undo/Redo** — a bounded stack of `DocumentState` snapshots, depth from the Undo/redo-depth
   setting (preset dropdown, `UNDO_DEPTH_OPTIONS = [1,2,4,8]`, default 2). A snapshot is taken before

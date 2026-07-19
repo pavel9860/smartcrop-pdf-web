@@ -214,11 +214,41 @@ describe('pages selection', () => {
 // ---------------------------------------------------------------------------
 
 describe('detect_content / apply_crop', () => {
-  it('can_detect requires a document, split=1, and at least one anchor on', async () => {
+  it('can_detect requires a document and at least one anchor on (works at any split count)', async () => {
     const model = await loaded_model()
     expect(model.can_detect).toBe(true)
     model.set_anchor(false, false)
     expect(model.can_detect).toBe(false)
+    model.set_anchor(true, null)
+    model.set_split(2)
+    expect(model.can_detect).toBe(true)
+  })
+
+  it('detect_content at split=2/4 detects per-region and writes crop_rects (spec §4.5/§5a)', async () => {
+    const model = await loaded_model({ page_w: 200, page_h: 300 })
+    model.set_split(2)
+    const result = await model.detect_content().result()
+    expect(result).toBeInstanceOf(Ok)
+    expect(model.can_apply).toBe(true)   // crop_rects populated to exactly split_count entries
+  })
+
+  it('rotate/delete/set_split each clear any prior per-region detect result', async () => {
+    // No direct getter for the private per-region cache — this exercises the three clear-call
+    // sites (rotate_pages/delete_pages/set_split) and confirms a fresh detect still resolves
+    // cleanly afterward each time (a stale union surviving would silently mis-anchor it).
+    const model = await loaded_model({ page_w: 200, page_h: 300, page_count: 3 })
+    model.set_split(2)
+    await model.detect_content().result()
+    model.rotate_pages()
+    expect(await model.detect_content().result()).toBeInstanceOf(Ok)
+
+    model.set_pages_mode(PagesMode.SELECT); model.set_select_pattern('1')   // leave 2 of 3 pages
+    model.delete_pages()
+    model.set_pages_mode(PagesMode.ALL)
+    expect(await model.detect_content().result()).toBeInstanceOf(Ok)
+
+    model.set_split(4)
+    expect(await model.detect_content().result()).toBeInstanceOf(Ok)
   })
 
   it('detect_content raises NoDocumentError with no document', () => {

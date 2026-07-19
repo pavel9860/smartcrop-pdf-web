@@ -152,13 +152,18 @@ C:/DOCS/Code/SmartCroPDF-Web/
                                 source-pixel via `src.width / page_w`), resamples to target_dpi
                                 (null = original), optionally desaturates. Runs on the main thread
                                 via OffscreenCanvas.
-                              - detect_content_box(img, page_w, page_h, mode) →
+                              - detect_content_box(img, page_w, page_h, mode, region?) →
                                 `pdf/imaging.ts`'s `detect_content_async()` (same thread). SCANNED
-                                only — see detect_text_box below for NORMAL.
-                              - detect_text_box(page_idx) → Box | null — NORMAL-mode fast path:
-                                unions text-run bounding boxes straight from
-                                `page.getTextContent()`, no rasterization, no OpenCV. Returns null
-                                for a page with no usable text (image page, or a degenerate box);
+                                only — see detect_text_box below for NORMAL. `region`, given at
+                                split 2/4 (spec-web §5a), scopes detection to that page-unit
+                                sub-rectangle: the source bitmap is cropped to it before the
+                                Sauvola/connected-components pass, and the returned box is still in
+                                page (not region-local) coordinates.
+                              - detect_text_box(page_idx, region?) → Box | null — NORMAL-mode fast
+                                path: unions text-run bounding boxes straight from
+                                `page.getTextContent()`, no rasterization, no OpenCV. `region`
+                                (split 2/4) filters to runs whose centre falls inside it. Returns
+                                null for a page with no usable text (image page, or a degenerate box);
                                 AppModel records no detected box for that page rather than
                                 rasterizing (spec-web §5).
                               - export_pdf(pages) / export_images(pages, format) → export.worker,
@@ -359,7 +364,8 @@ interface RendererAdapter {
   rotate_bitmap(bitmap: ImageBitmap, degrees: number): Promise<ImageBitmap>
   render_output_image(src: ImageBitmap, box: Box, page_w: number, page_h: number,
                       target_dpi: number | null, greyscale: boolean): Promise<ImageBitmap>
-  detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode): Promise<Box>
+  detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode, region?: Box): Promise<Box>
+  detect_text_box?(page_idx: number, region?: Box): Promise<Box | null>
   export_pdf(pages: OutputPage[]): Promise<Uint8Array>
   export_images(pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string): Promise<Uint8Array>  // single .zip
   make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>

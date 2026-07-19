@@ -384,15 +384,16 @@ export class PdfRendererAdapter implements RendererAdapter {
     page_w: number,
     page_h: number,
     mode: Mode,
+    region?: Box,
   ): Promise<Box> {
-    return detect_content_async(img, page_w, page_h, mode)
+    return detect_content_async(img, page_w, page_h, mode, region)
   }
 
   // Fast content box for a NORMAL (text-bearing) PDF page: the union of its text runs' boxes,
   // read straight from the text layer — no rasterisation, no OpenCV (desktop detect.py
   // normal_page_box). Positioning uses pdf.js's own text-layer formula. Returns null for
   // image pages or a page with no usable text, so the caller falls back to the image path.
-  async detect_text_box(page_idx: number): Promise<Box | null> {
+  async detect_text_box(page_idx: number, region?: Box): Promise<Box | null> {
     const source = this._pages[page_idx]
     if (!source || source.kind !== 'pdf') return null
     const page = await source.pdf.getPage(source.page_num)
@@ -419,6 +420,12 @@ export class PdfRendererAdapter implements RendererAdapter {
       const width  = full_width * (1 - lead_ratio - trail_ratio)
       const left   = (tx[4] ?? 0) + full_width * lead_ratio
       const top    = (tx[5] ?? 0) - font_h
+      // Split-mode per-region detect (spec §5a): a run belongs to a region if its centre falls
+      // inside it — avoids double-counting a run straddling the boundary between two regions.
+      if (region) {
+        const cx = left + width / 2, cy = top + font_h / 2
+        if (cx < region.x0 || cx > region.x1 || cy < region.y0 || cy > region.y1) continue
+      }
       items.push({ x0: left, y0: top, x1: left + width, y1: top + font_h })
     }
     if (items.length === 0) { page.cleanup(); return null }
@@ -444,9 +451,10 @@ export class PdfRendererAdapter implements RendererAdapter {
     }
     page.cleanup()
 
+    const bounds = region ?? { x0: 0, y0: 0, x1: vp.width, y1: vp.height }
     const box: Box = {
-      x0: Math.max(0, x0), y0: Math.max(0, y0),
-      x1: Math.min(vp.width, x1), y1: Math.min(vp.height, y1),
+      x0: Math.max(bounds.x0, x0), y0: Math.max(bounds.y0, y0),
+      x1: Math.min(bounds.x1, x1), y1: Math.min(bounds.y1, y1),
     }
     // Guard against a degenerate/near-full-page result — fall back to the image path instead.
     if (box.x1 - box.x0 < 4 || box.y1 - box.y0 < 4) return null

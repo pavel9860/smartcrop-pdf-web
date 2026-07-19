@@ -20,10 +20,10 @@ import { ensure_onnx, apply_dewarp } from './dewarp'
 // ---------------------------------------------------------------------------
 
 export async function detect_content_async(
-  bitmap: ImageBitmap, page_w: number, page_h: number, _mode: Mode,
+  bitmap: ImageBitmap, page_w: number, page_h: number, _mode: Mode, region?: Box,
 ): Promise<Box> {
   await ensure_cv()
-  return detect_content(bitmap, page_w, page_h)
+  return detect_content(bitmap, page_w, page_h, region)
 }
 
 export async function process_page_async(
@@ -188,15 +188,25 @@ function clean_document_bilevel(gray: Mat, k: number, min_area: number, window: 
   return hi
 }
 
-function detect_content(bitmap: ImageBitmap, page_w: number, page_h: number): Box {
-  const scale  = Math.min(1, DETECT_MAX_PX / Math.max(page_w, page_h))
-  const dw     = Math.round(page_w * scale)
-  const dh     = Math.round(page_h * scale)
+// `region`, if given (split-mode per-region detect, spec §5a), scopes detection to that
+// page-unit sub-rectangle instead of the whole page: only that slice of `bitmap` is sampled, and
+// the returned box is translated back into page (not region-local) coordinates. Absent = whole
+// page, the pre-split-detect behaviour.
+function detect_content(bitmap: ImageBitmap, page_w: number, page_h: number, region?: Box): Box {
+  const rx0 = region?.x0 ?? 0, ry0 = region?.y0 ?? 0
+  const rw  = region ? region.x1 - region.x0 : page_w
+  const rh  = region ? region.y1 - region.y0 : page_h
+  const scale_full_x = bitmap.width / page_w, scale_full_y = bitmap.height / page_h
+
+  const scale  = Math.min(1, DETECT_MAX_PX / Math.max(rw, rh))
+  const dw     = Math.round(rw * scale)
+  const dh     = Math.round(rh * scale)
 
   const canvas = new OffscreenCanvas(dw, dh)
   const ctx    = canvas.getContext('2d')
   if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
-  ctx.drawImage(bitmap, 0, 0, dw, dh)
+  ctx.drawImage(bitmap, rx0 * scale_full_x, ry0 * scale_full_y, rw * scale_full_x, rh * scale_full_y,
+    0, 0, dw, dh)
   const img_data = ctx.getImageData(0, 0, dw, dh)
 
   const src  = cv.matFromImageData(img_data)
@@ -262,7 +272,8 @@ function detect_content(bitmap: ImageBitmap, page_w: number, page_h: number): Bo
   labels.delete(); stats.delete(); ctroids.delete()
 
   if (keep.length === 0) {
-    return { x0: 0, y0: 0, x1: page_w, y1: page_h }   // no ink at all -> full page (spec §8)
+    // no ink at all -> the whole detected area (region, or full page — spec §8)
+    return { x0: rx0, y0: ry0, x1: rx0 + rw, y1: ry0 + rh }
   }
 
   let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity
@@ -274,10 +285,10 @@ function detect_content(bitmap: ImageBitmap, page_w: number, page_h: number): Bo
   }
 
   return {
-    x0: bx0 / scale,
-    y0: by0 / scale,
-    x1: bx1 / scale,
-    y1: by1 / scale,
+    x0: rx0 + bx0 / scale,
+    y0: ry0 + by0 / scale,
+    x1: rx0 + bx1 / scale,
+    y1: ry0 + by1 / scale,
   }
 }
 
