@@ -74,11 +74,10 @@ export class AppModel {
   private _auto_active   = false             // auto-detect was run at least once
 
   // Per-region detection results (split = 2/4, spec §5a) — same non-undoable tier as the fields
-  // above, parallel structure (one cache/union per split region instead of one shared pair).
-  // Cleared alongside them (reset/set_split) and on rotate/delete (PageOpsService) rather than
-  // rebuilt: a rotation reshuffles which region is "top-left" and a delete changes per-page
-  // content, so a stale per-region union is more likely to mislead than a forced re-detect.
-  private _region_cache:  Map<number, Box>[] = []
+  // above, one union per split region instead of one shared union. Cleared alongside them (reset/
+  // set_split) and on rotate/delete (PageOpsService) rather than rebuilt: a rotation reshuffles
+  // which region is "top-left" and a delete changes per-page content, so a stale per-region union
+  // is more likely to mislead than a forced re-detect.
   private _region_unions: (Box | null)[] = []
 
   // NORMAL-mode preview render DPI (spec-web §2), resolved from the canvas' actual display size
@@ -179,8 +178,8 @@ export class AppModel {
       mode: (): Mode => this._mode,
       detection: detection_state,
       set_detection: set_detection_state,
-      region_detection: (): RegionDetectionState => ({ cache: this._region_cache, unions: this._region_unions }),
-      set_region_detection: (d): void => { this._region_cache = d.cache; this._region_unions = d.unions },
+      region_detection: (): RegionDetectionState => ({ unions: this._region_unions }),
+      set_region_detection: (d): void => { this._region_unions = d.unions },
       split_count: (): 1 | 2 | 4 => this._crop.split_count,
       same_size: (): boolean => this._crop.same_size,
       anchor_left: (): boolean => this._crop.anchor_left,
@@ -251,7 +250,6 @@ export class AppModel {
     this._detect_cache = new Map()
     this._union = null
     this._auto_active = false
-    this._region_cache = []
     this._region_unions = []
     this._raster.reset()
     this._page_index.reset(this._doc ? this._doc.page_count : 0)
@@ -382,7 +380,6 @@ export class AppModel {
   // same slice) — clear any prior per-region detect result rather than let it silently mismatch.
   set_split(n: 1 | 2 | 4): void {
     this._crop.set_split(n)
-    this._region_cache = []
     this._region_unions = []
   }
   set_same_size(on: boolean): void { this._crop.set_same_size(on) }
@@ -482,12 +479,10 @@ export class AppModel {
   // correct to just clear it and require a fresh Auto-detect press, rather than rebuild it wrong.
   rotate_pages(): void {
     this._page_ops.rotate(this._require_pages())
-    this._region_cache = []
     this._region_unions = []
   }
   delete_pages(): void {
     this._page_ops.delete(this._require_pages())
-    this._region_cache = []
     this._region_unions = []
   }
 

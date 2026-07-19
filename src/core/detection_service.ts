@@ -7,10 +7,9 @@
 import type { Box } from './geometry'
 import {
   auto_crop_rect, centered_crop_rect, box_width, box_height, detection_union,
-  split_rects_grid, translate_box,
+  split_rects_grid, translate_box, clamp_box_shift,
 } from './geometry'
 import type { DocumentState } from './document_state'
-import { DEFAULT_OFFSETS } from './document_state'
 import type { History } from './history'
 import { FULL_PAGE_FRAC } from './constants'
 import { Mode } from './enums'
@@ -25,10 +24,12 @@ import type { DetectionState } from './page_ops_service'
 
 // Per-region detection results (split = 2/4, spec §5a) — parallel to DetectionState above but one
 // entry per split region instead of one shared page-wide result. Non-undoable AppModel state, same
-// tier as DetectionState (spec-web §12).
+// tier as DetectionState (spec-web §12). Only the aggregated union is kept: unlike split=1 (where
+// each page resolves its OWN crop from its own cached box at apply time, spec §6.2), split mode's
+// crop_rects is a single template shared by every page (§5a) — there is no per-page anchor to read
+// a per-page cache back out for, so retaining one would be dead state.
 export interface RegionDetectionState {
-  cache:  Map<number, Box>[]   // per region index: page -> detected box, in PAGE (not region-local) coords
-  unions: (Box | null)[]       // per region index: cross-page union, spec §5
+  unions: (Box | null)[]   // per region index: cross-page union, spec §5
 }
 
 export interface DetectionContext {
@@ -194,7 +195,7 @@ export class DetectionService {
     const ctrl = job.controller
     if (!this._ctx.has_document()) { ctrl.complete(new Cancelled()); return }
 
-    const cache: Map<number, Box>[] = []
+    const unions: (Box | null)[] = []
     for (let r = 0; r < n; r++) {
       const region_of = (p: number): Box => {
         const sz = this._ctx.page_dims(p)
@@ -203,33 +204,39 @@ export class DetectionService {
       }
       const per_region = await this._detect_each_page(ctrl, pages, region_of)
       if (!per_region) return   // cancelled or failed; ctrl already completed
-      cache.push(per_region)
+      unions.push(this.compute_union(per_region, (p) => {
+        const sz = this._ctx.page_dims(p)
+        const region = split_rects_grid(n, sz.width, sz.height)[r]
+        return region ? { width: box_width(region), height: box_height(region) } : sz
+      }))
     }
 
-    const unions: (Box | null)[] = cache.map((per_region, r) => this.compute_union(per_region, (p) => {
-      const sz = this._ctx.page_dims(p)
-      const region = split_rects_grid(n, sz.width, sz.height)[r]
-      return region ? { width: box_width(region), height: box_height(region) } : sz
-    }))
-
     this._history.push(this._ctx.document())
-    this._ctx.set_region_detection({ cache, unions })
-    this._write_split_crop_rects(pages, n, cache, unions)
+    this._ctx.set_region_detection({ unions })
+    this._write_split_crop_rects(pages, n, unions)
 
     ctrl.complete(new Ok())
   }
 
-  // Resolves the N region unions (+ current page's own per-region detected boxes, for anchoring)
-  // into a fresh `crop_rects` — the auto-detected equivalent of split_rects_grid's blind seed.
-  // Same-size ON (spec §4.5): every region's window becomes the LARGEST union size across all N
-  // regions, extended outward from its own anchor corner (reuses auto_crop_rect's own "grow away
-  // from the anchor, clamp at the wall" behaviour — §6.2 — just fed a bigger synthetic union).
-  private _write_split_crop_rects(
-    pages: readonly number[], n: 2 | 4, cache: Map<number, Box>[], unions: (Box | null)[],
-  ): void {
+  // Resolves the N region unions into a fresh `crop_rects` — the auto-detected equivalent of
+  // split_rects_grid's blind seed. Each region's window is exactly that region's own union
+  // (clamped to the region) — NOT anchored to any single page's own detected box: crop_rects is
+  // one template shared by every page (§5a), so anchoring it to "whichever page happens to be
+  // current" would make the result depend on incidental navigation state instead of the detected
+  // content — confirmed as a real bug (window position/size changing between identical re-detects
+  // depending on which page was open, and a gap between adjacent regions' windows on pages whose
+  // own content didn't happen to reach the region boundary) and fixed by using the union directly,
+  // which is already the deterministic, tightest box enclosing every selected page's content in
+  // that region. `Anchor Left`/`Anchor Top` keep their existing gate — at least one must be on for
+  // a crop to exist — but no longer affect split-mode positioning; there is no per-page anchor
+  // point to nudge away from once the result is a single shared template (unlike split=1, spec
+  // §6.2, where each page resolves its own crop from its own cached box at apply time).
+  // Same-size ON: every region's window grows to the LARGEST union size across all N regions,
+  // still anchored at its own union's own top-left corner (clamp_box_shift's own overhang rule
+  // handles a region too small to fit it).
+  private _write_split_crop_rects(pages: readonly number[], n: 2 | 4, unions: (Box | null)[]): void {
     if (!this._ctx.anchor_left() && !this._ctx.anchor_top()) return
-    const cur = this._ctx.current_page()
-    const sz = this._ctx.page_dims(cur)
+    const sz = this._ctx.page_dims(this._ctx.current_page())
     const regions = split_rects_grid(n, sz.width, sz.height)
     const same_size = this._ctx.same_size()
     const max_w = same_size ? Math.max(0, ...unions.map(u => u ? box_width(u) : 0)) : 0
@@ -243,13 +250,7 @@ export class DetectionService {
       const effective_union = same_size
         ? { x0: union_local.x0, y0: union_local.y0, x1: union_local.x0 + max_w, y1: union_local.y0 + max_h }
         : union_local
-      const detected = cache[r]?.get(cur)
-      const detected_local = detected ? translate_box(detected, -region.x0, -region.y0) : null
-      const rect_local = detected_local
-        ? auto_crop_rect(detected_local, effective_union, DEFAULT_OFFSETS, region_w, region_h,
-            this._ctx.anchor_left(), this._ctx.anchor_top())
-        : centered_crop_rect(effective_union, region_w, region_h)
-      return translate_box(rect_local, region.x0, region.y0)
+      return translate_box(clamp_box_shift(effective_union, region_w, region_h), region.x0, region.y0)
     })
 
     const doc = this._ctx.document()

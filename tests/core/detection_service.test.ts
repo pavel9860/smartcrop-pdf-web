@@ -46,7 +46,7 @@ function setup(opts: {
   })
   const doc = default_document_state()
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
-  const region_detection: RegionDetectionState = { cache: [], unions: [] }
+  const region_detection: RegionDetectionState = { unions: [] }
   const anchor = { left: true, top: true }
   const keep_ratio = { v: false }
   const ratio = { v: 1 }
@@ -62,7 +62,7 @@ function setup(opts: {
     detection: () => detection,
     set_detection: (d) => { detection.cache = d.cache; detection.union = d.union; detection.auto_active = d.auto_active },
     region_detection: () => region_detection,
-    set_region_detection: (d) => { region_detection.cache = d.cache; region_detection.unions = d.unions },
+    set_region_detection: (d) => { region_detection.unions = d.unions },
     split_count: () => opts.split_count ?? 1,
     same_size: () => opts.same_size ?? false,
     current_page: () => opts.current_page ?? 0,
@@ -225,7 +225,7 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
     ])
   })
 
-  it('same_size ON: every region grows to the largest union size, extended outward from its own anchor corner', async () => {
+  it('same_size ON: every region grows to the largest union size, extended outward from its own union corner', async () => {
     const content_box = vi.fn((_i: unknown, _w: number, _h: number, _m: unknown, region: Box) => {
       // left region (x0=0): a small 60x60 box. right region (x0=100): a larger 70x260 box.
       const small = region.x0 === 0
@@ -238,7 +238,7 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
       adapter: { detect_content_box: content_box },
     })
     await svc.detect([0]).result()
-    // Left grew to the right region's 70x260 size, anchored at its own detected top-left (20,20).
+    // Left grew to the right region's 70x260 size, anchored at its own union's top-left (20,20).
     expect(doc.crop_rects[0]).toEqual({ x0: 20, y0: 20, x1: 90, y1: 280 })
     // Right was already the largest — unchanged.
     expect(doc.crop_rects[1]).toEqual({ x0: 120, y0: 20, x1: 190, y1: 280 })
@@ -271,18 +271,45 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
     expect(doc.crop_rects[0]).toEqual({ x0: 0, y0: 0, x1: 100, y1: 300 })   // the raw left region
   })
 
-  it('the current page has no detected box of its own -> region centered, not auto_crop_rect (bug #8/#9 parity)', async () => {
-    // Only page 0 is detected (current_page is 1, outside the detected set), so cache[r] has no
-    // entry for the current page -> _write_split_crop_rects falls back to centered_crop_rect.
+  it('regression: crop_rects is independent of which page happens to be "current" (root cause of the ' +
+     'instability bug — a prior version anchored the shared template to the current page\'s own ' +
+     'per-region box, so identical content produced different windows depending on navigation state)', async () => {
+    // Two pages with DIFFERENT content per region — if the current page's own box leaked into the
+    // result, detecting from page 0 vs page 1 would disagree. It must not: crop_rects always comes
+    // from the (page-independent) region union alone.
     const content_box = vi.fn((_i: unknown, _w: number, _h: number, _m: unknown, region: Box) =>
       Promise.resolve({ x0: region.x0 + 10, y0: region.y0 + 10, x1: region.x1 - 10, y1: region.y1 - 10 } as Box))
-    const { svc, doc } = setup({
+    const { svc, doc, region_detection } = setup({
+      mode: Mode.SCANNED, split_count: 2, page_count: 2, current_page: 0,
+      adapter: { detect_content_box: content_box },
+    })
+    await svc.detect([0, 1]).result()
+    const from_page0 = [...doc.crop_rects]
+    const unions0 = [...region_detection.unions]
+
+    const { svc: svc2, doc: doc2, region_detection: rd2 } = setup({
       mode: Mode.SCANNED, split_count: 2, page_count: 2, current_page: 1,
       adapter: { detect_content_box: content_box },
     })
+    await svc2.detect([0, 1]).result()
+
+    expect(doc2.crop_rects).toEqual(from_page0)
+    expect(rd2.unions).toEqual(unions0)
+  })
+
+  it('regression: adjacent regions\' windows meet exactly at the split boundary — no gap (a prior ' +
+     'version could leave one open depending on the current page\'s own content)', async () => {
+    // Content that spans right up to (and touches) the region boundary on both sides.
+    const content_box = vi.fn((_i: unknown, _w: number, _h: number, _m: unknown, region: Box) =>
+      Promise.resolve(region.x0 === 0
+        ? { x0: 10, y0: 10, x1: 100, y1: 290 }    // left region: touches its own right edge (100)
+        : { x0: 100, y0: 10, x1: 190, y1: 290 } as Box))   // right region: touches its own left edge (100)
+    const { svc, doc } = setup({
+      mode: Mode.SCANNED, split_count: 2, page_count: 1,
+      adapter: { detect_content_box: content_box },
+    })
     await svc.detect([0]).result()
-    // Centered in each 100x300 region: W=80,H=280 (union) -> x0=(100-80)/2=10, y0=(300-280)/2=10
-    expect(doc.crop_rects[0]).toEqual({ x0: 10, y0: 10, x1: 90, y1: 290 })
+    expect(doc.crop_rects[0]!.x1).toBe(doc.crop_rects[1]!.x0)
   })
 
   it('no anchor on: leaves crop_rects untouched', async () => {

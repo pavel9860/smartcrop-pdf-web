@@ -338,27 +338,38 @@ Each region then aggregates its own cross-page union exactly as §5's `gL/gT/W/H
 `detection_union`, same outlier tolerance, same FULL_PAGE_FRAC exclusion — just judged region-by-
 region instead of once for the whole page).
 
-**Resolving into `crop_rects`.** Unlike split = 1 — where each page can get its own slightly
-different auto-crop position (anchored to that page's own content) — `crop_rects` is one shared
-set of N windows applied identically to every page (§7.3, §9.6), so there is no per-page variation
-to compute here. Auto-detect instead recomputes that shared template once, using the *current*
-page's own per-region detected boxes for anchoring (mirroring how a fresh split drag or
-`split_rects_grid`'s blind seed already work off a single page's dims):
+**Resolving into `crop_rects`.** Unlike split = 1 — where each page resolves its own crop from its
+own cached box at apply time (§6.2) — `crop_rects` is one shared set of N windows applied
+identically to every page (§7.3, §9.6): there is no per-page variation to compute, and critically,
+no well-defined *single page* to anchor a shared template to either. Each region's window is
+simply **that region's own cross-page union**, clamped to the region:
 
 ```
 per region r:
-  region_r = split_rects_grid(n)[r]                       # this region's slice of the current page
-  base   = AnchorLeft/Top ? detected_r(current_page).x0/y0 : union_r.x0/y0
-  W, H   = SameSize ? (max width, max height across all N regions' own unions) : union_r's own W,H
-  rect_r = box at `base`, sized W×H, extended outward from `base` (§6.2's own overhang/clamp rule),
-           clamped to region_r — or centered within region_r if the current page has no detected
-           box of its own in this region (§5's centered-fallback rule, scoped to the region)
+  region_r = split_rects_grid(n)[r]     # this region's slice of the page (any page — see below)
+  W, H     = SameSize ? (max width, max height across all N regions' own unions) : union_r's own W,H
+  rect_r   = union_r's own top-left corner, sized W×H, clamped to region_r
 ```
 
+Earlier revisions anchored each region's window to the *current* page's own detected box instead
+of the union directly — plausible by analogy with split = 1's per-page anchoring, but wrong here:
+with no per-page target to write the result into, that anchor point was really "whichever page the
+user happened to be viewing when they pressed Auto-detect," an incidental piece of navigation
+state. Confirmed as a real, reproducible bug, not a hypothetical: identical content produced
+different `crop_rects` depending on which page was open, and adjacent regions' windows could leave
+a gap between them even though their own unions met exactly at the region boundary — the arbitrary
+per-page box just didn't happen to reach it. `region_r` itself is still read from *some* page's
+dims (any selected page — `split_rects_grid`'s geometry only, not its content) purely to know the
+grid's pixel layout; unlike the corner/size above, that's page-*size*, not page-*content*, so it's
+stable in practice (pages in one document essentially always share dimensions) and never varies
+based on detected content. `Anchor Left`/`Anchor Top` keep their existing gate — at least one must
+be on for a crop to exist — but no longer influence split-mode positioning, for the same reason:
+there is no per-page anchor point to nudge away from once the result is one shared template.
+
 `Same size` OFF: every region simply gets its own union's size. `Same size` ON: every region grows
-to the *largest* union size found across all N regions, each still extended outward from its own
-anchor corner — a region that was already the largest is unaffected; smaller regions grow without
-moving their anchored corner.
+to the *largest* union size found across all N regions, each still anchored at its own union's own
+top-left corner — a region that was already the largest is unaffected; smaller regions grow without
+moving that corner.
 
 A region with no detected content on ANY page (union is null — nothing survived the min-area/
 border/FULL_PAGE_FRAC filters anywhere) falls back to that region's own raw slice, unresized —
