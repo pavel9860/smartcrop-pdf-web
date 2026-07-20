@@ -542,11 +542,16 @@ rasterized exactly once per (page, rotation) — the source render is never re-r
 ```
                        source[i]   (immutable, @ SRC_DPI)
                            |
-              Dewarp & Deskew ON ? ----------- no ----------+
-                           | yes                            |
-              docuwarp/ONNX mesh unwarp (deskew included)   |
-                           |                                |
-                           +---------------+----------------+
+              Dewarp & Deskew ON ? ----------- no ----------------------------+
+                           | yes                                              |
+              classify (classic CV, §7.1a): warped, skewed-only, or flat?     |
+                    |                  |                    |                 |
+                 warped          skewed-only               flat              |
+                    |                  |                    |                 |
+      docuwarp/ONNX mesh unwarp   classic-CV rotate     no-op (page           |
+        (deskew included)         by detected angle     already flat)         |
+                    |                  |                    |                 |
+                    +------------------+--------------------+-----------------+
                                            v
                                          base
                                            |
@@ -576,17 +581,59 @@ a version history of its own.
 
 ### 7.1 Dewarp & Deskew
 
-A single toggle. A two-stage ONNX pipeline (UVDoc warp-field model + bilinear resample) removes page
-curl/fold and incidental skew in one pass — there is no separate deskew step. Execution providers
-are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no `SharedArrayBuffer`
-dependency (GitHub Pages cannot set the COOP/COEP headers that would require). The **Dewarp
-supersample** setting (§14, default 2.0) renders the page larger before the mesh remap and
-downsamples after, trading time for less resampling blur.
+A single toggle. Pressing it runs a per-page classifier (§7.1a, classic CV, no ONNX) that decides,
+per selected page, whether the page needs the full two-stage ONNX pipeline (UVDoc warp-field model +
+bilinear resample — removes page curl/fold and incidental skew in one pass) or can be corrected by a
+much cheaper single classic-CV rotation, or needs no correction at all. This exists because a page
+that has already been correctly dewarped elsewhere and only carries incidental skew would otherwise
+be needlessly re-warped by the ONNX pass, which can introduce its own small residual distortion on
+input that didn't need mesh correction. Execution providers for the ONNX path are `['webgpu','wasm']`,
+gated on `navigator.gpu`, `numThreads=1` — no `SharedArrayBuffer` dependency (GitHub Pages cannot set
+the COOP/COEP headers that would require). The **Dewarp supersample** setting (§14, default 2.0)
+renders the page larger before the mesh remap and downsamples after, trading time for less
+resampling blur — it has no effect on the classic-CV rotate path.
 
-The ONNX pass runs against the page's own content, independent of its current display rotation —
-rotating a page that already has Dewarp&Deskew applied never re-runs it, only cheaply reorients the
-already-computed result. Only pressing the Dewarp & Deskew button computes it; only Undo removes
-it.
+Whichever path a page takes runs against the page's own content, independent of its current display
+rotation — rotating a page that already has Dewarp&Deskew applied never re-runs the classifier or
+either correction path, only cheaply reorients the already-computed result. Only pressing the Dewarp
+& Deskew button computes it; only Undo removes it.
+
+Keystone/perspective (trapezoid) distortion — page edges not parallel, typically from a camera not
+perpendicular to the page — is explicitly **out of scope** for the classic-CV path in this revision.
+Five classic-CV, text-only detection techniques were evaluated (per-line angle vs. vertical page
+position, two variants; left/right text-margin line fitting, two variants; a tiled local-angle-field
+plane fit) and none reliably separated real keystone distortion from ordinary page-layout noise on
+real page content at production speed — each worked only on dense, uniform synthetic text and
+produced false positives at least as large as the true signal on a real book page. A trapezoid-
+distorted page's classifier sharpness score is unaffected by keystone distortion (verified against a
+real trapezoid-distorted test page), so it classifies as flat-or-skewed-only and takes the rotate-only
+or no-op path exactly as before this feature existed — i.e. keystone distortion is not corrected, but
+also not regressed; it passes through exactly as it did when Dewarp&Deskew always ran the ONNX pass.
+
+### 7.1a Warp classifier (classic CV, no ONNX)
+
+Per selected page, against the raw `source[i]` raster (never the already-processed `work[i]`, same
+rule as Auto-detect, §16.3):
+
+1. **Rotation angle** — binarize a downscaled copy (`DESKEW_CLASSIFY_DOWNSCALE_PX` long edge, Otsu
+   threshold) and search candidate rotation angles within `±DESKEW_MAX_DEG`, coarse-to-fine, picking
+   the angle that maximizes the binarized row-sum profile's variance (the angle at which text lines
+   align most sharply into rows). This is the same family of operation as the B/W filter's box-filter
+   work (§7.2, §16) — cheap, no ONNX, no OpenCV mesh warp.
+2. **Sharpness score** — from that same search, `best_row_variance / mean_ink_per_row²` at the winning
+   angle. A page whose curl/fold cannot be fixed by any single rotation keeps a blurred row profile
+   even at its best angle, so this stays low; a flat or purely-rotated page's profile becomes sharp
+   at the correct angle, so this stays high. `WARP_SHARPNESS_MIN` (§17) is the cutoff.
+3. **Classification and branch**:
+   - `sharpness < WARP_SHARPNESS_MIN` → **warped** → the existing ONNX two-stage pipeline (unchanged).
+   - `sharpness >= WARP_SHARPNESS_MIN` and `|angle| > DESKEW_MIN_DEG` → **skewed only** → a single
+     classic-CV affine rotation by the detected angle (no ONNX, no mesh warp) — the fast path this
+     feature adds.
+   - `sharpness >= WARP_SHARPNESS_MIN` and `|angle| <= DESKEW_MIN_DEG` → **flat** → no-op.
+
+The classifier itself targets well under 100ms/page; the classic-CV rotate-only correction path
+targets well under 300ms/page — both far cheaper than the ONNX path they're built to avoid for pages
+that don't need it (§16).
 
 ### 7.2 Filter modes (each 3 strengths)
 
@@ -876,6 +923,8 @@ whichever were already used. No install/PWA-add-to-homescreen step is required e
 | B/W or Sharpen filter per page | < 500ms (SIMD WASM opencv.js + downscaled illumination-flatten morphology) |
 | Auto-detect per page | < 100ms (SCANNED: raw source, not the processed work image; NORMAL: text-layer, no raster at all) |
 | Dewarp per page (ONNX stage) | seconds on the 1-thread WASM execution provider; fast on WebGPU where available |
+| Warp classifier per page (§7.1a, classic CV) | < 100ms — flag and investigate if exceeded |
+| Classic-CV rotate-only correction per page (§7.1a) | < 300ms — flag and investigate if exceeded |
 | Export per page (rasterized path) | < 300ms |
 | First OpenCV.js WASM load | < 3s, once per session (~10MB SIMD build, lazy — SCANNED documents only) |
 | First ONNX model fetch + init | < 5s, once per session (cached in IndexedDB after; 0ms on repeat sessions) |
@@ -904,6 +953,8 @@ HANDLE_R = 10    HANDLE_SLACK = 6    CANVAS_MARGIN = 0    OFFSET_LIMIT = 100.0  
 # classification / detection
 MODE_TEXT_MIN = 8    DETECT_MAX_PX = 1400    BORDER_FRAC = 0.02
 MIN_COMP_FRAC = 2.5e-4    FULL_PAGE_FRAC = 0.97    DESKEW_MAX_DEG = 15.0
+# warp classifier (§7.1a) — DESKEW_MAX_DEG above is the search RANGE; these are decision cutoffs
+DESKEW_MIN_DEG = 0.2    WARP_SHARPNESS_MIN = 1.0    DESKEW_CLASSIFY_DOWNSCALE_PX = 400
 # Sauvola / illumination-flatten (real box-filter Sauvola, not an adaptiveThreshold approximation)
 SAUVOLA_R = 127.5    SAUVOLA_WINDOW = 51    BG_KERNEL_SIZE = 51    BG_DOWNSCALE = 4
 SAUVOLA_DPI_REFERENCE = 150.0    SAUVOLA_DPI_SCALE_MIN/MAX = 0.5 / 4.0
@@ -1030,6 +1081,9 @@ yes/no confirm dialog, single OK button), never a silent failure and never an au
     drawn window and split rectangles, in both modes — no gesture bypasses it (§6.7).
 20. Image-format export (JPG/PNG/TIFF) always delivers one `.zip`, never loose per-page files
     (§10.5).
+21. Dewarp & Deskew's per-page classifier (§7.1a) is deterministic and content-only: the same
+    `source[i]` always classifies the same way and takes the same path (ONNX / classic-CV rotate /
+    no-op), independent of page order, selection size, or prior Undo/Redo state.
 21. Crop with no source is a no-op: at split = 1 with no active detection and no drawn window on any
     selected page, Crop commits nothing and takes no snapshot.
 22. A committed split page ignores window gestures except a fresh draw, which re-commits only the

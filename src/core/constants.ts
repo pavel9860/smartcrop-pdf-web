@@ -48,8 +48,19 @@ export const DETECT_CLOSE_H = 3
 export const DETECT_OUTLIER_OPTIONS: readonly number[] = [0, 1, 2, 5, 10]
 export const DEFAULT_DETECT_OUTLIER = 2
 
-// Deskew
+// Deskew — DESKEW_MAX_DEG is the angle SEARCH range (§7.1a); the three below are the warp
+// classifier's decision cutoffs, not search parameters.
 export const DESKEW_MAX_DEG = 15.0
+// Below this, a page's detected rotation is left alone (already straight enough) rather than
+// running the classic-CV rotate-only correction.
+export const DESKEW_MIN_DEG = 0.2
+// best_row_variance / mean_ink_per_row^2 at the winning angle (§7.1a). Below this, the page's
+// row profile stays blurred even at its best rotation — a curl/fold no single rotation can fix —
+// so it classifies WARPED and takes the ONNX path instead of the classic-CV rotate.
+export const WARP_SHARPNESS_MIN = 1.0
+// Downscale long edge for the classifier's angle search + sharpness pass (§7.1a) — independent of
+// DETECT_MAX_PX (Auto-detect's own downscale, §8), tuned for the classifier's own speed budget.
+export const DESKEW_CLASSIFY_DOWNSCALE_PX = 400
 
 // Filter strengths (spec §10.2) — Sharpen unsharp amount per level
 export const CLEAN_AMOUNT: Record<1 | 2 | 3, number> = { 1: 0.6, 2: 1.1, 3: 1.6 }

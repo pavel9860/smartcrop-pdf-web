@@ -26,6 +26,9 @@ export default defineConfig({
       //   dewarp.ts      — ensure_onnx/apply_dewarp need a real ONNX+OpenCV runtime; its fp16
       //                    conversion + fetch_with_idb_cache ARE unit-tested (dewarp.test.ts),
       //                    but that's a minority of the file
+      //   deskew.ts      — same reason as imaging.ts (real cv.Mat ops); validated instead by
+      //                    tests/perf/deskew_speed.test.ts (real opencv-js) + the e2e suite —
+      //                    its pure decision counterpart, core/deskew_classify.ts, IS covered here
       //   canvas_view.ts — real Canvas2D paint/drag; jsdom's canvas is a non-rendering stub
       //   app.ts         — top-level controller wiring/boot/shortcuts; integration, not a unit
       //   main.ts        — 3-line bootstrap; workers — run only in a real Worker context
@@ -35,7 +38,8 @@ export default defineConfig({
       //   idb.test.ts).
       exclude: [
         'src/workers/**', 'src/main.ts',
-        'src/pdf/imaging.ts', 'src/pdf/dewarp.ts', 'src/ui/canvas_view.ts', 'src/ui/app.ts',
+        'src/pdf/imaging.ts', 'src/pdf/dewarp.ts', 'src/pdf/deskew.ts',
+        'src/ui/canvas_view.ts', 'src/ui/app.ts',
       ],
       thresholds: {
         'src/core/**': { lines: 90, branches: 90, functions: 90, statements: 90 },

@@ -11,9 +11,12 @@ import {
   BORDER_FRAC, MIN_COMP_FRAC, DETECT_MAX_PX, CLEAN_AMOUNT,
   CC_CONNECTIVITY, BG_KERNEL_SIZE, BG_DOWNSCALE, SAUVOLA_WINDOW, SAUVOLA_R,
   BW_STRENGTH, SHARPEN_STRENGTH, DETECT_CLOSE_W, DETECT_CLOSE_H,
+  DESKEW_MAX_DEG, DESKEW_CLASSIFY_DOWNSCALE_PX,
 } from '@core/constants'
+import { classify_deskew } from '@core/deskew_classify'
 import { cv, type Mat, ensure_cv } from './cv'
 import { ensure_onnx, apply_dewarp } from './dewarp'
+import { estimate_deskew, rotate_mat } from './deskew'
 
 // ---------------------------------------------------------------------------
 // Public entry points (called directly from loader.ts — no postMessage RPC)
@@ -30,7 +33,10 @@ export async function process_page_async(
   bitmap: ImageBitmap, intent: PageProcessIntent, supersample: number,
 ): Promise<ImageBitmap> {
   await ensure_cv()
-  if (intent.dewarp) await ensure_onnx()
+  // ensure_onnx() is no longer unconditional here (spec-web §7.1a) — the classic-CV classifier
+  // inside process_page decides per page whether ONNX is even needed, and calls ensure_onnx()
+  // itself only for a page that classifies WARPED. A page that's flat or only skewed never pays
+  // the ONNX model fetch/init cost at all.
   return process_page(bitmap, intent, supersample)
 }
 
@@ -311,10 +317,24 @@ async function process_page(
   const img_data = ctx.getImageData(0, 0, w, h)
   let mat = cv.matFromImageData(img_data)
 
-  // apply_dewarp itself no-ops (returns `mat` unchanged) if the ONNX sessions aren't ready — the
-  // real gate is process_page_async's `await ensure_onnx()` before this function is ever called.
+  // Dewarp & Deskew classifier (spec-web §7.1a): a page that's already flat or only incidentally
+  // rotated gets the cheap classic-CV rotate (or no-op) instead of the full ONNX mesh-unwarp,
+  // which can introduce its own small residual distortion on input that didn't need it. ensure_onnx
+  // is called here, not eagerly in process_page_async, so a page that never classifies WARPED never
+  // pays the ONNX model fetch/init cost.
   if (dewarp) {
-    mat = await apply_dewarp(mat, supersample)
+    const { angle_deg, sharpness } = estimate_deskew(mat, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG)
+    switch (classify_deskew(angle_deg, sharpness)) {
+      case 'warped':
+        await ensure_onnx()
+        mat = await apply_dewarp(mat, supersample)
+        break
+      case 'skewed':
+        mat = rotate_mat(mat, angle_deg)
+        break
+      case 'flat':
+        break   // already straight — no-op
+    }
   }
 
   if (filter) {

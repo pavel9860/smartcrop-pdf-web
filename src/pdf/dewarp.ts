@@ -171,10 +171,11 @@ export function f16_data_to_f32_array(data: Uint16Array): Float32Array {
 // maxAbsDiff=3.5e-2 / meanAbsDiff=6.5e-6 on a [0,1] scale — consistent with expected benign
 // cross-engine floating-point noise through a 16M-parameter CNN, not an algorithmic error.
 export async function apply_dewarp(src: Mat, supersample: number): Promise<Mat> {
-  // The real guarantee is process_page_async's `await ensure_onnx()` before this is ever called
-  // (imaging.ts). Silently returning `src` unprocessed here would surface as a confusing no-op
-  // (user presses Dewarp & Deskew, nothing visibly happens) instead of a diagnosable error if that
-  // guarantee is ever violated by a future call site or refactor.
+  // The real guarantee is process_page's `await ensure_onnx()` in the WARPED branch of the
+  // classifier switch (imaging.ts, spec-web §7.1a) before this is ever called. Silently returning
+  // `src` unprocessed here would surface as a confusing no-op (user presses Dewarp & Deskew,
+  // nothing visibly happens) instead of a diagnosable error if that guarantee is ever violated by
+  // a future call site or refactor.
   if (!_uvdoc_session || !_bilinear_session) {
     throw new MissingDependencyError('apply_dewarp called before ensure_onnx() resolved')
   }
