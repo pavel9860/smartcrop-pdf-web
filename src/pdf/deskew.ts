@@ -1,7 +1,10 @@
-// deskew.ts — classic-CV, no-ONNX warp classifier + rotate-only correction (spec-web §7.1a). Runs
-// BEFORE the ONNX dewarp path (dewarp.ts) so a page that's already flat or only incidentally
-// rotated gets a cheap affine rotation instead of the full mesh-unwarp pass, which can introduce
-// its own small residual distortion on input that didn't need it.
+// deskew.ts — classic-CV, no-ONNX/DBNet warp classifier (spec-web §7.1a). Decides whether a page
+// needs the full ONNX mesh-unwarp pass (dewarp.ts) at all, before the more precise but heavier
+// text-line-detection-based angle/trapezoid estimate (dbnet.ts, vanishing_point.ts, §7.1b) ever
+// runs — a page that's already flat or only incidentally skewed/keystoned would otherwise be
+// needlessly re-warped by ONNX, which can introduce its own small residual distortion. This
+// module no longer performs any correction itself (an earlier revision's classic-CV rotate-only
+// path is superseded by vp_correct.ts's unified skew+trapezoid remap, §7.1b) — only classification.
 import { cv, type Mat } from './cv'
 
 export interface DeskewEstimate {
@@ -34,8 +37,9 @@ export function estimate_deskew(mat: Mat, downscale_px: number, max_deg: number)
   cv.threshold(small, bw, 0, 255, Number(cv.THRESH_BINARY_INV) + Number(cv.THRESH_OTSU))
   small.delete()
 
-  // Coarse pass over the full search range, then one refinement pass at 1/10th the step — the
-  // spec's DESKEW_MIN_DEG cutoff (0.2deg) doesn't need finer resolution than this affords (~0.1deg).
+  // Coarse pass over the full search range, then one refinement pass at 1/10th the step — this
+  // angle is only a byproduct of locating the sharpness peak (§7.1a); the precise skew/trapezoid
+  // angle actually used for correction comes from §7.1b's text-line-detection-based estimate.
   let best_angle = 0, best_variance = -1
   const coarse_step = 1.0
   for (let a = -max_deg; a <= max_deg + 1e-9; a += coarse_step) {
@@ -81,17 +85,3 @@ function _row_variance_at_angle(bw: Mat, angle_deg: number): number {
   return std * std
 }
 
-// Applies the angle from estimate_deskew AS-IS (not negated) — getRotationMatrix2D(angle_deg) is
-// the same transform the search itself applies when it finds the sharpest-profile angle, so it is
-// already the correct correction, not its inverse. Consumes `mat` (matches apply_dewarp's
-// convention, dewarp.ts) — caller must not reuse it after this call.
-export function rotate_mat(mat: Mat, angle_deg: number): Mat {
-  const w = mat.cols, h = mat.rows
-  const m = cv.getRotationMatrix2D(new cv.Point(w / 2, h / 2), angle_deg, 1.0)
-  const out = new cv.Mat()
-  cv.warpAffine(mat, out, m, new cv.Size(w, h), Number(cv.INTER_LINEAR),
-    Number(cv.BORDER_CONSTANT), new cv.Scalar(255, 255, 255, 255))
-  m.delete()
-  mat.delete()
-  return out
-}

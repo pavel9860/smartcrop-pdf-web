@@ -11,8 +11,8 @@ proposed `AppModel` decomposition, not yet implemented as of this revision.
 
 | Path | Files | Constraint |
 |---|---|---|
-| `src/core/` | `constants, enums, errors, geometry, parsing, lru, viewmodel, document_state, settings, history, drag, batch, model`.ts | Zero DOM/Worker/pdf-lib/pdfjs-dist — enforced by `tests/architecture.test.ts` |
-| `src/pdf/` | `loader.ts, imaging.ts, cv.ts, dewarp.ts, idb.ts` | Main thread, DOM allowed, imports `@core/*` + `@workers/*` |
+| `src/core/` | `constants, enums, errors, geometry, parsing, lru, viewmodel, document_state, settings, history, drag, batch, model, deskew_classify`.ts | Zero DOM/Worker/pdf-lib/pdfjs-dist — enforced by `tests/architecture.test.ts` |
+| `src/pdf/` | `loader.ts, imaging.ts, cv.ts, dewarp.ts, deskew.ts, dbnet.ts, vanishing_point.ts, vp_correct.ts, idb.ts` | Main thread, DOM allowed, imports `@core/*` + `@workers/*` |
 | `src/workers/` | `export.worker.ts, tiff.ts` | Only real Worker in the app; zero `window`/`document` |
 | `src/ui/` | `app.ts, canvas_view.ts, constants.ts, dom.ts, detail_panel.ts, help_view.ts, nav_bar.ts, overlay.ts, persist.ts, settings_view.ts, theme.ts` | Imports `@core/*` + `@pdf/*`; core never imports ui |
 | `src/ui/panels/` | `pages_panel.ts, crop_panel.ts, scan_panel.ts, output_panel.ts` | per `app.ts`'s `./panels/*` imports |

@@ -48,19 +48,47 @@ export const DETECT_CLOSE_H = 3
 export const DETECT_OUTLIER_OPTIONS: readonly number[] = [0, 1, 2, 5, 10]
 export const DEFAULT_DETECT_OUTLIER = 2
 
-// Deskew — DESKEW_MAX_DEG is the angle SEARCH range (§7.1a); the three below are the warp
-// classifier's decision cutoffs, not search parameters.
+// Deskew — DESKEW_MAX_DEG is the warp classifier's angle SEARCH range (§7.1a), not a decision
+// cutoff.
 export const DESKEW_MAX_DEG = 15.0
-// Below this, a page's detected rotation is left alone (already straight enough) rather than
-// running the classic-CV rotate-only correction.
-export const DESKEW_MIN_DEG = 0.2
 // best_row_variance / mean_ink_per_row^2 at the winning angle (§7.1a). Below this, the page's
 // row profile stays blurred even at its best rotation — a curl/fold no single rotation can fix —
-// so it classifies WARPED and takes the ONNX path instead of the classic-CV rotate.
+// so it classifies WARPED and takes the ONNX path instead of §7.1b.
 export const WARP_SHARPNESS_MIN = 1.0
 // Downscale long edge for the classifier's angle search + sharpness pass (§7.1a) — independent of
 // DETECT_MAX_PX (Auto-detect's own downscale, §8), tuned for the classifier's own speed budget.
 export const DESKEW_CLASSIFY_DOWNSCALE_PX = 400
+
+// Skew & trapezoid correction (§7.1b) — decision cutoffs for the vanishing-point fit's center
+// angle / lr_delta / tb_delta. Calibrated against real-content noise floor (a known-flat real
+// page reads ~0.2-0.3deg center / up to ~0.5deg lr_delta on this estimator), not the originally
+// hoped-for 0.2deg — seeing a number below this is measurement noise, not a real distortion.
+export const DESKEW_MIN_DEG = 0.5
+export const TRAP_DELTA_MIN_DEG = 0.7
+
+// DBNet (PP-OCRv4 mobile det, ONNX, Apache-2.0) text-line detection for §7.1b.
+export const DBNET_MODEL_URL = 'models/ch_PP-OCRv4_det.onnx'
+export const DBNET_MODEL_CACHE_KEY = 'dbnet-ppocrv4-det-v1'
+// Higher than a typical detector's default input size: a small true tilt shifts a text region's
+// contour by under 1px at lower resolutions, which cv.minAreaRect then rounds away to exactly
+// zero before any fitting ever sees it — empirically, raising this cut the exact-zero-angle
+// detection rate roughly in half on a real trapezoid test page (14/41 at 1280px to 9/40 at 1920px).
+export const DBNET_MAX_SIDE_PX = 1920
+export const DBNET_PROB_THRESH = 0.3
+export const DBNET_UNCLIP_RATIO = 1.6
+export const DBNET_MIN_AREA_PX = 20
+// A detected region below this width, or with an aspect ratio below this, has no reliable long
+// axis (most often a short page-number box) — keeping it corrupts the fit with a spurious
+// near-zero-angle reading (§7.1b).
+export const DBNET_MIN_WIDTH_PX = 30
+export const DBNET_MIN_ASPECT_RATIO = 3.0
+
+// Vanishing-point estimation (§7.1b) — PROSAC/MSAC/IRLS. Thresholds are in normalized homogeneous-
+// line-coefficient units (line . point, both unit-normalized), not degrees or pixels directly.
+export const VP_INLIER_THRESH = 0.02
+export const VP_HUBER_DELTA = 0.02
+export const VP_IRLS_ITERS = 8
+export const VP_MAX_PAIRS = 400
 
 // Filter strengths (spec §10.2) — Sharpen unsharp amount per level
 export const CLEAN_AMOUNT: Record<1 | 2 | 3, number> = { 1: 0.6, 2: 1.1, 3: 1.6 }

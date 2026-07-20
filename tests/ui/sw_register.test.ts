@@ -3,8 +3,10 @@ import { describe, it, expect, vi } from 'vitest'
 
 const ensure_cv = vi.fn().mockResolvedValue(undefined)
 const ensure_onnx = vi.fn().mockResolvedValue(undefined)
+const ensure_dbnet = vi.fn().mockResolvedValue(undefined)
 vi.mock('@pdf/cv', () => ({ ensure_cv }))
 vi.mock('@pdf/dewarp', () => ({ ensure_onnx }))
+vi.mock('@pdf/dbnet', () => ({ ensure_dbnet }))
 
 const { register_service_worker, warm_offline_cache } = await import('@ui/sw_register')
 
@@ -35,10 +37,11 @@ describe('register_service_worker', () => {
 })
 
 describe('warm_offline_cache (Settings → Enable offline mode)', () => {
-  it('runs the real OpenCV + ONNX init paths so their assets get cached, not a hardcoded URL list', async () => {
-    ensure_cv.mockClear(); ensure_onnx.mockClear()
+  it('runs the real OpenCV + ONNX + DBNet init paths so their assets get cached, not a hardcoded URL list', async () => {
+    ensure_cv.mockClear(); ensure_onnx.mockClear(); ensure_dbnet.mockClear()
     await warm_offline_cache()
     expect(ensure_cv).toHaveBeenCalledTimes(1)
     expect(ensure_onnx).toHaveBeenCalledTimes(1)
+    expect(ensure_dbnet).toHaveBeenCalledTimes(1)
   })
 })

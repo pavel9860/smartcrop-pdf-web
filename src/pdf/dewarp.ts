@@ -37,21 +37,27 @@ export function ensure_onnx(): Promise<void> {
   return _onnx_init
 }
 
+// Shared with dbnet.ts (§7.1b) — same GH-Pages-COOP/COEP constraint applies to any ONNX model
+// this app loads, not just dewarp's. GH Pages cannot send those headers, so SharedArrayBuffer
+// (multi-threaded WASM) is unavailable — force the single-thread WASM build. WebGPU needs no SAB
+// either and is tried first where the browser exposes it; single-thread WASM+SIMD is the fallback.
+// Only request WebGPU when the browser exposes it; otherwise ORT would have to fall back
+// internally. Explicit selection keeps behaviour deterministic across Firefox/Safari.
+export function resolve_onnx_execution_providers(ort: { env: { wasm: { numThreads?: number } } }): string[] {
+  ort.env.wasm.numThreads = 1
+  const has_webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator
+  const execution_providers = has_webgpu ? ['webgpu', 'wasm'] : ['wasm']
+  // One-time diagnostic (TODO §17): ONNX inference on the 1-thread WASM EP costs seconds/page —
+  // this line lets a user verify in the console whether WebGPU was even requested on their machine.
+  console.info('[smartcrop] ONNX EPs requested:', execution_providers.join(','),
+    '— webgpu available:', has_webgpu)
+  return execution_providers
+}
+
 async function _load_onnx_sessions(): Promise<void> {
   try {
     const ort = await import('onnxruntime-web/webgpu')
-    // GH Pages cannot send COOP/COEP, so SharedArrayBuffer (multi-threaded WASM) is
-    // unavailable — force the single-thread WASM build. WebGPU needs no SAB either and is
-    // tried first where the browser exposes it; single-thread WASM+SIMD is the fallback.
-    ort.env.wasm.numThreads = 1
-    // Only request WebGPU when the browser exposes it; otherwise ORT would have to fall back
-    // internally. Explicit selection keeps behaviour deterministic across Firefox/Safari.
-    const has_webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator
-    const execution_providers = has_webgpu ? ['webgpu', 'wasm'] : ['wasm']
-    // One-time diagnostic (TODO §17): dewarp on the 1-thread WASM EP costs seconds/page — this
-    // line lets a user verify in the console whether WebGPU was even requested on their machine.
-    console.info('[smartcrop] ONNX EPs requested:', execution_providers.join(','),
-      '— webgpu available:', has_webgpu)
+    const execution_providers = resolve_onnx_execution_providers(ort)
     // Prefix with the deployment base so the vendored model weights resolve under a GH Pages
     // project-page subpath (see vite.config.ts base / constants.ts note). Does not change ORT
     // execution behaviour — same weights, same providers, only the fetch URL adapts.
@@ -171,11 +177,11 @@ export function f16_data_to_f32_array(data: Uint16Array): Float32Array {
 // maxAbsDiff=3.5e-2 / meanAbsDiff=6.5e-6 on a [0,1] scale — consistent with expected benign
 // cross-engine floating-point noise through a 16M-parameter CNN, not an algorithmic error.
 export async function apply_dewarp(src: Mat, supersample: number): Promise<Mat> {
-  // The real guarantee is process_page's `await ensure_onnx()` in the WARPED branch of the
-  // classifier switch (imaging.ts, spec-web §7.1a) before this is ever called. Silently returning
-  // `src` unprocessed here would surface as a confusing no-op (user presses Dewarp & Deskew,
-  // nothing visibly happens) instead of a diagnosable error if that guarantee is ever violated by
-  // a future call site or refactor.
+  // The real guarantee is process_page's `await ensure_onnx()` in the classify_warp branch
+  // (imaging.ts, spec-web §7.1a) before this is ever called. Silently returning `src` unprocessed
+  // here would surface as a confusing no-op (user presses Dewarp & Deskew, nothing visibly
+  // happens) instead of a diagnosable error if that guarantee is ever violated by a future call
+  // site or refactor.
   if (!_uvdoc_session || !_bilinear_session) {
     throw new MissingDependencyError('apply_dewarp called before ensure_onnx() resolved')
   }

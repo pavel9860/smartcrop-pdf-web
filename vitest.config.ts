@@ -29,6 +29,10 @@ export default defineConfig({
       //   deskew.ts      — same reason as imaging.ts (real cv.Mat ops); validated instead by
       //                    tests/perf/deskew_speed.test.ts (real opencv-js) + the e2e suite —
       //                    its pure decision counterpart, core/deskew_classify.ts, IS covered here
+      //   vanishing_point.ts, vp_correct.ts — same reason (real cv.eigen/cv.remap); validated by
+      //                    tests/perf/deskew_speed.test.ts (real opencv-js, direct-geometry tests)
+      //   dbnet.ts       — same reason as dewarp.ts (real ONNX runtime); validated e2e-only —
+      //                    no dev server in tests/perf/ for it to fetch the model from
       //   canvas_view.ts — real Canvas2D paint/drag; jsdom's canvas is a non-rendering stub
       //   app.ts         — top-level controller wiring/boot/shortcuts; integration, not a unit
       //   main.ts        — 3-line bootstrap; workers — run only in a real Worker context
@@ -39,6 +43,7 @@ export default defineConfig({
       exclude: [
         'src/workers/**', 'src/main.ts',
         'src/pdf/imaging.ts', 'src/pdf/dewarp.ts', 'src/pdf/deskew.ts',
+        'src/pdf/vanishing_point.ts', 'src/pdf/vp_correct.ts', 'src/pdf/dbnet.ts',
         'src/ui/canvas_view.ts', 'src/ui/app.ts',
       ],
       thresholds: {

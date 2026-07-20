@@ -11,12 +11,15 @@ import {
   BORDER_FRAC, MIN_COMP_FRAC, DETECT_MAX_PX, CLEAN_AMOUNT,
   CC_CONNECTIVITY, BG_KERNEL_SIZE, BG_DOWNSCALE, SAUVOLA_WINDOW, SAUVOLA_R,
   BW_STRENGTH, SHARPEN_STRENGTH, DETECT_CLOSE_W, DETECT_CLOSE_H,
-  DESKEW_MAX_DEG, DESKEW_CLASSIFY_DOWNSCALE_PX,
+  DESKEW_MAX_DEG, DESKEW_CLASSIFY_DOWNSCALE_PX, DBNET_MAX_SIDE_PX,
 } from '@core/constants'
-import { classify_deskew } from '@core/deskew_classify'
+import { classify_warp, needs_skew_trapezoid_correction } from '@core/deskew_classify'
 import { cv, type Mat, ensure_cv } from './cv'
 import { ensure_onnx, apply_dewarp } from './dewarp'
-import { estimate_deskew, rotate_mat } from './deskew'
+import { estimate_deskew } from './deskew'
+import { ensure_dbnet, detect_text_lines } from './dbnet'
+import { estimate_vanishing_point, vp_edge_angles } from './vanishing_point'
+import { apply_vp_correction } from './vp_correct'
 
 // ---------------------------------------------------------------------------
 // Public entry points (called directly from loader.ts — no postMessage RPC)
@@ -317,23 +320,30 @@ async function process_page(
   const img_data = ctx.getImageData(0, 0, w, h)
   let mat = cv.matFromImageData(img_data)
 
-  // Dewarp & Deskew classifier (spec-web §7.1a): a page that's already flat or only incidentally
-  // rotated gets the cheap classic-CV rotate (or no-op) instead of the full ONNX mesh-unwarp,
-  // which can introduce its own small residual distortion on input that didn't need it. ensure_onnx
-  // is called here, not eagerly in process_page_async, so a page that never classifies WARPED never
-  // pays the ONNX model fetch/init cost.
+  // Dewarp & Deskew (spec-web §7.1): a page that's already flat or only incidentally skewed/
+  // keystoned would otherwise be needlessly re-warped by ONNX, which can introduce its own small
+  // residual distortion. §7.1a's cheap classic-CV classifier decides WARPED (full ONNX mesh-
+  // unwarp, unchanged) vs not — a not-warped page then gets §7.1b's text-line-detection +
+  // vanishing-point estimate, which corrects skew AND trapezoid via ONE mechanism (vp_correct.ts)
+  // or no-ops if neither clears its threshold. ensure_onnx/ensure_dbnet are called here, not
+  // eagerly in process_page_async, so a page never pays for a model it doesn't end up needing.
   if (dewarp) {
-    const { angle_deg, sharpness } = estimate_deskew(mat, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG)
-    switch (classify_deskew(angle_deg, sharpness)) {
-      case 'warped':
-        await ensure_onnx()
-        mat = await apply_dewarp(mat, supersample)
-        break
-      case 'skewed':
-        mat = rotate_mat(mat, angle_deg)
-        break
-      case 'flat':
-        break   // already straight — no-op
+    const { sharpness } = estimate_deskew(mat, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG)
+    if (classify_warp(sharpness)) {
+      await ensure_onnx()
+      mat = await apply_dewarp(mat, supersample)
+    } else {
+      await ensure_dbnet()
+      const { segments, confidences, weights } = await detect_text_lines(mat, DBNET_MAX_SIDE_PX)
+      const vp = estimate_vanishing_point(segments, confidences, weights)
+      // vp === null (too few detected text lines, e.g. a near-blank page) -> safe no-op, same as
+      // a page whose fit clears neither threshold below.
+      if (vp) {
+        const { center, lr_delta, tb_delta } = vp_edge_angles(vp.v, segments)
+        if (needs_skew_trapezoid_correction(center, lr_delta, tb_delta)) {
+          mat = apply_vp_correction(mat, vp.v)
+        }
+      }
     }
   }
 

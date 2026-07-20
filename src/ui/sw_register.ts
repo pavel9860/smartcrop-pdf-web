@@ -1,5 +1,6 @@
 import { ensure_cv } from '@pdf/cv'
 import { ensure_onnx } from '@pdf/dewarp'
+import { ensure_dbnet } from '@pdf/dbnet'
 
 // Offline auto-precache registration (T7) — registers public/sw.js. Guarded: does nothing when
 // serviceWorker is unsupported, and does nothing outside a production build (a dev-server SW
@@ -20,9 +21,10 @@ export function register_service_worker(
 }
 
 // Settings → "Enable offline mode" (off by default, spec-web §16a). The SW above passively caches
-// whatever a session actually uses; OpenCV wasm and both ONNX dewarp models otherwise only get
-// cached the first time SCANNED-mode processing runs online. This runs those same real init paths
-// once so every feature — not just whichever were already used — works offline after.
+// whatever a session actually uses; OpenCV wasm, the ONNX dewarp models, and the §7.1b text-line
+// detection model otherwise only get cached the first time SCANNED-mode processing runs online.
+// This runs those same real init paths once so every feature — not just whichever were already
+// used — works offline after.
 export async function warm_offline_cache(): Promise<void> {
-  await Promise.all([ensure_cv(), ensure_onnx()])
+  await Promise.all([ensure_cv(), ensure_onnx(), ensure_dbnet()])
 }

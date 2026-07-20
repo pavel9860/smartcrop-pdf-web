@@ -213,10 +213,20 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               shared by imaging.ts and dewarp.ts.
       dewarp.ts              docuwarp/UVDoc ONNX mesh dewarp: model loading + fp16 tensor
                               plumbing + the two-stage inference pipeline. Called from
-                              imaging.ts's process_page_async()/process_page().
+                              imaging.ts's process_page_async()/process_page(). Also exports
+                              resolve_onnx_execution_providers(), shared with dbnet.ts.
+      deskew.ts              Classic-CV warp classifier (§7.1a) — decides ONNX-dewarp vs. not,
+                              before either dbnet.ts or dewarp.ts ever runs. No correction of its
+                              own; classification only.
+      dbnet.ts               DBNet (PP-OCRv4 mobile det) ONNX text-line detection (§7.1b) —
+                              same lazy-fetch + IndexedDB-cache pattern as dewarp.ts.
+      vanishing_point.ts     Vanishing-point estimation from detected text lines (§7.1b):
+                              PROSAC/MSAC/IRLS, via cv.eigen (no SVDecomp binding in cv.js).
+      vp_correct.ts          One remap mechanism for both skew and trapezoid correction (§7.1b),
+                              derived from the vanishing point.
       idb.ts                 Generic IndexedDB open/request/transaction-wait helpers, used by
-                              dewarp.ts's ONNX-model-weight cache (the only disk-cached asset —
-                              per-page rasters are RAM-only, see §7).
+                              dewarp.ts's and dbnet.ts's ONNX-model-weight caches (the only
+                              disk-cached assets — per-page rasters are RAM-only, see §7).
 
     ui/                     Presentation layer. Imports @core/* and @pdf/*. core/ never imports ui/.
       constants.ts          UI-only tunables: SCALE_THROTTLE_MS=80, FONT_SIZE_DEFAULT=15, THEMES,
@@ -730,7 +740,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | DPI-scaled kernels | — | **Not ported.** `imaging.py`'s `_dpi_scale()` scales the Sauvola window / bg-kernel / min-area by source DPI (0.5×–4× clamp) so scans at different resolutions binarize comparably. The web always uses the base `SAUVOLA_WINDOW`/`BG_KERNEL_SIZE` regardless of DPI. Low-severity residual gap — SRC_DPI is fixed at 200 in the web (no variable-DPI source rasters), so this mainly affects the B/W filter's absolute kernel size relative to `imaging.py`'s 150 DPI reference, not correctness. |
 | 2× supersample refinement | — | **Not ported.** `clean_document_bilevel` upscales 2× before thresholding then downsamples for a cleaner edge; the web version thresholds at native resolution. Cosmetic quality difference only. |
 | Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model → bilinear resample | Implemented — two-stage ONNX pipeline, EPs `['webgpu','wasm']` gated on `navigator.gpu`, `numThreads=1` |
-| Deskew angle | — | Spec §10.1 folds deskew into the single Dewarp & Deskew mesh-unwarp control ("there is no separate deskew step") — there is intentionally no standalone deskew function to port; it ships (or doesn't) together with dewarp. |
+| Deskew angle | `estimate_deskew()` (`pdf/deskew.ts`, warp classifier only) + `estimate_vanishing_point()`/`vp_edge_angles()` (`pdf/vanishing_point.ts`) + `apply_vp_correction()` (`pdf/vp_correct.ts`) | **Web-only addition, not a desktop port.** Spec §7.1/§7.1b: a page the classic-CV warp classifier finds not-warped gets its own text-line-detection (`pdf/dbnet.ts`, DBNet ONNX) + vanishing-point fit, corrected via one remap that handles both skew and trapezoid — added because a page already dewarped elsewhere was being needlessly re-warped, introducing its own residual distortion. Desktop has no equivalent path; there is no parity gap to track here. |
 
 `detect_content()` downscales to `DETECT_MAX_PX` for speed used a direct `cv.adaptiveThreshold` call
 for detection with no relationship to the B/W filter's algorithm at all, which was wrong on two
@@ -995,9 +1005,9 @@ offline-after-online-load e2e check yet — verify that manually against a produ
 default). The SW's opportunistic caching above only ever covers what a session actually used, so a
 user who never exercised SCANNED-mode processing online would find dewarp/filters failing offline
 despite the SW being registered and otherwise working. Turning the switch on calls `ensure_cv()`
-(`pdf/cv.ts`) and `ensure_onnx()` (`pdf/dewarp.ts`) directly — the same real init paths SCANNED
-mode already uses — so their same-origin fetches populate the SW's cache as a side effect, with no
-separate hardcoded asset-URL list to keep in sync.
+(`pdf/cv.ts`), `ensure_onnx()` (`pdf/dewarp.ts`), and `ensure_dbnet()` (`pdf/dbnet.ts`) directly —
+the same real init paths SCANNED mode already uses — so their same-origin fetches populate the
+SW's cache as a side effect, with no separate hardcoded asset-URL list to keep in sync.
 
 ---
 

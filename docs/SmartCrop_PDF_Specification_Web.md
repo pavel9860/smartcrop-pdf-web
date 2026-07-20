@@ -581,36 +581,53 @@ a version history of its own.
 
 ### 7.1 Dewarp & Deskew
 
-A single toggle. Pressing it runs a per-page classifier (§7.1a, classic CV, no ONNX) that decides,
-per selected page, whether the page needs the full two-stage ONNX pipeline (UVDoc warp-field model +
-bilinear resample — removes page curl/fold and incidental skew in one pass) or can be corrected by a
-much cheaper single classic-CV rotation, or needs no correction at all. This exists because a page
-that has already been correctly dewarped elsewhere and only carries incidental skew would otherwise
-be needlessly re-warped by the ONNX pass, which can introduce its own small residual distortion on
-input that didn't need mesh correction. Execution providers for the ONNX path are `['webgpu','wasm']`,
-gated on `navigator.gpu`, `numThreads=1` — no `SharedArrayBuffer` dependency (GitHub Pages cannot set
-the COOP/COEP headers that would require). The **Dewarp supersample** setting (§14, default 2.0)
-renders the page larger before the mesh remap and downsamples after, trading time for less
-resampling blur — it has no effect on the classic-CV rotate path.
+A single toggle. Pressing it runs a per-page pipeline that decides, per selected page, which of
+three things it needs:
+
+```
+                    source[i]
+                        |
+        warp classifier (§7.1a, classic CV, no ONNX/DBNet)
+                 |                        |
+              warped                  not warped
+                 |                        |
+   ONNX two-stage pipeline    text-line detection + vanishing-point
+   (UVDoc, unchanged)         fit (§7.1b, DBNet + PROSAC/MSAC/IRLS)
+                 |                        |
+                 |          needs correction?  ---no---> no-op
+                 |                        |
+                 |                       yes
+                 |                        |
+                 |          one remap corrects skew AND
+                 |          trapezoid together (§7.1b)
+                 +------------------------+
+                            |
+                          base (§7)
+```
+
+This exists because a page that has already been correctly dewarped elsewhere and only carries
+incidental skew or keystone would otherwise be needlessly re-warped by the ONNX pass, which can
+introduce its own small residual distortion on input that didn't need mesh correction. Execution
+providers for the ONNX path are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no
+`SharedArrayBuffer` dependency (GitHub Pages cannot set the COOP/COEP headers that would require).
+The **Dewarp supersample** setting (§14, default 2.0) renders the page larger before the mesh remap
+and downsamples after, trading time for less resampling blur — it has no effect on the not-warped
+branch.
 
 Whichever path a page takes runs against the page's own content, independent of its current display
 rotation — rotating a page that already has Dewarp&Deskew applied never re-runs the classifier or
 either correction path, only cheaply reorients the already-computed result. Only pressing the Dewarp
 & Deskew button computes it; only Undo removes it.
 
-Keystone/perspective (trapezoid) distortion — page edges not parallel, typically from a camera not
-perpendicular to the page — is explicitly **out of scope** for the classic-CV path in this revision.
-Five classic-CV, text-only detection techniques were evaluated (per-line angle vs. vertical page
-position, two variants; left/right text-margin line fitting, two variants; a tiled local-angle-field
-plane fit) and none reliably separated real keystone distortion from ordinary page-layout noise on
-real page content at production speed — each worked only on dense, uniform synthetic text and
-produced false positives at least as large as the true signal on a real book page. A trapezoid-
-distorted page's classifier sharpness score is unaffected by keystone distortion (verified against a
-real trapezoid-distorted test page), so it classifies as flat-or-skewed-only and takes the rotate-only
-or no-op path exactly as before this feature existed — i.e. keystone distortion is not corrected, but
-also not regressed; it passes through exactly as it did when Dewarp&Deskew always ran the ONNX pass.
+There is no separate "just rotate" path: a pure skew is the degenerate case of the same
+vanishing-point model a real keystone uses (the vanishing point recedes to infinity), so one
+correction mechanism handles both — see §7.1b. An earlier revision shipped classic-CV-only rotation
+for skew and explicitly left keystone/trapezoid uncorrected (five classic-CV, text-only detection
+techniques were evaluated and none reliably separated real keystone distortion from ordinary
+page-layout noise on real content); §7.1b's text-line-detection-based approach is what made
+keystone detection reliable enough to ship.
 
-### 7.1a Warp classifier (classic CV, no ONNX)
+### 7.1a Warp classifier (classic CV, no ONNX/DBNet)
 
 Per selected page, against the raw `source[i]` raster (never the already-processed `work[i]`, same
 rule as Auto-detect, §16.3):
@@ -619,21 +636,74 @@ rule as Auto-detect, §16.3):
    threshold) and search candidate rotation angles within `±DESKEW_MAX_DEG`, coarse-to-fine, picking
    the angle that maximizes the binarized row-sum profile's variance (the angle at which text lines
    align most sharply into rows). This is the same family of operation as the B/W filter's box-filter
-   work (§7.2, §16) — cheap, no ONNX, no OpenCV mesh warp.
+   work (§7.2, §16) — cheap, no ONNX, no DBNet, no OpenCV mesh warp.
 2. **Sharpness score** — from that same search, `best_row_variance / mean_ink_per_row²` at the winning
    angle. A page whose curl/fold cannot be fixed by any single rotation keeps a blurred row profile
-   even at its best angle, so this stays low; a flat or purely-rotated page's profile becomes sharp
-   at the correct angle, so this stays high. `WARP_SHARPNESS_MIN` (§17) is the cutoff.
-3. **Classification and branch**:
-   - `sharpness < WARP_SHARPNESS_MIN` → **warped** → the existing ONNX two-stage pipeline (unchanged).
-   - `sharpness >= WARP_SHARPNESS_MIN` and `|angle| > DESKEW_MIN_DEG` → **skewed only** → a single
-     classic-CV affine rotation by the detected angle (no ONNX, no mesh warp) — the fast path this
-     feature adds.
-   - `sharpness >= WARP_SHARPNESS_MIN` and `|angle| <= DESKEW_MIN_DEG` → **flat** → no-op.
+   even at its best angle, so this stays low; a flat, purely-rotated, or keystoned page's profile
+   becomes sharp at *some* angle, so this stays high — verified that keystone distortion does not
+   depress this score (a trapezoid-distorted real test page classifies not-warped, same as flat).
+   `WARP_SHARPNESS_MIN` (§17) is the cutoff.
+3. **Branch**: `sharpness < WARP_SHARPNESS_MIN` → **warped** → the existing ONNX two-stage pipeline
+   (unchanged). Otherwise → **not warped** → §7.1b.
 
-The classifier itself targets well under 100ms/page; the classic-CV rotate-only correction path
-targets well under 300ms/page — both far cheaper than the ONNX path they're built to avoid for pages
-that don't need it (§16).
+Targets well under 100ms/page (§16) — this angle search's own result is not reused by §7.1b, which
+estimates its own angle from a different, more precise source (detected text lines, not a single
+whole-page row profile) built specifically to also cover trapezoid, not just rotation.
+
+### 7.1b Skew & trapezoid correction (DBNet + vanishing point)
+
+Runs only for a page the classifier (§7.1a) found not warped.
+
+1. **Text-line detection** — a lightweight scene-text detector (DBNet, PP-OCRv4 mobile, ONNX,
+   Apache-2.0, ~4.7MB — same lazy-fetch-once + IndexedDB-cache pattern as the UVDoc dewarp models,
+   §7.1) finds text regions as tilted quadrilaterals (not axis-aligned boxes) plus a per-region
+   detection confidence. Only elongated, unambiguous quads are kept (`DBNET_MIN_WIDTH_PX`,
+   `DBNET_MIN_ASPECT_RATIO`) — a near-square region (most often a short page-number box) has no
+   well-defined long axis, and including it corrupts the fit with a spurious near-zero-angle
+   reading. Each kept quad becomes one line segment (its long axis's two endpoints) with two
+   weights: detection confidence (is this really text?) and a leverage weight, `width²` (how
+   precisely can this region's angle even be measured? — a narrow region's contour is
+   pixel-quantized enough that a small true tilt can round away to exactly zero before any fitting
+   ever sees it; width alone, independent of confidence, determines how much that quantization
+   matters). Both weights are required — confidence alone under-penalizes a narrow-but-confident
+   detection, which was found (real trapezoid test page) to cause the fit to overshoot and flip
+   sign on one axis while getting worse on the other; adding the leverage weight fixed it
+   completely (residual dropped from -1.60° to +0.04° on that same page, verified).
+2. **Vanishing-point estimation** — text lines that are truly parallel in the real document
+   converge to a common vanishing point when extended, under any homography (pure rotation is the
+   point-at-infinity special case, not a separate model). Estimated via:
+   - **PROSAC**: line *pairs* are tried in order of decreasing combined confidence×leverage, not
+     uniform-random order — a real, well-measured text line is more likely to give a good initial
+     vanishing-point hypothesis than a random one.
+   - **MSAC**: each candidate is scored by a bounded loss (`min(residual², threshold²)` summed,
+     weighted), not a hard inlier count — smoother preference among close candidates.
+   - **IRLS**: the winning candidate is refined by iterating confidence×leverage×Huber-residual
+     reweighted least squares (via eigendecomposition of the weighted line-coefficient matrix) until
+     convergence. The vanishing point itself is represented in homogeneous coordinates
+     `(vx, vy, vz)` on the unit sphere — this is what lets a pure rotation (vz → 0) and a real
+     keystone (vz finite) share one estimator and one downstream correction with no branch between
+     them.
+3. **Reading the angle** — the implied local text-line angle at any point is the direction from that
+   point toward the vanishing point (continuous as vz → 0, reducing to a constant direction — no
+   special case needed). Evaluated only within the *observed* text's own left/right/top/bottom
+   extent, never extrapolated out to the page's physical edges — extrapolating past where any text
+   actually was amplifies slope-estimation noise into a large false reading (verified: doing this
+   produced a spurious multi-degree "trapezoid" on a known-flat real page). This gives a center
+   angle plus an `lr_delta` and `tb_delta` (the angle swing across the observed width/height).
+4. **Decision**: correct if `|center| > DESKEW_MIN_DEG` or `|lr_delta| > TRAP_DELTA_MIN_DEG` or
+   `|tb_delta| > TRAP_DELTA_MIN_DEG` (§17); otherwise no-op. Also no-op if too few text lines were
+   detected to fit a vanishing point at all (e.g. a near-blank page) — the safe default is to leave
+   such a page alone, same as "flat".
+5. **Correction** — one mechanism for both skew and trapezoid: the vanishing point implies a local
+   tangent-slope field over the whole page; integrating it from a reference column gives a smooth
+   per-pixel vertical-shift remap. A pure skew (vanishing point at infinity) integrates to an
+   ordinary shear; a real keystone integrates to a position-varying correction — same formula
+   either way, not two code paths.
+
+Target: DBNet inference + vanishing-point fit + the remap together, well under 1s/page (§16) — this
+branch is only reached for pages that already avoided the ONNX path, so the budget does not stack
+with it. Real-content residual after correction: ~0.04° on the trapezoid-distorted test page (down
+from a raw ~1.6° reading before the leverage-weighting fix above), essentially fully corrected.
 
 ### 7.2 Filter modes (each 3 strengths)
 
@@ -907,9 +977,10 @@ offline after one online load" requires. No `SharedArrayBuffer`/COOP-COEP depend
 Settings → **"Enable offline mode"** — off by default. The passive caching above only covers
 whatever a session actually used, so a user who has only used NORMAL mode online would find
 SCANNED-mode dewarp/filters failing offline despite the app otherwise working offline. Turning the
-switch on runs the real OpenCV/ONNX init paths once (the same ones SCANNED mode itself uses), so
-their downloads populate the cache immediately — every feature works offline right after, not just
-whichever were already used. No install/PWA-add-to-homescreen step is required either way.
+switch on runs the real OpenCV/ONNX/DBNet init paths once (the same ones SCANNED mode itself uses,
+including §7.1b's text-line detector, not just UVDoc), so their downloads populate the cache
+immediately — every feature works offline right after, not just whichever were already used. No
+install/PWA-add-to-homescreen step is required either way.
 
 ---
 
@@ -924,7 +995,7 @@ whichever were already used. No install/PWA-add-to-homescreen step is required e
 | Auto-detect per page | < 100ms (SCANNED: raw source, not the processed work image; NORMAL: text-layer, no raster at all) |
 | Dewarp per page (ONNX stage) | seconds on the 1-thread WASM execution provider; fast on WebGPU where available |
 | Warp classifier per page (§7.1a, classic CV) | < 100ms — flag and investigate if exceeded |
-| Classic-CV rotate-only correction per page (§7.1a) | < 300ms — flag and investigate if exceeded |
+| Skew & trapezoid correction per page (§7.1b, DBNet + vanishing point) | < 1s — flag and investigate if exceeded; only reached on pages that already skipped the ONNX path |
 | Export per page (rasterized path) | < 300ms |
 | First OpenCV.js WASM load | < 3s, once per session (~10MB SIMD build, lazy — SCANNED documents only) |
 | First ONNX model fetch + init | < 5s, once per session (cached in IndexedDB after; 0ms on repeat sessions) |
@@ -953,8 +1024,18 @@ HANDLE_R = 10    HANDLE_SLACK = 6    CANVAS_MARGIN = 0    OFFSET_LIMIT = 100.0  
 # classification / detection
 MODE_TEXT_MIN = 8    DETECT_MAX_PX = 1400    BORDER_FRAC = 0.02
 MIN_COMP_FRAC = 2.5e-4    FULL_PAGE_FRAC = 0.97    DESKEW_MAX_DEG = 15.0
-# warp classifier (§7.1a) — DESKEW_MAX_DEG above is the search RANGE; these are decision cutoffs
-DESKEW_MIN_DEG = 0.2    WARP_SHARPNESS_MIN = 1.0    DESKEW_CLASSIFY_DOWNSCALE_PX = 400
+# warp classifier (§7.1a) — DESKEW_MAX_DEG above is the search RANGE, not a decision cutoff
+WARP_SHARPNESS_MIN = 1.0    DESKEW_CLASSIFY_DOWNSCALE_PX = 400
+# skew & trapezoid correction (§7.1b) — decision cutoffs, calibrated against real-content noise
+# floor (a known-flat real page reads ~0.2-0.3deg center / ~0.5deg lr_delta on this estimator, so
+# these sit clearly above that, not at the originally-hoped-for 0.2deg — see PROGRESS.md)
+DESKEW_MIN_DEG = 0.5    TRAP_DELTA_MIN_DEG = 0.7
+# DBNet (PP-OCRv4 mobile det, ONNX, Apache-2.0) text-line detection for §7.1b
+DBNET_MODEL_URL = 'models/ch_PP-OCRv4_det.onnx'    DBNET_MODEL_CACHE_KEY = 'dbnet-ppocrv4-det-v1'
+DBNET_MAX_SIDE_PX = 1920    DBNET_PROB_THRESH = 0.3    DBNET_UNCLIP_RATIO = 1.6
+DBNET_MIN_AREA_PX = 20    DBNET_MIN_WIDTH_PX = 30    DBNET_MIN_ASPECT_RATIO = 3.0
+# vanishing-point estimation (§7.1b) — PROSAC/MSAC/IRLS
+VP_INLIER_THRESH = 0.02    VP_HUBER_DELTA = 0.02    VP_IRLS_ITERS = 8    VP_MAX_PAIRS = 400
 # Sauvola / illumination-flatten (real box-filter Sauvola, not an adaptiveThreshold approximation)
 SAUVOLA_R = 127.5    SAUVOLA_WINDOW = 51    BG_KERNEL_SIZE = 51    BG_DOWNSCALE = 4
 SAUVOLA_DPI_REFERENCE = 150.0    SAUVOLA_DPI_SCALE_MIN/MAX = 0.5 / 4.0
@@ -1081,9 +1162,9 @@ yes/no confirm dialog, single OK button), never a silent failure and never an au
     drawn window and split rectangles, in both modes — no gesture bypasses it (§6.7).
 20. Image-format export (JPG/PNG/TIFF) always delivers one `.zip`, never loose per-page files
     (§10.5).
-21. Dewarp & Deskew's per-page classifier (§7.1a) is deterministic and content-only: the same
-    `source[i]` always classifies the same way and takes the same path (ONNX / classic-CV rotate /
-    no-op), independent of page order, selection size, or prior Undo/Redo state.
+21. Dewarp & Deskew's per-page pipeline (§7.1a/§7.1b) is deterministic and content-only: the same
+    `source[i]` always classifies the same way and takes the same path (ONNX / skew-and-trapezoid
+    correction / no-op), independent of page order, selection size, or prior Undo/Redo state.
 21. Crop with no source is a no-op: at split = 1 with no active detection and no drawn window on any
     selected page, Crop commits nothing and takes no snapshot.
 22. A committed split page ignores window gestures except a fresh draw, which re-commits only the
