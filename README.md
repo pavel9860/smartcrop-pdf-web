@@ -8,15 +8,15 @@ export as PDF or a chosen image format.
 ![SmartCrop PDF Web demo](docs/demo.gif)
 
 *Split (2-way and 4-way), auto-detect content borders, and the Dewarp & Deskew pipeline
-(deskew, de-trapezoid, B/W and Sharpen filters) — before/after on each.*
+(dewarp, deskew, B/W and Sharpen filters) — before/after on each.*
 
 ## Features
 
 - **Load & combine**: multiple PDFs/images into one document, in picker order.
 - **Crop**: auto-detect content, draw/drag a window, split a page into 2 or 4 output windows,
   same-size sync, keep-ratio lock.
-- **Scanned-document processing**: Dewarp & Deskew (page curl, tilt, and keystone/trapezoid
-  distortion, each corrected only when actually present — see below), B/W and Sharpen filters.
+- **Scanned-document processing**: Dewarp & Deskew (page curl and tilt, each corrected only when
+  actually present — see below), B/W and Sharpen filters.
 - **Rotate, delete, undo/redo**, per-page or batch.
 - **Export**: PDF (vector when the source is native PDF, rasterized for scans), or JPG/PNG/TIFF as
   a single `.zip`. Configurable output DPI, paper size, and colour mode.
@@ -34,9 +34,9 @@ is never needlessly reprocessed:
 2. **Warped** → a two-stage ONNX model (UVDoc) removes curl/fold and any incidental skew in one
    pass.
 3. **Not warped** → a lightweight text-line detector (DBNet, ONNX) plus a robust vanishing-point
-   estimator (PROSAC → MSAC → IRLS) finds the page's actual skew angle and any keystone/trapezoid
-   distortion, and corrects both through one unified remap — or leaves the page untouched if
-   neither is present.
+   estimator (PROSAC → MSAC → IRLS) finds the page's actual skew angle, more precisely than the
+   classifier's own row-profile search, and corrects it — or leaves the page untouched if it's
+   already within the noise floor.
 
 See `docs/SmartCrop_PDF_Specification_Web.md` §7 for the full behavioral spec.
 

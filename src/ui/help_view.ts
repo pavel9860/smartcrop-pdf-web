@@ -34,9 +34,8 @@ const SECTIONS: readonly HelpSection[] = [
     id: 'scan-processing', title: '4. Scan processing (scanned documents only)',
     body: 'Run these before setting the crop. Each button reads from the original scan, '
       + 'so you can press it multiple times or try different settings without harm.\n\n'
-      + 'Dewarp & Deskew straightens curved, tilted, or keystoned (trapezoid-shaped) pages. Run '
-      + 'this first if your scan has page curl, is slightly rotated, or was photographed at an '
-      + 'angle.\n\n'
+      + 'Dewarp & Deskew straightens curved or tilted pages. Run this first if your scan has '
+      + 'page curl or is slightly rotated.\n\n'
       + 'B/W converts the page to pure black and white. Best for text-only scans.\n\n'
       + 'Sharpen keeps gray tones but flattens uneven lighting and sharpens the image. '
       + 'Better for pages with photos or mixed content.\n\n'

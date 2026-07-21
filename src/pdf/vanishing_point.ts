@@ -1,16 +1,14 @@
-// vanishing_point.ts — text-line vanishing-point estimation for §7.1b (skew & trapezoid
-// correction): PROSAC (confidence×leverage-ordered sampling) -> MSAC (bounded-loss scoring) ->
-// IRLS (confidence×leverage×Huber-residual reweighted refinement). Ported from a Python research
-// prototype validated against real scanned/photographed pages (see PROGRESS.md) — every fix noted
-// inline below was found by that validation, not theoretical.
+// vanishing_point.ts — text-line vanishing-point estimation for §7.1b (skew correction): PROSAC
+// (confidence×leverage-ordered sampling) -> MSAC (bounded-loss scoring) -> IRLS (confidence×
+// leverage×Huber-residual reweighted refinement). Ported from a Python research prototype
+// validated against real scanned/photographed pages (see PROGRESS.md) — every fix noted inline
+// below was found by that validation, not theoretical.
 //
 // Why a vanishing point, not a simple per-page rotation angle: text lines that are truly parallel
-// in the real document converge to a common vanishing point when extended, under ANY homography —
-// pure rotation is just the point-at-infinity special case, not a separate model. Representing the
-// VP in homogeneous coordinates (vx, vy, vz) on the unit sphere means one estimator and one
-// downstream correction (vp_correct.ts) handle both skew and trapezoid, with no branch between
-// them: vz -> 0 is pure rotation, vz finite is a real keystone, and the same formulas describe
-// both continuously.
+// in the real document converge to a common vanishing point when extended, and representing it in
+// homogeneous coordinates (vx, vy, vz) on the unit sphere gives a materially more precise rotation
+// angle than a single whole-page row-profile search (§7.1a's classic-CV classifier) — it's fit
+// from many individually detected text lines, not one aggregate profile.
 import { cv } from './cv'
 import { VP_INLIER_THRESH, VP_HUBER_DELTA, VP_IRLS_ITERS, VP_MAX_PAIRS } from '@core/constants'
 
@@ -24,12 +22,6 @@ export type Vp = readonly [number, number, number]
 export interface VpEstimate {
   readonly v: Vp
   readonly mean_residual: number
-}
-
-export interface VpEdgeAngles {
-  readonly center: number
-  readonly lr_delta: number
-  readonly tb_delta: number
 }
 
 // A LINE's orientation is defined mod 180deg, not mod 360 — direction and its exact opposite
@@ -108,9 +100,9 @@ function msac_cost(lines: readonly Vp[], v: Vp, thresh: number): number {
 // ANGLE-PRECISION leverage weight (e.g. detected-region width^2 — see dbnet.ts), independent of
 // `confidences` (detection confidence answers "is this text", not "how precisely is its angle
 // known" — a narrow-but-confident region's angle is quantization-noisy regardless of confidence).
-// Validated bug: using confidence alone let a real trapezoid fixture's fit overshoot and flip
-// sign on one axis while getting worse on the other; adding the leverage weight fixed it
-// completely (residual dropped from -1.60deg to +0.04deg on that same page).
+// Validated bug: using confidence alone let a real skewed-page fixture's fit overshoot; adding
+// the leverage weight fixed it completely (residual dropped from -1.60deg to +0.04deg on that
+// same page).
 export function estimate_vanishing_point(
   segments: ReadonlyArray<readonly [Point, Point]>,
   confidences: readonly number[],
@@ -175,8 +167,8 @@ export function estimate_vanishing_point(
 // (px, py -> +-infinity), so no separate "at infinity" branch is needed in the math. A prior
 // version branched on vz and forced a constant angle whenever vz was small — that discarded real
 // signal for a VP that's near-infinite in one axis but finite/nearby in the other (found on a real
-// trapezoid fixture: horizontal component practically infinite, vertical component ~50px from the
-// content — the branching version zeroed out that real vertical-perspective signal).
+// scanned-page fixture: horizontal component practically infinite, vertical component ~50px from
+// the content — the branching version zeroed out that real signal).
 export function local_angle_from_vp(v: Vp, x: number, y: number): number {
   const [vx, vy, vz0] = v
   const vz = Math.abs(vz0) > 1e-12 ? vz0 : (vz0 >= 0 ? 1e-12 : -1e-12)
@@ -184,22 +176,15 @@ export function local_angle_from_vp(v: Vp, x: number, y: number): number {
   return fold_line_angle(Math.atan2(py - y, px - x) * 180 / Math.PI)
 }
 
-// Angle implied at the observed segments' OWN left/right/top/bottom extent (evaluated at each
-// axis's midpoint) — NOT the page's physical edges. Extrapolating the fitted VP out to a page
-// edge far past where any text actually was amplifies slope-estimation noise into a large false
-// reading — validated bug: doing this produced a spurious multi-degree "trapezoid" delta on a
-// known-flat real page. Evaluating only within the observed range is interpolation, not
-// extrapolation, and stays numerically stable.
-export function vp_edge_angles(v: Vp, segments: ReadonlyArray<readonly [Point, Point]>): VpEdgeAngles {
+// Angle implied at the CENTER of the observed segments' own extent — NOT the page's physical
+// center or edges. Extrapolating the fitted VP out to a page edge far past where any text actually
+// was amplifies slope-estimation noise into a large false reading — validated bug: doing this
+// produced a spurious multi-degree false reading on a known-flat real page. Evaluating within the
+// observed range is interpolation, not extrapolation, and stays numerically stable.
+export function vp_center_angle(v: Vp, segments: ReadonlyArray<readonly [Point, Point]>): number {
   const xs = segments.map(([p1, p2]) => (p1.x + p2.x) / 2)
   const ys = segments.map(([p1, p2]) => (p1.y + p2.y) / 2)
-  const x0 = Math.min(...xs), x1 = Math.max(...xs)
-  const y0 = Math.min(...ys), y1 = Math.max(...ys)
-  const x_mid = (x0 + x1) / 2, y_mid = (y0 + y1) / 2
-  const left = local_angle_from_vp(v, x0, y_mid)
-  const right = local_angle_from_vp(v, x1, y_mid)
-  const top = local_angle_from_vp(v, x_mid, y0)
-  const bottom = local_angle_from_vp(v, x_mid, y1)
-  const center = local_angle_from_vp(v, x_mid, y_mid)
-  return { center, lr_delta: right - left, tb_delta: bottom - top }
+  const x_mid = (Math.min(...xs) + Math.max(...xs)) / 2
+  const y_mid = (Math.min(...ys) + Math.max(...ys)) / 2
+  return local_angle_from_vp(v, x_mid, y_mid)
 }

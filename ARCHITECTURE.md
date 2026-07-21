@@ -222,8 +222,8 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               same lazy-fetch + IndexedDB-cache pattern as dewarp.ts.
       vanishing_point.ts     Vanishing-point estimation from detected text lines (§7.1b):
                               PROSAC/MSAC/IRLS, via cv.eigen (no SVDecomp binding in cv.js).
-      vp_correct.ts          One remap mechanism for both skew and trapezoid correction (§7.1b),
-                              derived from the vanishing point.
+      vp_correct.ts          Rotation (skew) correction remap (§7.1b), derived from the
+                              vanishing point.
       idb.ts                 Generic IndexedDB open/request/transaction-wait helpers, used by
                               dewarp.ts's and dbnet.ts's ONNX-model-weight caches (the only
                               disk-cached assets — per-page rasters are RAM-only, see §7).
@@ -740,7 +740,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | DPI-scaled kernels | — | **Not ported.** `imaging.py`'s `_dpi_scale()` scales the Sauvola window / bg-kernel / min-area by source DPI (0.5×–4× clamp) so scans at different resolutions binarize comparably. The web always uses the base `SAUVOLA_WINDOW`/`BG_KERNEL_SIZE` regardless of DPI. Low-severity residual gap — SRC_DPI is fixed at 200 in the web (no variable-DPI source rasters), so this mainly affects the B/W filter's absolute kernel size relative to `imaging.py`'s 150 DPI reference, not correctness. |
 | 2× supersample refinement | — | **Not ported.** `clean_document_bilevel` upscales 2× before thresholding then downsamples for a cleaner edge; the web version thresholds at native resolution. Cosmetic quality difference only. |
 | Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model → bilinear resample | Implemented — two-stage ONNX pipeline, EPs `['webgpu','wasm']` gated on `navigator.gpu`, `numThreads=1` |
-| Deskew angle | `estimate_deskew()` (`pdf/deskew.ts`, warp classifier only) + `estimate_vanishing_point()`/`vp_edge_angles()` (`pdf/vanishing_point.ts`) + `apply_vp_correction()` (`pdf/vp_correct.ts`) | **Web-only addition, not a desktop port.** Spec §7.1/§7.1b: a page the classic-CV warp classifier finds not-warped gets its own text-line-detection (`pdf/dbnet.ts`, DBNet ONNX) + vanishing-point fit, corrected via one remap that handles both skew and trapezoid — added because a page already dewarped elsewhere was being needlessly re-warped, introducing its own residual distortion. Desktop has no equivalent path; there is no parity gap to track here. |
+| Deskew angle | `estimate_deskew()` (`pdf/deskew.ts`, warp classifier only) + `estimate_vanishing_point()`/`vp_center_angle()` (`pdf/vanishing_point.ts`) + `apply_vp_correction()` (`pdf/vp_correct.ts`) | **Web-only addition, not a desktop port.** Spec §7.1/§7.1b: a page the classic-CV warp classifier finds not-warped gets its own text-line-detection (`pdf/dbnet.ts`, DBNet ONNX) + vanishing-point fit, corrected via a single rotation remap — added because a page already dewarped elsewhere was being needlessly re-warped, introducing its own residual distortion. Desktop has no equivalent path; there is no parity gap to track here. |
 
 `detect_content()` downscales to `DETECT_MAX_PX` for speed used a direct `cv.adaptiveThreshold` call
 for detection with no relationship to the B/W filter's algorithm at all, which was wrong on two

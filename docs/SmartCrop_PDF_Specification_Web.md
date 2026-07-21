@@ -598,17 +598,16 @@ three things it needs:
                  |                        |
                  |                       yes
                  |                        |
-                 |          one remap corrects skew AND
-                 |          trapezoid together (§7.1b)
+                 |          one remap corrects skew (§7.1b)
                  +------------------------+
                             |
                           base (§7)
 ```
 
 This exists because a page that has already been correctly dewarped elsewhere and only carries
-incidental skew or keystone would otherwise be needlessly re-warped by the ONNX pass, which can
-introduce its own small residual distortion on input that didn't need mesh correction. Execution
-providers for the ONNX path are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no
+incidental skew would otherwise be needlessly re-warped by the ONNX pass, which can introduce its
+own small residual distortion on input that didn't need mesh correction. Execution providers for
+the ONNX path are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no
 `SharedArrayBuffer` dependency (GitHub Pages cannot set the COOP/COEP headers that would require).
 The **Dewarp supersample** setting (§14, default 2.0) renders the page larger before the mesh remap
 and downsamples after, trading time for less resampling blur — it has no effect on the not-warped
@@ -619,13 +618,11 @@ rotation — rotating a page that already has Dewarp&Deskew applied never re-run
 either correction path, only cheaply reorients the already-computed result. Only pressing the Dewarp
 & Deskew button computes it; only Undo removes it.
 
-There is no separate "just rotate" path: a pure skew is the degenerate case of the same
-vanishing-point model a real keystone uses (the vanishing point recedes to infinity), so one
-correction mechanism handles both — see §7.1b. An earlier revision shipped classic-CV-only rotation
-for skew and explicitly left keystone/trapezoid uncorrected (five classic-CV, text-only detection
-techniques were evaluated and none reliably separated real keystone distortion from ordinary
-page-layout noise on real content); §7.1b's text-line-detection-based approach is what made
-keystone detection reliable enough to ship.
+There is no separate "just rotate" path for skew: §7.1b's vanishing-point-based rotation estimate is
+just materially more precise than a hand-rolled row-profile search would be, since it's fit from many
+individually detected text lines rather than one whole-page aggregate — see §7.1b. Automatic
+trapezoid/keystone correction (beyond simple rotation) was investigated and abandoned as unreliable
+on real content; see `docs/detrapezoid_research.md` (gitignored, local reference only).
 
 ### 7.1a Warp classifier (classic CV, no ONNX/DBNet)
 
@@ -639,34 +636,28 @@ rule as Auto-detect, §16.3):
    work (§7.2, §16) — cheap, no ONNX, no DBNet, no OpenCV mesh warp.
 2. **Sharpness score** — from that same search, `best_row_variance / mean_ink_per_row²` at the winning
    angle. A page whose curl/fold cannot be fixed by any single rotation keeps a blurred row profile
-   even at its best angle, so this stays low; a flat, purely-rotated, or keystoned page's profile
-   becomes sharp at *some* angle, so this stays high — verified that keystone distortion does not
-   depress this score (a trapezoid-distorted real test page classifies not-warped, same as flat).
-   `WARP_SHARPNESS_MIN` (§17) is the cutoff.
+   even at its best angle, so this stays low; a flat or purely-rotated page's profile becomes sharp
+   at *some* angle, so this stays high. `WARP_SHARPNESS_MIN` (§17) is the cutoff.
 3. **Branch**: `sharpness < WARP_SHARPNESS_MIN` → **warped** → the existing ONNX two-stage pipeline
    (unchanged). Otherwise → **not warped** → §7.1b.
 
 Targets well under 100ms/page (§16) — this angle search's own result is not reused by §7.1b, which
 estimates its own angle from a different, more precise source (detected text lines, not a single
-whole-page row profile) built specifically to also cover trapezoid, not just rotation.
+whole-page row profile).
 
-### 7.1b Skew & trapezoid correction (DBNet + dual vanishing point)
+### 7.1b Skew correction (DBNet + vanishing point)
 
 Runs only for a page the classifier (§7.1a) found not warped.
 
-A single vanishing point derived from text-*line* direction can only ever rectify convergence in
-that one family of originally-parallel lines. A common real keystone (page tilted about a
-horizontal axis — top edge narrower or wider than the bottom) changes each line's *width* with
-height but **not its angle at all**: the line-direction vanishing point for that distortion sits
-exactly at infinity, carrying zero signal, no matter how strong the keystone (proven analytically —
-constructing that exact homography and computing its true vanishing point gives `vz = 0` identically,
-confirmed against the `trap.png`/`trap_90.png` fixtures). A second, independent signal — the local
-*character-stroke* orientation (the short axis of each glyph, not the long axis of the line) — does
-carry it: under that same homography, stroke angle provably varies across the width even though line
-angle doesn't (verified both analytically and against real pixels in `trap.png` via a gradient
-structure-tensor probe: a real, monotonic multi-degree stroke-angle swing where the line-angle signal
-reads exactly zero). §7.1b therefore estimates **two** vanishing points — one from line direction, one
-from stroke direction — and rectifies against both.
+Automatic trapezoid/keystone correction (detecting and removing a page tilted about a horizontal or
+vertical axis, not just simple rotation) was investigated at length — a second vanishing point from
+character-stroke direction, a direct line-width-vs-position fit, and inter-character pitch were all
+tried — and abandoned: none cleared the measurement-noise floor of DBNet's own per-region detection
+precision on real scanned pages, across multiple real content types. See
+`docs/detrapezoid_research.md` (gitignored, local reference only) for the full investigation. §7.1b
+therefore corrects **rotation (skew) only** — via a single vanishing point, estimated more precisely
+than §7.1a's own row-profile search because it's fit from many individually detected text lines, not
+one whole-page aggregate.
 
 1. **Text-line detection** — a lightweight scene-text detector (DBNet, PP-OCRv4 mobile, ONNX,
    Apache-2.0, ~4.7MB — same lazy-fetch-once + IndexedDB-cache pattern as the UVDoc dewarp models,
@@ -674,91 +665,46 @@ from stroke direction — and rectifies against both.
    detection confidence. Only elongated, unambiguous quads are kept (`DBNET_MIN_WIDTH_PX`,
    `DBNET_MIN_ASPECT_RATIO`) — a near-square region (most often a short page-number box) has no
    well-defined long axis, and including it corrupts the fit with a spurious near-zero-angle
-   reading. Each kept quad becomes one **line-direction** segment (its long axis's two endpoints)
-   with two weights: detection confidence (is this really text?) and a leverage weight, `width²`
-   (how precisely can this region's angle even be measured? — a narrow region's contour is
+   reading. Each kept quad becomes one line segment (its long axis's two endpoints) with two
+   weights: detection confidence (is this really text?) and a leverage weight, `width²` (how
+   precisely can this region's angle even be measured? — a narrow region's contour is
    pixel-quantized enough that a small true tilt can round away to exactly zero before any fitting
    ever sees it; width alone, independent of confidence, determines how much that quantization
    matters). Both weights are required — confidence alone under-penalizes a narrow-but-confident
-   detection, which was found (real trapezoid test page) to cause the fit to overshoot and flip
-   sign on one axis while getting worse on the other; adding the leverage weight fixed it
-   completely (residual dropped from -1.60° to +0.04° on that same page, verified). A rotated
-   bounding quad's *short* axis is always exactly perpendicular to its long axis by construction
-   (it's a fitted rectangle) and carries no independent information — it is **not** used as the
-   stroke-direction signal below.
-2. **Stroke-direction measurement** — independently, over the ink pixels inside each kept
-   detection's own region, a gradient structure tensor (`Σ Ix², ΣIxIy, ΣIy²` over edge pixels)
-   gives the dominant local edge orientation; the stroke direction is that orientation rotated 90°.
-   This is a per-region measurement of the actual pixel content, not a derivative of the long-axis
-   angle. Each region with enough edge-pixel signal becomes one **stroke-direction** segment
-   (through the region's centroid, in the measured direction) with a leverage weight from its
-   edge-pixel sample count.
-3. **Vanishing-point estimation** — text lines (or, for the second pass, character strokes) that are
-   truly parallel in the real document converge to a common vanishing point when extended, under any
-   homography (pure rotation is the point-at-infinity special case, not a separate model). The same
-   estimator runs once per signal — on the line-direction segments (giving `v_h`) and, independently,
-   on the stroke-direction segments (giving `v_s`, or `null` if too few regions had usable stroke
-   signal) — via:
+   detection, which was found (real skewed-page fixture) to cause the fit to overshoot; adding the
+   leverage weight fixed it completely (residual dropped from -1.60° to +0.04° on that same page,
+   verified).
+2. **Vanishing-point estimation** — text lines that are truly parallel in the real document
+   converge to a common vanishing point when extended. Estimated via:
    - **PROSAC**: line *pairs* are tried in order of decreasing combined confidence×leverage, not
-     uniform-random order — a real, well-measured line is more likely to give a good initial
+     uniform-random order — a real, well-measured text line is more likely to give a good initial
      vanishing-point hypothesis than a random one.
    - **MSAC**: each candidate is scored by a bounded loss (`min(residual², threshold²)` summed,
      weighted), not a hard inlier count — smoother preference among close candidates.
    - **IRLS**: the winning candidate is refined by iterating confidence×leverage×Huber-residual
      reweighted least squares (via eigendecomposition of the weighted line-coefficient matrix) until
      convergence. The vanishing point itself is represented in homogeneous coordinates
-     `(vx, vy, vz)` on the unit sphere — this is what lets a pure rotation (vz → 0) and a real
-     keystone (vz finite) share one estimator with no branch between them.
+     `(vx, vy, vz)` on the unit sphere.
+3. **Reading the angle** — the implied local text-line angle is the direction from a point toward
+   the vanishing point, evaluated at the *center of the observed text's own extent* — NOT the
+   page's physical center — never extrapolated out to the page's physical edges: extrapolating past
+   where any text actually was amplifies slope-estimation noise into a large false reading
+   (verified: doing this produced a spurious multi-degree reading on a known-flat real page).
+4. **Decision**: correct if `|center| > DESKEW_MIN_DEG` (§17); otherwise no-op. Also no-op if too
+   few text lines were detected to fit a vanishing point at all (e.g. a near-blank page) — the safe
+   default is to leave such a page alone, same as "flat".
+5. **Correction** — a single rotation about the page's own center, anchored so that point stays
+   fixed. The ideal rotation is split into `theta_coarse` (the nearest multiple of 90°) and a small
+   residual. **Only the residual is ever applied** — Dewarp & Deskew never performs a coarse
+   90°/180°/270° reorientation regardless of what the detected vanishing point implies; that stays
+   `Rotate`'s job (§12), and this is true independent of the page's current display rotation,
+   consistent with §7.1's "runs against the page's own content" invariant. A page whose real content
+   happens to be rotated a multiple of 90° (e.g. fed sideways) keeps that orientation — only its
+   fine skew, if any, is corrected.
 
-   A single character stroke is a far shorter, thinner baseline for angle measurement than a whole
-   text line, so `v_s`'s fit is inherently noisier than `v_h`'s — its own `mean_residual` (the
-   estimator's fit-quality output, same units as `VP_INLIER_THRESH`) must clear `VP_STROKE_
-   MAX_RESIDUAL` (§17) or it's discarded (treated as `null`) rather than used, for the correction
-   or the decision gate. Verified against real content: the trap.png/trap_90.png fixtures' clean
-   `v_h` fits read ~0.009–0.013 residual; their `v_s` fits, even after de-rotating each region to
-   its own local frame before measuring (an axis-aligned bounding box around a near-vertical region
-   routinely pulled in a neighboring line, corrupting the reading), still read ~0.033–0.040 —
-   visually confirmed to actively distort the page (a diagonal shear) when used unfiltered. No real
-   trustworthy `v_s` fit was available to calibrate the boundary itself; reuses `VP_INLIER_THRESH`'s
-   scale, which cleanly rejects both real noisy fits above without a single false-positive rejection
-   yet observed. A future page with cleaner per-region stroke detection would still benefit.
-4. **Reading the angle** — the implied local angle at any point is the direction from that point
-   toward the vanishing point (continuous as vz → 0, reducing to a constant direction — no special
-   case needed). Evaluated only within the *observed* segments' own left/right/top/bottom extent,
-   never extrapolated out to the page's physical edges — extrapolating past where any text actually
-   was amplifies slope-estimation noise into a large false reading (verified: doing this produced a
-   spurious multi-degree "trapezoid" on a known-flat real page). This gives a center angle plus an
-   `lr_delta` and `tb_delta` (the angle swing across the observed width/height) — computed once for
-   `v_h` against the line segments, and again for `v_s` against the stroke segments.
-5. **Decision**: correct if any of `v_h`'s `|center| > DESKEW_MIN_DEG`, `v_h`'s `|lr_delta|` or
-   `|tb_delta| > TRAP_DELTA_MIN_DEG`, or — the width-only-keystone case `v_h` cannot see — `v_s`'s
-   own `|lr_delta|` or `|tb_delta| > TRAP_DELTA_MIN_DEG` (§17); otherwise no-op. Also no-op if too
-   few text lines were detected to fit `v_h` at all (e.g. a near-blank page) — the safe default is
-   to leave such a page alone, same as "flat". `v_s` being unavailable never blocks correction on its
-   own — it only adds a second way to *trigger* correction, never a second requirement.
-6. **Correction** — one composed remap for skew and both trapezoid axes together, anchored at the
-   page's own center so that point stays fixed:
-   - `theta_raw` is the rotation that would carry `v_h` exactly to horizontal. It is split into
-     `theta_coarse` (the nearest multiple of 90°) and a small residual. **Only the residual is ever
-     applied as an actual rotation** — Dewarp & Deskew never performs a coarse 90°/180°/270°
-     reorientation regardless of what the detected vanishing points imply; that stays `Rotate`'s job
-     (§12), and this is true independent of the page's current display rotation, consistent with
-     §7.1's "runs against the page's own content" invariant. A page whose real content happens to be
-     rotated a multiple of 90° (e.g. fed sideways) keeps that orientation — only its fine skew and
-     trapezoid, if any, are corrected.
-   - The remaining two degrees of freedom (one 1-DOF perspective term from `v_h`, needed regardless
-     of `v_s`; a second, `v_s`-derived shear+perspective pair, only when `v_s` is available) are
-     solved so that `v_h` maps to the point at infinity in the horizontal direction and `v_s` maps to
-     the point at infinity in the vertical direction — i.e. text lines become level *and* the page's
-     left/right and top/bottom margins become parallel, in one closed-form inverse map, not two
-     passes. Without a usable `v_s`, this reduces exactly to a line-direction-only correction (skew
-     plus the one keystone axis line angle can see) — graceful degradation, not a different code
-     path.
-
-Target: DBNet inference + both vanishing-point fits + the remap together, well under 1s/page (§16) —
-this branch is only reached for pages that already avoided the ONNX path, so the budget does not
-stack with it. Real-content residual after correction: ~0.04° on the trapezoid-distorted test page
-(down from a raw ~1.6° reading before the leverage-weighting fix above), essentially fully corrected.
+Target: DBNet inference + vanishing-point fit + the rotation remap together, well under 1s/page
+(§16) — this branch is only reached for pages that already avoided the ONNX path, so the budget
+does not stack with it.
 
 ### 7.2 Filter modes (each 3 strengths)
 
@@ -1050,7 +996,7 @@ install/PWA-add-to-homescreen step is required either way.
 | Auto-detect per page | < 100ms (SCANNED: raw source, not the processed work image; NORMAL: text-layer, no raster at all) |
 | Dewarp per page (ONNX stage) | seconds on the 1-thread WASM execution provider; fast on WebGPU where available |
 | Warp classifier per page (§7.1a, classic CV) | < 100ms — flag and investigate if exceeded |
-| Skew & trapezoid correction per page (§7.1b, DBNet + vanishing point) | < 1s — flag and investigate if exceeded; only reached on pages that already skipped the ONNX path |
+| Skew correction per page (§7.1b, DBNet + vanishing point) | < 1s — flag and investigate if exceeded; only reached on pages that already skipped the ONNX path |
 | Export per page (rasterized path) | < 300ms |
 | First OpenCV.js WASM load | < 3s, once per session (~10MB SIMD build, lazy — SCANNED documents only) |
 | First ONNX model fetch + init | < 5s, once per session (cached in IndexedDB after; 0ms on repeat sessions) |
@@ -1081,20 +1027,15 @@ MODE_TEXT_MIN = 8    DETECT_MAX_PX = 1400    BORDER_FRAC = 0.02
 MIN_COMP_FRAC = 2.5e-4    FULL_PAGE_FRAC = 0.97    DESKEW_MAX_DEG = 15.0
 # warp classifier (§7.1a) — DESKEW_MAX_DEG above is the search RANGE, not a decision cutoff
 WARP_SHARPNESS_MIN = 1.0    DESKEW_CLASSIFY_DOWNSCALE_PX = 400
-# skew & trapezoid correction (§7.1b) — decision cutoffs, calibrated against real-content noise
-# floor (a known-flat real page reads ~0.2-0.3deg center / ~0.5deg lr_delta on this estimator, so
-# these sit clearly above that, not at the originally-hoped-for 0.2deg — see PROGRESS.md)
-DESKEW_MIN_DEG = 0.5    TRAP_DELTA_MIN_DEG = 0.7
+# skew correction (§7.1b) — decision cutoff, calibrated against real-content noise floor (a
+# known-flat real page reads ~0.2-0.3deg center on this estimator, so this sits clearly above
+# that, not at the originally-hoped-for 0.2deg — see PROGRESS.md)
+DESKEW_MIN_DEG = 0.5
 # DBNet (PP-OCRv4 mobile det, ONNX, Apache-2.0) text-line detection for §7.1b
 DBNET_MODEL_URL = 'models/ch_PP-OCRv4_det.onnx'    DBNET_MODEL_CACHE_KEY = 'dbnet-ppocrv4-det-v1'
 DBNET_MAX_SIDE_PX = 1920    DBNET_PROB_THRESH = 0.3    DBNET_UNCLIP_RATIO = 1.6
 DBNET_MIN_AREA_PX = 20    DBNET_MIN_WIDTH_PX = 30    DBNET_MIN_ASPECT_RATIO = 3.0
-# per-region stroke-direction measurement (§7.1b step 2) — the second vanishing point's input
-STROKE_INK_GRAY_MAX = 200    STROKE_EDGE_MAG2_MIN = 400    STROKE_MIN_EDGE_PIXELS = 20
-# v_s's own fit is discarded (not just its absence) if mean_residual exceeds this — see §7.1b step 3
-VP_STROKE_MAX_RESIDUAL = 0.02
-# vanishing-point estimation (§7.1b) — PROSAC/MSAC/IRLS, shared by both the line- and stroke-
-# direction passes
+# vanishing-point estimation (§7.1b) — PROSAC/MSAC/IRLS
 VP_INLIER_THRESH = 0.02    VP_HUBER_DELTA = 0.02    VP_IRLS_ITERS = 8    VP_MAX_PAIRS = 400
 # Sauvola / illumination-flatten (real box-filter Sauvola, not an adaptiveThreshold approximation)
 SAUVOLA_R = 127.5    SAUVOLA_WINDOW = 51    BG_KERNEL_SIZE = 51    BG_DOWNSCALE = 4
@@ -1223,8 +1164,8 @@ yes/no confirm dialog, single OK button), never a silent failure and never an au
 20. Image-format export (JPG/PNG/TIFF) always delivers one `.zip`, never loose per-page files
     (§10.5).
 21. Dewarp & Deskew's per-page pipeline (§7.1a/§7.1b) is deterministic and content-only: the same
-    `source[i]` always classifies the same way and takes the same path (ONNX / skew-and-trapezoid
-    correction / no-op), independent of page order, selection size, or prior Undo/Redo state.
+    `source[i]` always classifies the same way and takes the same path (ONNX / skew correction /
+    no-op), independent of page order, selection size, or prior Undo/Redo state.
 21. Crop with no source is a no-op: at split = 1 with no active detection and no drawn window on any
     selected page, Crop commits nothing and takes no snapshot.
 22. A committed split page ignores window gestures except a fresh draw, which re-commits only the

@@ -4,8 +4,8 @@
 // real fixtures) — this file only tests the pure arithmetic given already-computed numbers, same
 // split as dewarp.ts's fp16 helpers vs. its ONNX-dependent apply_dewarp.
 import { describe, it, expect } from 'vitest'
-import { classify_warp, needs_skew_trapezoid_correction } from '@core/deskew_classify'
-import { WARP_SHARPNESS_MIN, DESKEW_MIN_DEG, TRAP_DELTA_MIN_DEG } from '@core/constants'
+import { classify_warp, needs_skew_correction } from '@core/deskew_classify'
+import { WARP_SHARPNESS_MIN, DESKEW_MIN_DEG } from '@core/constants'
 
 describe('classify_warp (spec-web §7.1a)', () => {
   it('classifies WARPED when sharpness is below the cutoff', () => {
@@ -24,54 +24,26 @@ describe('classify_warp (spec-web §7.1a)', () => {
   })
 })
 
-describe('needs_skew_trapezoid_correction (spec-web §7.1b)', () => {
-  it('no-op when every axis is within its noise-floor threshold', () => {
-    expect(needs_skew_trapezoid_correction(0, 0, 0)).toBe(false)
-    expect(needs_skew_trapezoid_correction(DESKEW_MIN_DEG, TRAP_DELTA_MIN_DEG, TRAP_DELTA_MIN_DEG)).toBe(false)
-    expect(needs_skew_trapezoid_correction(-DESKEW_MIN_DEG, -TRAP_DELTA_MIN_DEG, -TRAP_DELTA_MIN_DEG)).toBe(false)
+describe('needs_skew_correction (spec-web §7.1b)', () => {
+  it('no-op when the center angle is within its noise-floor threshold', () => {
+    expect(needs_skew_correction(0)).toBe(false)
+    expect(needs_skew_correction(DESKEW_MIN_DEG)).toBe(false)
+    expect(needs_skew_correction(-DESKEW_MIN_DEG)).toBe(false)
   })
 
-  it('corrects when the center angle alone exceeds DESKEW_MIN_DEG (pure skew)', () => {
-    expect(needs_skew_trapezoid_correction(DESKEW_MIN_DEG + 0.01, 0, 0)).toBe(true)
-    expect(needs_skew_trapezoid_correction(-(DESKEW_MIN_DEG + 0.01), 0, 0)).toBe(true)
+  it('corrects once the center angle exceeds DESKEW_MIN_DEG', () => {
+    expect(needs_skew_correction(DESKEW_MIN_DEG + 0.01)).toBe(true)
+    expect(needs_skew_correction(-(DESKEW_MIN_DEG + 0.01))).toBe(true)
   })
 
-  it('corrects when lr_delta alone exceeds TRAP_DELTA_MIN_DEG (pure horizontal keystone)', () => {
-    expect(needs_skew_trapezoid_correction(0, TRAP_DELTA_MIN_DEG + 0.01, 0)).toBe(true)
-    expect(needs_skew_trapezoid_correction(0, -(TRAP_DELTA_MIN_DEG + 0.01), 0)).toBe(true)
-  })
-
-  it('corrects when tb_delta alone exceeds TRAP_DELTA_MIN_DEG (pure vertical keystone)', () => {
-    expect(needs_skew_trapezoid_correction(0, 0, TRAP_DELTA_MIN_DEG + 0.01)).toBe(true)
-    expect(needs_skew_trapezoid_correction(0, 0, -(TRAP_DELTA_MIN_DEG + 0.01))).toBe(true)
-  })
-
-  it('corrects when skew and trapezoid are combined, even if no single axis alone would trigger', () => {
-    // Real trapezoid fixture pattern: center under threshold, tb over — still corrects (OR gate).
-    expect(needs_skew_trapezoid_correction(DESKEW_MIN_DEG - 0.1, 0, TRAP_DELTA_MIN_DEG + 0.1)).toBe(true)
-  })
-
-  it('is symmetric in sign on every axis independently', () => {
-    for (const [a, l, t] of [[0.6, 0, 0], [0, 0.8, 0], [0, 0, 0.8], [0.6, 0.8, 0.9]] as const) {
-      expect(needs_skew_trapezoid_correction(a, l, t)).toBe(needs_skew_trapezoid_correction(-a, -l, -t))
+  it('is symmetric in sign', () => {
+    for (const a of [0.6, 0.8, 0.9]) {
+      expect(needs_skew_correction(a)).toBe(needs_skew_correction(-a))
     }
   })
 
   it('never throws on degenerate input', () => {
-    expect(() => needs_skew_trapezoid_correction(0, 0, 0)).not.toThrow()
-    expect(() => needs_skew_trapezoid_correction(NaN, 0, 0)).not.toThrow()
-  })
-
-  it('corrects on the stroke-direction (second VP) deltas alone — the width-only-keystone case the line-direction VP cannot see', () => {
-    expect(needs_skew_trapezoid_correction(0, 0, 0, TRAP_DELTA_MIN_DEG + 0.01, 0)).toBe(true)
-    expect(needs_skew_trapezoid_correction(0, 0, 0, 0, TRAP_DELTA_MIN_DEG + 0.01)).toBe(true)
-    expect(needs_skew_trapezoid_correction(0, 0, 0, -(TRAP_DELTA_MIN_DEG + 0.01), 0)).toBe(true)
-  })
-
-  it('omitting the stroke-direction deltas never blocks correction — they only ever add a trigger', () => {
-    expect(needs_skew_trapezoid_correction(DESKEW_MIN_DEG + 0.01, 0, 0)).toBe(true)
-    expect(needs_skew_trapezoid_correction(0, 0, 0)).toBe(false)
-    expect(needs_skew_trapezoid_correction(0, 0, 0, undefined, undefined)).toBe(false)
-    expect(needs_skew_trapezoid_correction(0, 0, 0, TRAP_DELTA_MIN_DEG, TRAP_DELTA_MIN_DEG)).toBe(false)
+    expect(() => needs_skew_correction(0)).not.toThrow()
+    expect(() => needs_skew_correction(NaN)).not.toThrow()
   })
 })

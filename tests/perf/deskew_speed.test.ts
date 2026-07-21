@@ -95,80 +95,6 @@ function bench(fn: () => void, iters: number): number {
   return (performance.now() - t0) / iters
 }
 
-// A REAL projective warp (not synthetic line segments) — width-only keystone: a page tilted about
-// a HORIZONTAL axis (top edge pulled in by `inset` px each side). Text-line ANGLE is provably
-// unaffected by this exact family (the true vanishing point of originally-horizontal lines under
-// it has vz=0 identically — verified analytically, see vp_correct.ts's file header), which is
-// exactly why a second (stroke-direction) vanishing point is needed. Returns the warped mat plus
-// the TRUE v_h/v_s (computed directly from the homography's own matrix, not detected — same
-// "known VP, isolates the correction math" pattern as segment_through_vp above).
-function warp_keystone_test(mat: any, inset: number): { out: any; v_h: readonly [number, number, number]; v_s: readonly [number, number, number] } {
-  const w = mat.cols, h = mat.rows
-  const src = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, w, 0, w, h, 0, h])
-  const dst = cv.matFromArray(4, 1, cv.CV_32FC2, [inset, 0, w - inset, 0, w, h, 0, h])
-  const M = cv.getPerspectiveTransform(src, dst)
-  src.delete(); dst.delete()
-  const d = M.data64F as Float64Array   // row-major [m00,m01,m02, m10,m11,m12, m20,m21,m22]
-
-  const out = new cv.Mat()
-  cv.warpPerspective(mat, out, M, new cv.Size(w, h), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar(255, 255, 255, 255))
-  M.delete()
-
-  // v_h = image of the x-axis-at-infinity direction (1,0,0) = M's first column; v_s = image of
-  // (0,1,0) = M's second column (see vp_correct.ts's file header for the composition this feeds).
-  const norm3 = (x: number, y: number, z: number): [number, number, number] => {
-    const n = Math.hypot(x, y, z); return [x / n, y / n, z / n]
-  }
-  const v_h = norm3(d[0] as number, d[3] as number, d[6] as number)
-  const v_s = norm3(d[1] as number, d[4] as number, d[7] as number)
-  return { out, v_h, v_s }
-}
-
-// Leftmost/rightmost dark-pixel x within a row band — a direct measurement of the page's WIDTH at
-// that height, independent of any angle-based classifier (estimate_deskew can't see this axis of
-// distortion at all, which is the point).
-function ink_x_extent(mat: any, y0: number, y1: number): { left: number; right: number } {
-  const gray = new cv.Mat()
-  cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY)
-  const w = gray.cols
-  let left = w, right = 0
-  for (let y = y0; y < y1; y++) {
-    for (let x = 0; x < w; x++) {
-      if ((gray.ucharPtr(y, x)[0] as number) < 128) { if (x < left) left = x; if (x > right) right = x }
-    }
-  }
-  gray.delete()
-  return { left, right }
-}
-
-// Topmost/bottommost row containing ink — the correction has no scale/position normalization
-// (only rectifies angles), so corrected content can legitimately sit at different absolute y
-// than the input; comparing widths at FIXED canvas offsets after correction is unreliable, but
-// comparing widths at the same RELATIVE position within the content's own extent isn't.
-function content_y_bounds(mat: any): { top: number; bot: number } {
-  const gray = new cv.Mat()
-  cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY)
-  const h = gray.rows, w = gray.cols
-  let top = -1, bot = -1
-  for (let y = 0; y < h; y++) {
-    let has_ink = false
-    for (let x = 0; x < w; x += 4) { if ((gray.ucharPtr(y, x)[0] as number) < 128) { has_ink = true; break } }
-    if (has_ink) { if (top === -1) top = y; bot = y }
-  }
-  gray.delete()
-  return { top, bot }
-}
-
-// Ink width in a thin band near the top and near the bottom of the content's OWN extent (not the
-// canvas edges — see content_y_bounds).
-function content_top_bottom_width(mat: any): { top_w: number; bot_w: number } {
-  const { top, bot } = content_y_bounds(mat)
-  const span = bot - top
-  const t = ink_x_extent(mat, top + Math.floor(span * 0.05), top + Math.floor(span * 0.15))
-  const b = ink_x_extent(mat, bot - Math.floor(span * 0.15), bot - Math.floor(span * 0.05))
-  return { top_w: t.right - t.left, bot_w: b.right - b.left }
-}
-
 describe('warp classifier (spec-web §7.1a, §16 budgets)', () => {
   let flat: any, skewed_2_3: any, warped: any
 
@@ -242,27 +168,6 @@ describe('vanishing-point math (spec-web §7.1b) — direct geometry, no DBNet',
     expect(Math.abs(recovered_angle - true_angle)).toBeLessThan(0.05)
   })
 
-  it('recovers a known finite (keystone) VP from clean segments', async () => {
-    const { estimate_vanishing_point, vp_edge_angles } = await import('@pdf/vanishing_point')
-    const true_v: readonly [number, number, number] = (() => {
-      const px = 50_000, py = -80
-      const norm = Math.hypot(px, py, 1)
-      return [px / norm, py / norm, 1 / norm]
-    })()
-    const anchors = [[100, 100], [900, 100], [300, 900], [700, 1600], [500, 1755], [200, 300]] as const
-    const segments = anchors.map(([x, y]) => segment_through_vp(true_v, x, y))
-    const confidences = anchors.map(() => 0.99)
-    const weights = anchors.map(() => 200 * 200)
-
-    const result = estimate_vanishing_point(segments, confidences, weights)
-    expect(result).not.toBeNull()
-    const edges = vp_edge_angles(result!.v, segments)
-    // This keystone's tb swing over the anchor range is a few degrees; lr swing is negligible
-    // (px is far outside the frame) — matches the real trapezoid fixture's characterization.
-    expect(Math.abs(edges.tb_delta)).toBeGreaterThan(0.5)
-    expect(Math.abs(edges.lr_delta)).toBeLessThan(0.1)
-  })
-
   it('PROSAC/MSAC stay robust to a minority of outlier segments', async () => {
     const { estimate_vanishing_point, local_angle_from_vp } = await import('@pdf/vanishing_point')
     const true_angle = -1.5
@@ -334,41 +239,6 @@ describe('VP-based correction (spec-web §7.1b) — direct geometry, no DBNet', 
       console.error(`[perf] FLAG: VP correction ${ms.toFixed(1)}ms exceeds the 1s/page budget`)
     }
     expect(ms).toBeLessThan(1000)
-  })
-
-  // Real page-of-text trapezoid test (not synthetic line segments): the width-only keystone that
-  // a text-LINE-direction vanishing point is structurally blind to (see warp_keystone_test) — the
-  // exact class of bug reported against the trap.png/trap_90.png fixtures.
-  it('a width-only keystone (page tilted about a horizontal axis) is fully rectified using both vanishing points', async () => {
-    const { apply_vp_correction } = await import('@pdf/vp_correct')
-    const { out: distorted, v_h, v_s } = warp_keystone_test(flat, 150)
-
-    const before = content_top_bottom_width(distorted)
-    // Sanity: the injected keystone really does distort width (top narrower than bottom).
-    expect(before.top_w / before.bot_w).toBeLessThan(0.85)
-
-    const corrected = apply_vp_correction(distorted.clone(), v_h, v_s)
-    const after = content_top_bottom_width(corrected)
-    distorted.delete(); corrected.delete()
-
-    // Fully rectified: top and bottom widths (measured relative to the corrected content's own
-    // extent — the correction has no scale/position normalization, so absolute canvas position
-    // isn't meaningful) now match closely, unlike the raw ratio (< 0.85) above.
-    expect(after.top_w / after.bot_w).toBeGreaterThan(0.95)
-    expect(after.top_w / after.bot_w).toBeLessThan(1.05)
-  })
-
-  it('the SAME width-only keystone is left uncorrected by the line-direction vanishing point alone (documents why the second VP is needed)', async () => {
-    const { apply_vp_correction } = await import('@pdf/vp_correct')
-    const { out: distorted, v_h } = warp_keystone_test(flat, 150)
-
-    const corrected = apply_vp_correction(distorted.clone(), v_h)   // no v_s
-    const after = content_top_bottom_width(corrected)
-    distorted.delete(); corrected.delete()
-
-    // Line-direction VP alone barely moves the ratio (it has no signal for this axis at all) —
-    // stays well short of the >0.95 full rectification the test above requires with v_s.
-    expect(after.top_w / after.bot_w).toBeLessThan(0.9)
   })
 
   it('content genuinely rotated ~90deg (e.g. fed sideways) keeps that orientation — only the small residual skew is corrected, never a coarse reorientation', async () => {

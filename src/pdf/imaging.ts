@@ -11,14 +11,14 @@ import {
   BORDER_FRAC, MIN_COMP_FRAC, DETECT_MAX_PX, CLEAN_AMOUNT,
   CC_CONNECTIVITY, BG_KERNEL_SIZE, BG_DOWNSCALE, SAUVOLA_WINDOW, SAUVOLA_R,
   BW_STRENGTH, SHARPEN_STRENGTH, DETECT_CLOSE_W, DETECT_CLOSE_H,
-  DESKEW_MAX_DEG, DESKEW_CLASSIFY_DOWNSCALE_PX, DBNET_MAX_SIDE_PX, VP_STROKE_MAX_RESIDUAL,
+  DESKEW_MAX_DEG, DESKEW_CLASSIFY_DOWNSCALE_PX, DBNET_MAX_SIDE_PX,
 } from '@core/constants'
-import { classify_warp, needs_skew_trapezoid_correction } from '@core/deskew_classify'
+import { classify_warp, needs_skew_correction } from '@core/deskew_classify'
 import { cv, type Mat, ensure_cv } from './cv'
 import { ensure_onnx, apply_dewarp } from './dewarp'
 import { estimate_deskew } from './deskew'
 import { ensure_dbnet, detect_text_lines } from './dbnet'
-import { estimate_vanishing_point, vp_edge_angles } from './vanishing_point'
+import { estimate_vanishing_point, vp_center_angle } from './vanishing_point'
 import { apply_vp_correction } from './vp_correct'
 
 // ---------------------------------------------------------------------------
@@ -320,13 +320,13 @@ async function process_page(
   const img_data = ctx.getImageData(0, 0, w, h)
   let mat = cv.matFromImageData(img_data)
 
-  // Dewarp & Deskew (spec-web §7.1): a page that's already flat or only incidentally skewed/
-  // keystoned would otherwise be needlessly re-warped by ONNX, which can introduce its own small
-  // residual distortion. §7.1a's cheap classic-CV classifier decides WARPED (full ONNX mesh-
-  // unwarp, unchanged) vs not — a not-warped page then gets §7.1b's text-line-detection +
-  // vanishing-point estimate, which corrects skew AND trapezoid via ONE mechanism (vp_correct.ts)
-  // or no-ops if neither clears its threshold. ensure_onnx/ensure_dbnet are called here, not
-  // eagerly in process_page_async, so a page never pays for a model it doesn't end up needing.
+  // Dewarp & Deskew (spec-web §7.1): a page that's already flat or only incidentally skewed would
+  // otherwise be needlessly re-warped by ONNX, which can introduce its own small residual
+  // distortion. §7.1a's cheap classic-CV classifier decides WARPED (full ONNX mesh-unwarp,
+  // unchanged) vs not — a not-warped page then gets §7.1b's text-line-detection + vanishing-point
+  // estimate, a materially more precise skew angle than §7.1a's own row-profile search, applied
+  // via vp_correct.ts, or no-ops if it clears no threshold. ensure_onnx/ensure_dbnet are called
+  // here, not eagerly in process_page_async, so a page never pays for a model it doesn't need.
   if (dewarp) {
     const { sharpness } = estimate_deskew(mat, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG)
     if (classify_warp(sharpness)) {
@@ -334,28 +334,14 @@ async function process_page(
       mat = await apply_dewarp(mat, supersample)
     } else {
       await ensure_dbnet()
-      const {
-        segments, confidences, weights, stroke_segments, stroke_confidences, stroke_weights,
-      } = await detect_text_lines(mat, DBNET_MAX_SIDE_PX)
+      const { segments, confidences, weights } = await detect_text_lines(mat, DBNET_MAX_SIDE_PX)
       const vp = estimate_vanishing_point(segments, confidences, weights)
       // vp === null (too few detected text lines, e.g. a near-blank page) -> safe no-op, same as
       // a page whose fit clears neither threshold below.
       if (vp) {
-        // Second vanishing point (§7.1b step 2, stroke direction) — sees the width-only keystone
-        // axis the line-direction vp above cannot. null when too few regions had usable stroke
-        // signal, OR when its own fit is too noisy to trust (a single character stroke is a far
-        // shorter, thinner baseline for angle measurement than a whole text line — VP_STROKE_
-        // MAX_RESIDUAL rejects the noisy case rather than feed a spurious reading into either the
-        // correction or the decision gate); the correction and decision gate both degrade
-        // gracefully to line-direction-only in that case.
-        const vs_fit = estimate_vanishing_point(stroke_segments, stroke_confidences, stroke_weights)
-        const vs = vs_fit && vs_fit.mean_residual <= VP_STROKE_MAX_RESIDUAL ? vs_fit : null
-        const { center, lr_delta, tb_delta } = vp_edge_angles(vp.v, segments)
-        const stroke_edges = vs ? vp_edge_angles(vs.v, stroke_segments) : null
-        if (needs_skew_trapezoid_correction(
-          center, lr_delta, tb_delta, stroke_edges?.lr_delta, stroke_edges?.tb_delta,
-        )) {
-          mat = apply_vp_correction(mat, vp.v, vs?.v)
+        const center = vp_center_angle(vp.v, segments)
+        if (needs_skew_correction(center)) {
+          mat = apply_vp_correction(mat, vp.v)
         }
       }
     }
