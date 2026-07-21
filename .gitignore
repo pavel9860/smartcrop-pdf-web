@@ -8,3 +8,6 @@ test-results/
 
 # Copyrighted book used as a local test fixture during debugging — never committed.
 tests/assets/Deep Work.pdf
+
+# Working notes for the demo GIF/social post — not part of the shipped docs.
+docs/Presentation_plan.txt

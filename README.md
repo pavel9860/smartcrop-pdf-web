@@ -5,6 +5,11 @@ on e-readers, phones and tablets. Everything runs client-side — no server, no 
 many files (PDFs and/or images) into a single working document, crop/filter/compress them, and
 export as PDF or a chosen image format.
 
+![SmartCrop PDF Web demo](docs/demo.gif)
+
+*Split (2-way and 4-way), auto-detect content borders, and the Dewarp & Deskew pipeline
+(deskew, de-trapezoid, B/W and Sharpen filters) — before/after on each.*
+
 ## Features
 
 - **Load & combine**: multiple PDFs/images into one document, in picker order.
@@ -68,3 +73,12 @@ npm run ci           # everything typecheck/lint/unit/e2e runs in CI
 GitHub Actions builds and publishes `dist/` to GitHub Pages on push to `main` (see
 `.github/workflows/deploy.yml`). The site deploy depends only on typecheck + unit tests + build; the
 Playwright e2e suite runs as a separate, parallel quality job.
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for setup, the local test gate,
+and PR expectations. This project follows a [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+[Apache License 2.0](LICENSE).

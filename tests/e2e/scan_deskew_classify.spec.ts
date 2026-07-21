@@ -14,6 +14,11 @@ const SKEW_ONLY_JPG = fileURLToPath(new URL(
   '../assets/Learning Python, 5th Edition_cropped_015_rot.jpg', import.meta.url))
 const TRAPEZOID_PNG = fileURLToPath(new URL(
   '../assets/Learning Python, 5th Edition_cropped_015_trap.png', import.meta.url))
+// Same page as TRAPEZOID_PNG, rotated 90deg as a whole image — regresses the vp_correct.ts bug
+// where correction only ever moved pixels vertically (map_x frozen at identity), so a keystone
+// whose correction requires horizontal movement was a complete no-op no matter how strong.
+const TRAPEZOID_90_PNG = fileURLToPath(new URL(
+  '../assets/Learning Python, 5th Edition_cropped_015_trap_90.png', import.meta.url))
 
 // §7.1b's own budget is <1s/page once the DBNet model is warm (spec-web §16); this ceiling also
 // covers the FIRST press's one-time model fetch+init (small, ~4.7MB, comparable order to UVDoc's
@@ -66,5 +71,20 @@ test('a trapezoid-distorted real scan is corrected via DBNet + vanishing-point, 
   const ms = Date.now() - t0
 
   console.log(`[scan_deskew_classify] trapezoid real scan: ${ms}ms`)
+  expect(ms).toBeLessThan(FAST_PATH_CEILING_MS)
+})
+
+test('the same trapezoid rotated 90deg (a keystone requiring horizontal correction) is also corrected', async ({ page }) => {
+  test.setTimeout(60_000)
+  await load_scan(page, TRAPEZOID_90_PNG)
+  const canvas = page.locator('canvas.page-canvas')
+
+  const before = await checksum(canvas)
+  const t0 = Date.now()
+  await page.click('#sp-dewarp')
+  await expect.poll(() => checksum(canvas), { timeout: 30_000, intervals: [100] }).not.toBe(before)
+  const ms = Date.now() - t0
+
+  console.log(`[scan_deskew_classify] trapezoid-90 real scan: ${ms}ms`)
   expect(ms).toBeLessThan(FAST_PATH_CEILING_MS)
 })
