@@ -83,8 +83,32 @@ export const DBNET_MIN_AREA_PX = 20
 export const DBNET_MIN_WIDTH_PX = 30
 export const DBNET_MIN_ASPECT_RATIO = 3.0
 
+// Per-region stroke-direction measurement (§7.1b step 2) — the second vanishing point's input.
+// Gray value below which a pixel counts as ink (0-255, RGBA->GRAY).
+export const STROKE_INK_GRAY_MAX = 200
+// Sobel gradient magnitude^2 above which an ink pixel counts as a real edge, not a flat/noise
+// pixel — same 20x20 Sobel-kernel-response order of magnitude validated on the real trap.png
+// fixture's structure-tensor probe.
+export const STROKE_EDGE_MAG2_MIN = 400
+// Below this many qualifying (ink AND edge) pixels, a region's local structure tensor is too
+// noisy to trust — skip it (no stroke-direction segment contributed) rather than feed the second
+// vanishing-point fit a spurious reading.
+export const STROKE_MIN_EDGE_PIXELS = 20
+// A single character stroke is a far shorter, thinner baseline for angle measurement than a whole
+// text line, so its per-region angle is inherently noisier — the stroke-direction VP fit's own
+// mean_residual (same units as VP_INLIER_THRESH) must clear this bar or it's discarded rather than
+// used (both for the correction and the decision gate), falling back to the line-direction-only
+// correction. Calibrated against real content: the real trap.png/trap_90.png fixtures' clean
+// line-direction fits read ~0.009-0.013 residual; their stroke-direction fits, even after fixing
+// the axis-aligned-bounding-box contamination bug, still read ~0.033-0.040 — too noisy to trust,
+// and visually confirmed to actively distort the page when used unfiltered. No real content
+// example of a trustworthy stroke fit was available to calibrate the boundary itself, so this
+// reuses VP_INLIER_THRESH's scale — cleanly rejects both real noisy fits above.
+export const VP_STROKE_MAX_RESIDUAL = 0.02
+
 // Vanishing-point estimation (§7.1b) — PROSAC/MSAC/IRLS. Thresholds are in normalized homogeneous-
 // line-coefficient units (line . point, both unit-normalized), not degrees or pixels directly.
+// Shared by both the line-direction and stroke-direction VP fits.
 export const VP_INLIER_THRESH = 0.02
 export const VP_HUBER_DELTA = 0.02
 export const VP_IRLS_ITERS = 8

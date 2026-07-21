@@ -1,66 +1,116 @@
-// vp_correct.ts — one correction mechanism for both skew and trapezoid (§7.1b), from a vanishing
-// point (vanishing_point.ts): a single matrix M = R * H, where H = [[1,0,0],[0,1,0],[gx,0,1]] is a
-// rectifying homography that sends v (in anchor-centered coordinates) to infinity along its own
-// x-axis, and R is the rotation that carries that x-axis to true horizontal — anchored so the
-// page's own center point stays fixed. A pure skew (VP at infinity, vz=0) makes gx=0, i.e. H is
-// the identity and only R corrects it; a pure keystone (vz finite, v already horizontal) makes
-// theta=0 and only H corrects it — same formula either way, no branch on which case it is.
+// vp_correct.ts — one correction mechanism for skew and both trapezoid axes (§7.1b), from up to
+// two vanishing points (vanishing_point.ts): `v_h` (text-LINE direction) and `v_s` (character-
+// STROKE direction). A single VP can only ever rectify convergence in ITS OWN family of
+// originally-parallel lines — `v_h` alone (the only signal a prior revision used) is structurally
+// blind to a keystone tilted about an axis parallel to the text baselines, since that distortion
+// changes each line's WIDTH with height but never its ANGLE (proven analytically: the true VP of
+// originally-horizontal lines under that exact homography has vz=0 identically, independent of how
+// strong the keystone is). `v_s` carries the missing signal (verified the same way, and against
+// real pixels): rectifying against BOTH sends `v_h` to horizontal infinity and `v_s` to vertical
+// infinity in one composed map, not two passes — degrading gracefully to the `v_h`-only correction
+// when `v_s` isn't available (too few regions had usable stroke signal).
 //
-// ROOT-CAUSE FIX (2nd revision): the 1st revision (H alone, gx/gy chosen to send v to infinity in
-// whatever direction it already pointed, without rotating) has zero rotational degrees of freedom
-// — its top-left 2x2 block is fixed to identity, so it can only remove perspective convergence,
-// never rotate a line to horizontal. Pure rotation is exactly the vz->0 degenerate case of that
-// family, and in that limit gx=gy=0: a complete no-op (this was the reported bug — skew and
-// top/bottom trapezoid got corrected only because those cases happened to leave a large residual
-// perspective term alongside the rotation; a pure or near-pure left-right keystone has v already
-// close to horizontal, so gx/gy solved without rotating collapsed to ~0 too). Composing a rotation
-// (to horizontal) with the 1-DOF perspective term left over (gx, with gy fixed at 0 — the natural
-// remaining DOF, equivalent to "a vertical line through the anchor stays vertical") fixes this:
-// verified against both a pure-rotation case (theta alone corrects it, gx=0) and a finite-VP
-// keystone case (theta=0, gx alone corrects it), same formula, no vz-based branching.
+// ROOT-CAUSE FIX (3rd revision, over the 2nd's rotation+1-DOF-perspective form): two more bugs
+// found this way. (a) using `v_h` alone can only ever fix the ONE keystone axis line angle can see
+// — the width-only axis (above) needed the second VP, not a better formula for the first. (b) the
+// 2nd revision's rotation angle was unbounded: a page whose real content is itself rotated a
+// multiple of 90° (fed sideways) got that whole reorientation undone by Dewarp & Deskew, which is
+// `Rotate`'s job, not this feature's (confirmed via the `trap_90.png` fixture, and via spec-web
+// §7.1's own "runs against the page's own content, independent of its current display rotation").
+// Fixed by splitting the ideal full derotation angle into the nearest multiple of 90° (never
+// applied — folded back in at the end) plus a small residual (always applied, alongside the
+// perspective/shear terms) — verified this reduces EXACTLY to the shipped 2nd-revision formula
+// when no fold is needed and no `v_s` is available, and independently verified (point-based, no
+// image-warp-direction ambiguity) that a keystone rotated 90° as a whole image gets fully
+// rectified while its 90° orientation is left alone.
 import { cv, type Mat } from './cv'
 import type { Vp } from './vanishing_point'
 
-// theta = rotation about the anchor that carries v's anchor-centered direction to horizontal;
-// gx = the remaining perspective term, solved (in the now-rotated frame) so v maps to the point at
-// infinity along that horizontal direction.
-function solve_theta_gx(v: Vp, xc: number, yc: number): readonly [number, number] {
-  const [vx, vy, vz] = v
-  const vxp = vx - vz * xc
-  const vyp = vy - vz * yc
-  const theta = Math.atan2(-vyp, vxp)
-  const vx_rot = Math.cos(theta) * vxp - Math.sin(theta) * vyp
-  const gx = Math.abs(vx_rot) < 1e-9 ? 0 : -vz / vx_rot
-  return [theta, gx]
+interface Solved {
+  readonly theta_raw: number
+  readonly theta_coarse: number
+  readonly gx: number
+  readonly gy: number
+  readonly b: number
+}
+
+// theta_raw = rotation about the anchor that would carry v_h's anchor-centered direction exactly
+// to horizontal. theta_coarse = the nearest multiple of 90° to that (never actually applied as a
+// rotation — see file header); only the residual is. gx, gy, b are solved (in the theta_raw-
+// rotated frame) so that v_h maps to horizontal infinity and — when v_s is available — v_s maps to
+// vertical infinity, via the 2x2 linear system derived in the file header's fix (b): both
+// constraints' Z=0 conditions give `[[vhx_rot, 0], [vvx_rot, vvy_rot]] * [gx, gy] = [-vhz, -vvz]`
+// (v_h's own Y=0 is automatic since theta_raw was chosen exactly for that), plus v_s's X=0
+// condition giving b independently.
+function solve(v_h: Vp, v_s: Vp | null, xc: number, yc: number): Solved {
+  const [vhx, vhy, vhz] = v_h
+  const vhxp = vhx - vhz * xc
+  const vhyp = vhy - vhz * yc
+  const theta_raw = Math.atan2(-vhyp, vhxp)
+  const theta_coarse = (Math.PI / 180) * 90 * Math.round((theta_raw * 180) / Math.PI / 90)
+
+  const c = Math.cos(theta_raw), s = Math.sin(theta_raw)
+  const vhx_rot = c * vhxp - s * vhyp   // = hypot(vhxp, vhyp), always >= 0
+
+  if (Math.abs(vhx_rot) < 1e-9) return { theta_raw, theta_coarse, gx: 0, gy: 0, b: 0 }
+  const gx0 = -vhz / vhx_rot
+
+  if (!v_s) return { theta_raw, theta_coarse, gx: gx0, gy: 0, b: 0 }
+  const [vvx, vvy, vvz] = v_s
+  const vvxp = vvx - vvz * xc
+  const vvyp = vvy - vvz * yc
+  const vvx_rot = c * vvxp - s * vvyp
+  const vvy_rot = s * vvxp + c * vvyp
+  if (Math.abs(vvy_rot) < 1e-9) return { theta_raw, theta_coarse, gx: gx0, gy: 0, b: 0 }
+
+  const b = -vvx_rot / vvy_rot
+  const gy = (-vvz - vvx_rot * gx0) / vvy_rot
+  return { theta_raw, theta_coarse, gx: gx0, gy, b }
 }
 
 // Consumes `mat` (matches apply_dewarp's convention, dewarp.ts) — caller must not reuse it after
-// this call.
-export function apply_vp_correction(mat: Mat, v: Vp, xc?: number, yc?: number): Mat {
+// this call. `v_s` (the stroke-direction VP) is optional — omit it for a line-direction-only
+// correction (e.g. a caller that hasn't computed it, or found it unreliable).
+export function apply_vp_correction(mat: Mat, v_h: Vp, v_s?: Vp | null, xc?: number, yc?: number): Mat {
   const w = mat.cols, h = mat.rows
   const cx = xc ?? w / 2
   const cy = yc ?? h / 2
-  const [theta, gx] = solve_theta_gx(v, cx, cy)
-  const c = Math.cos(theta), s = Math.sin(theta)
+  const { theta_raw, theta_coarse, gx, gy, b } = solve(v_h, v_s ?? null, cx, cy)
+  const c = Math.cos(theta_raw), s = Math.sin(theta_raw)
+  const cc = Math.cos(theta_coarse), sc = Math.sin(theta_coarse)
 
   const map_x = new cv.Mat(h, w, Number(cv.CV_32FC1))
   const map_y = new cv.Mat(h, w, Number(cv.CV_32FC1))
   const mx = map_x.data32F
   const my = map_y.data32F
 
-  // For each CORRECTED-image pixel (x,y), the source (distorted) pixel is M^-1(x,y) = H^-1(R^-1
-  // (x,y)): first undo the perspective term (1-DOF, along the rotated frame's x-axis), then rotate
-  // back by -theta into the original (distorted) frame.
+  // For each CORRECTED-image pixel (x,y), the source (distorted) pixel is the inverse of
+  // R(-theta_coarse) . N(gx,gy,b) . R(theta_raw) [source -> corrected: fully derotate+rectify via
+  // N.R(theta_raw), then rotate the result BACK by -theta_coarse to reintroduce just the coarse
+  // orientation this correction never actually applies — see file header], applied in reverse:
+  //   A) rotate by +theta_coarse (undo step A's own "rotate back by -theta_coarse")
+  //   B) apply N^-1 (the perspective+shear terms; closed form, N^-1 = [[1,-b,0],[0,1,0],
+  //      [-gx, b*gx-gy, 1]], derived from N's own adjugate)
+  //   C) rotate by -theta_raw, back into the original (distorted) frame
+  // Sanity check baked into the derivation: theta_raw == theta_coarse (a pure coarse rotation,
+  // zero residual) must give the identity map — R(-theta_raw).R(theta_coarse) = R(0) confirms the
+  // signs below, not R(-theta_coarse) in step A (which would double the coarse rotation instead of
+  // cancelling it).
   for (let y = 0; y < h; y++) {
     const base = y * w
     const Yp = y - cy
     for (let x = 0; x < w; x++) {
       const Xp = x - cx
-      let denom = 1 - gx * Xp
-      if (Math.abs(denom) < 1e-6) denom = denom < 0 ? -1e-6 : 1e-6   // guard H's own vanishing line
-      const X = Xp / denom, Y = Yp / denom
-      mx[base + x] = c * X + s * Y + cx
-      my[base + x] = -s * X + c * Y + cy
+      const X1 = cc * Xp - sc * Yp
+      const Y1 = sc * Xp + cc * Yp
+
+      let t = -gx * X1 + (b * gx - gy) * Y1 + 1
+      if (Math.abs(t) < 1e-6) t = t < 0 ? -1e-6 : 1e-6   // guard N's own vanishing line
+      const X2 = (X1 - b * Y1) / t
+      const Y2 = Y1 / t
+
+      mx[base + x] = c * X2 + s * Y2 + cx
+      my[base + x] = -s * X2 + c * Y2 + cy
     }
   }
 

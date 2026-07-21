@@ -61,4 +61,17 @@ describe('needs_skew_trapezoid_correction (spec-web §7.1b)', () => {
     expect(() => needs_skew_trapezoid_correction(0, 0, 0)).not.toThrow()
     expect(() => needs_skew_trapezoid_correction(NaN, 0, 0)).not.toThrow()
   })
+
+  it('corrects on the stroke-direction (second VP) deltas alone — the width-only-keystone case the line-direction VP cannot see', () => {
+    expect(needs_skew_trapezoid_correction(0, 0, 0, TRAP_DELTA_MIN_DEG + 0.01, 0)).toBe(true)
+    expect(needs_skew_trapezoid_correction(0, 0, 0, 0, TRAP_DELTA_MIN_DEG + 0.01)).toBe(true)
+    expect(needs_skew_trapezoid_correction(0, 0, 0, -(TRAP_DELTA_MIN_DEG + 0.01), 0)).toBe(true)
+  })
+
+  it('omitting the stroke-direction deltas never blocks correction — they only ever add a trigger', () => {
+    expect(needs_skew_trapezoid_correction(DESKEW_MIN_DEG + 0.01, 0, 0)).toBe(true)
+    expect(needs_skew_trapezoid_correction(0, 0, 0)).toBe(false)
+    expect(needs_skew_trapezoid_correction(0, 0, 0, undefined, undefined)).toBe(false)
+    expect(needs_skew_trapezoid_correction(0, 0, 0, TRAP_DELTA_MIN_DEG, TRAP_DELTA_MIN_DEG)).toBe(false)
+  })
 })

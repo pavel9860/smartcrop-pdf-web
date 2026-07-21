@@ -11,7 +11,7 @@ import {
   BORDER_FRAC, MIN_COMP_FRAC, DETECT_MAX_PX, CLEAN_AMOUNT,
   CC_CONNECTIVITY, BG_KERNEL_SIZE, BG_DOWNSCALE, SAUVOLA_WINDOW, SAUVOLA_R,
   BW_STRENGTH, SHARPEN_STRENGTH, DETECT_CLOSE_W, DETECT_CLOSE_H,
-  DESKEW_MAX_DEG, DESKEW_CLASSIFY_DOWNSCALE_PX, DBNET_MAX_SIDE_PX,
+  DESKEW_MAX_DEG, DESKEW_CLASSIFY_DOWNSCALE_PX, DBNET_MAX_SIDE_PX, VP_STROKE_MAX_RESIDUAL,
 } from '@core/constants'
 import { classify_warp, needs_skew_trapezoid_correction } from '@core/deskew_classify'
 import { cv, type Mat, ensure_cv } from './cv'
@@ -334,14 +334,28 @@ async function process_page(
       mat = await apply_dewarp(mat, supersample)
     } else {
       await ensure_dbnet()
-      const { segments, confidences, weights } = await detect_text_lines(mat, DBNET_MAX_SIDE_PX)
+      const {
+        segments, confidences, weights, stroke_segments, stroke_confidences, stroke_weights,
+      } = await detect_text_lines(mat, DBNET_MAX_SIDE_PX)
       const vp = estimate_vanishing_point(segments, confidences, weights)
       // vp === null (too few detected text lines, e.g. a near-blank page) -> safe no-op, same as
       // a page whose fit clears neither threshold below.
       if (vp) {
+        // Second vanishing point (§7.1b step 2, stroke direction) — sees the width-only keystone
+        // axis the line-direction vp above cannot. null when too few regions had usable stroke
+        // signal, OR when its own fit is too noisy to trust (a single character stroke is a far
+        // shorter, thinner baseline for angle measurement than a whole text line — VP_STROKE_
+        // MAX_RESIDUAL rejects the noisy case rather than feed a spurious reading into either the
+        // correction or the decision gate); the correction and decision gate both degrade
+        // gracefully to line-direction-only in that case.
+        const vs_fit = estimate_vanishing_point(stroke_segments, stroke_confidences, stroke_weights)
+        const vs = vs_fit && vs_fit.mean_residual <= VP_STROKE_MAX_RESIDUAL ? vs_fit : null
         const { center, lr_delta, tb_delta } = vp_edge_angles(vp.v, segments)
-        if (needs_skew_trapezoid_correction(center, lr_delta, tb_delta)) {
-          mat = apply_vp_correction(mat, vp.v)
+        const stroke_edges = vs ? vp_edge_angles(vs.v, stroke_segments) : null
+        if (needs_skew_trapezoid_correction(
+          center, lr_delta, tb_delta, stroke_edges?.lr_delta, stroke_edges?.tb_delta,
+        )) {
+          mat = apply_vp_correction(mat, vp.v, vs?.v)
         }
       }
     }

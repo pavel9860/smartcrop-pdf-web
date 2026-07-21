@@ -14,9 +14,15 @@ const SKEW_ONLY_JPG = fileURLToPath(new URL(
   '../assets/Learning Python, 5th Edition_cropped_015_rot.jpg', import.meta.url))
 const TRAPEZOID_PNG = fileURLToPath(new URL(
   '../assets/Learning Python, 5th Edition_cropped_015_trap.png', import.meta.url))
-// Same page as TRAPEZOID_PNG, rotated 90deg as a whole image — regresses the vp_correct.ts bug
-// where correction only ever moved pixels vertically (map_x frozen at identity), so a keystone
-// whose correction requires horizontal movement was a complete no-op no matter how strong.
+// Same page as TRAPEZOID_PNG, rotated 90deg as a whole image. Two regression targets:
+// (1) the original bug — correction only ever moved pixels vertically (map_x frozen at identity),
+//     so a keystone whose correction requires horizontal movement was a complete no-op no matter
+//     how strong;
+// (2) a later bug found on this same fixture — the rotation this correction derives was unbounded,
+//     so a page whose real content is itself rotated ~90deg (this file, genuinely) got that whole
+//     reorientation undone by Dewarp & Deskew, which isn't its job (Rotate's, §12). This fixture is
+//     specifically a rotation-invariance check: its trapezoid must still get corrected, but the
+//     page's own ~90deg orientation must NOT be undone in the process.
 const TRAPEZOID_90_PNG = fileURLToPath(new URL(
   '../assets/Learning Python, 5th Edition_cropped_015_trap_90.png', import.meta.url))
 
@@ -35,6 +41,25 @@ const checksum = (canvas: Locator): Promise<number> => canvas.evaluate((el: HTML
   let s = 0
   for (let i = 0; i < d.length; i += 97) s = (s + (d[i] ?? 0) * (i + 1)) >>> 0
   return s
+})
+
+// Ink bounding-box aspect ratio (width/height of the dark-pixel extent) — a coarse but robust
+// orientation signal: a genuine 90deg reorientation flips which side (width or height) is larger,
+// while a fine skew/trapezoid correction (a few degrees, no axis swap) does not.
+const ink_aspect = (canvas: Locator): Promise<number> => canvas.evaluate((el: HTMLCanvasElement) => {
+  const ctx = el.getContext('2d') as CanvasRenderingContext2D
+  const { data, width, height } = ctx.getImageData(0, 0, el.width, el.height)
+  let x0 = width, y0 = height, x1 = 0, y1 = 0
+  for (let y = 0; y < height; y += 2) {
+    for (let x = 0; x < width; x += 2) {
+      const i = (y * width + x) * 4
+      if ((data[i] ?? 255) < 128) {
+        if (x < x0) x0 = x; if (x > x1) x1 = x
+        if (y < y0) y0 = y; if (y > y1) y1 = y
+      }
+    }
+  }
+  return (x1 - x0) / (y1 - y0)
 })
 
 async function load_scan(page: Page, file: string): Promise<void> {
@@ -74,17 +99,24 @@ test('a trapezoid-distorted real scan is corrected via DBNet + vanishing-point, 
   expect(ms).toBeLessThan(FAST_PATH_CEILING_MS)
 })
 
-test('the same trapezoid rotated 90deg (a keystone requiring horizontal correction) is also corrected', async ({ page }) => {
+test('the same trapezoid rotated 90deg (a keystone requiring horizontal correction) is corrected without undoing the 90deg orientation', async ({ page }) => {
   test.setTimeout(60_000)
   await load_scan(page, TRAPEZOID_90_PNG)
   const canvas = page.locator('canvas.page-canvas')
 
   const before = await checksum(canvas)
+  const aspect_before = await ink_aspect(canvas)
   const t0 = Date.now()
   await page.click('#sp-dewarp')
   await expect.poll(() => checksum(canvas), { timeout: 30_000, intervals: [100] }).not.toBe(before)
   const ms = Date.now() - t0
+  const aspect_after = await ink_aspect(canvas)
 
-  console.log(`[scan_deskew_classify] trapezoid-90 real scan: ${ms}ms`)
+  console.log(`[scan_deskew_classify] trapezoid-90 real scan: ${ms}ms, ink aspect ${aspect_before.toFixed(2)} -> ${aspect_after.toFixed(2)}`)
   expect(ms).toBeLessThan(FAST_PATH_CEILING_MS)
+  // Rotation-invariance: this page's content is genuinely rotated ~90deg — correcting its
+  // trapezoid must not also undo that orientation. A fine skew/trapezoid correction changes the
+  // aspect ratio only slightly; a coarse 90deg reorientation would flip which side is longer
+  // (aspect < 1 <-> aspect > 1). Both sides of the flip line stay on the same side.
+  expect(aspect_before < 1).toBe(aspect_after < 1)
 })
