@@ -220,3 +220,10 @@ export const DEWARP_UVDOC_URL          = 'models/uvdoc.onnx'
 export const DEWARP_BILINEAR_URL       = 'models/bilinear_unwarping.onnx'
 export const DEWARP_UVDOC_CACHE_KEY    = 'docuwarp-uvdoc-v1'
 export const DEWARP_BILINEAR_CACHE_KEY = 'docuwarp-bilinear-v1'
+
+// ONNX Runtime Web wasm EP thread cap (dewarp.ts::resolve_onnx_execution_providers, shared by
+// dbnet.ts's session) — only used when the page is crossOriginIsolated (SharedArrayBuffer
+// available); otherwise numThreads is forced to 1 regardless of this constant. Capped rather than
+// using the full navigator.hardwareConcurrency: ORT's own thread pool has diminishing/negative
+// returns well before typical core counts (thread-spawn + sync overhead on these model sizes).
+export const WASM_MAX_THREADS = 4

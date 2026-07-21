@@ -18,6 +18,23 @@ export default defineConfig({
   worker: {
     format: 'es',
   },
+  // Local parity with the Cloudflare Pages `public/_headers` COOP/COEP headers (ARCHITECTURE.md
+  // §18) — without these, `vite dev`/`vite preview` are never crossOriginIsolated, so
+  // resolve_onnx_execution_providers (pdf/dewarp.ts) always falls back to single-thread wasm
+  // locally even though production serves multi-threaded. `public/_headers` itself is a
+  // Cloudflare-Pages-only convention Vite's own servers don't read.
+  server: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
+  preview: {
+    headers: {
+      'Cross-Origin-Opener-Policy': 'same-origin',
+      'Cross-Origin-Embedder-Policy': 'require-corp',
+    },
+  },
   build: {
     target: 'es2022',
     rollupOptions: {

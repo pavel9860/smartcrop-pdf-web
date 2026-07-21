@@ -177,6 +177,67 @@ describe('PageRasterPipeline.get_source / get_work', () => {
   })
 })
 
+describe('PageRasterPipeline in-flight de-duplication (regression: two real callers — ' +
+  'ScanProcessingService\'s warm and AppModel\'s view-refresh — both call get_work(p) for the ' +
+  'same page around the same time, which used to double the ONNX/render cost)', () => {
+  it('two concurrent get_work calls for the same page share one ONNX pass, not two', async () => {
+    let dewarp_calls = 0
+    let resolve_first: (b: ImageBitmap) => void = () => {}
+    const first_gate = new Promise<ImageBitmap>((res) => { resolve_first = res })
+    const a = adapter({
+      get_work_image: () => {
+        dewarp_calls++
+        return dewarp_calls === 1 ? first_gate : Promise.resolve(bmp())
+      },
+    })
+    const p = pipeline(a, ctx({
+      mode: () => Mode.SCANNED,
+      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
+    }))
+
+    const call1 = p.get_work(0)
+    const call2 = p.get_work(0)   // concurrent — call1's ONNX pass has not resolved yet
+    resolve_first(bmp(9, 9))
+    const [w1, w2] = await Promise.all([call1, call2])
+
+    expect(dewarp_calls).toBe(1)   // one real ONNX pass, not two
+    expect(w1).toBe(w2)
+  })
+
+  it('two concurrent get_source calls for the same page share one render, not two', async () => {
+    let calls = 0
+    let resolve_first: (b: ImageBitmap) => void = () => {}
+    const gate = new Promise<ImageBitmap>((res) => { resolve_first = res })
+    const a = adapter({
+      get_source_image: () => { calls++; return calls === 1 ? gate : Promise.resolve(bmp()) },
+    })
+    const p = pipeline(a, ctx())
+
+    const call1 = p.get_source(0)
+    const call2 = p.get_source(0)
+    resolve_first(bmp())
+    const [s1, s2] = await Promise.all([call1, call2])
+
+    expect(calls).toBe(1)
+    expect(s1).toBe(s2)
+  })
+
+  it('a later, non-concurrent get_work call still triggers a fresh compute (dedup does not stick around)', async () => {
+    let dewarp_calls = 0
+    const a = adapter({ get_work_image: () => { dewarp_calls++; return Promise.resolve(bmp(9, 9)) } })
+    const p = pipeline(a, ctx({
+      mode: () => Mode.SCANNED,
+      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
+    }))
+    await p.get_work(0)
+    expect(dewarp_calls).toBe(1)
+    // second call is a resolved-cache hit (not a recompute) — same existing cache behavior, just
+    // confirming the in-flight map doesn't leak a stale entry that would block this.
+    await p.get_work(0)
+    expect(dewarp_calls).toBe(1)
+  })
+})
+
 describe('PageRasterPipeline.load_current / current', () => {
   it('load_current fetches the work raster and marks it as the on-screen bitmap', async () => {
     const p = pipeline(adapter(), ctx())

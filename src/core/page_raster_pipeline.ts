@@ -74,6 +74,26 @@ export class PageRasterPipeline {
   private _loading = false
   private readonly _prefetching = new Set<number>()
 
+  // In-flight-promise de-dup for the two expensive compute points below (source render, ONNX
+  // dewarp). Keyed identically to the resolved-value cache it guards (map identity + page + key),
+  // so a correct key match here is always a correct cache-key match too. Needed because get_work(p)
+  // has more than one real caller for the same page around the same time — ScanProcessingService's
+  // own batch warm AND AppModel's view-refresh both call it — and without this, both see a
+  // resolved-cache miss and both redundantly kick off the full (multi-second) pipeline before
+  // either finishes, roughly doubling observed cost for no benefit (the second result just
+  // overwrites the first's cache entry).
+  private readonly _inflight = new Map<string, Promise<ImageBitmap>>()
+
+  private async _dedup(
+    inflight_key: string, compute: () => Promise<ImageBitmap>,
+  ): Promise<ImageBitmap> {
+    const pending = this._inflight.get(inflight_key)
+    if (pending) return pending
+    const promise = compute().finally(() => { this._inflight.delete(inflight_key) })
+    this._inflight.set(inflight_key, promise)
+    return promise
+  }
+
   constructor(
     private readonly _adapter: RendererAdapter,
     private readonly _page_index: PageIndexMap,
@@ -155,14 +175,16 @@ export class PageRasterPipeline {
     const key = String(rotation)
     const cached = cache.get(key)
     if (cached) return cached
-    const dpi = this._ctx.mode() === Mode.SCANNED ? SRC_DPI : this._ctx.display_dpi()
-    // p is logical (post-delete); the adapter only knows original pdf.js page indices.
-    const orig = this._page_index.orig(p)
-    const b = !this._ctx.is_synthetic()
-      ? await this._adapter.get_source_image(orig, dpi, rotation)
-      : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
-    cache.set(key, b)
-    return b
+    return this._dedup(`src:${p}:${key}`, async () => {
+      const dpi = this._ctx.mode() === Mode.SCANNED ? SRC_DPI : this._ctx.display_dpi()
+      // p is logical (post-delete); the adapter only knows original pdf.js page indices.
+      const orig = this._page_index.orig(p)
+      const b = !this._ctx.is_synthetic()
+        ? await this._adapter.get_source_image(orig, dpi, rotation)
+        : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
+      cache.set(key, b)
+      return b
+    })
   }
 
   async get_work(p: number): Promise<ImageBitmap> {
@@ -234,18 +256,21 @@ export class PageRasterPipeline {
   }
 
   // The ONNX-processed Dewarp&Deskew result at rotation 0 — computed once per (page, supersample)
-  // no matter how many times the page is rotated afterward. Only run_dewarp() (the button) ever
-  // reaches this via a cache miss; every other caller (rotate, prefetch, page nav) hits the same
-  // entry or the cheap per-rotation derivation above.
+  // no matter how many times the page is rotated afterward. `_dedup` covers the real case where
+  // two different callers (e.g. ScanProcessingService's warm and AppModel's view-refresh) both
+  // reach this for the same page around the same time — the second one awaits the first's
+  // in-flight compute instead of redundantly re-running the ONNX pass.
   private async _get_dewarp_canonical(p: number, supersample: number): Promise<ImageBitmap> {
     const cache = this._version_cache(this._dewarp_canonical, p)
     const key = String(supersample)
     const cached = cache.get(key)
     if (cached) return cached
-    const src0 = await this._get_source_at(p, 0)
-    const dewarped = await this._adapter.get_work_image(src0, { dewarp: true, filter: null }, supersample)
-    cache.set(key, dewarped)
-    return dewarped
+    return this._dedup(`dwc:${p}:${key}`, async () => {
+      const src0 = await this._get_source_at(p, 0)
+      const dewarped = await this._adapter.get_work_image(src0, { dewarp: true, filter: null }, supersample)
+      cache.set(key, dewarped)
+      return dewarped
+    })
   }
 
   private _dewarped_key(rotation: number, supersample: number): string {

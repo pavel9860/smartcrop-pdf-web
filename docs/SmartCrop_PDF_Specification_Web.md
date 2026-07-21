@@ -607,8 +607,18 @@ three things it needs:
 This exists because a page that has already been correctly dewarped elsewhere and only carries
 incidental skew would otherwise be needlessly re-warped by the ONNX pass, which can introduce its
 own small residual distortion on input that didn't need mesh correction. Execution providers for
-the ONNX path are `['webgpu','wasm']`, gated on `navigator.gpu`, `numThreads=1` — no
-`SharedArrayBuffer` dependency (GitHub Pages cannot set the COOP/COEP headers that would require).
+the ONNX path (both UVDoc dewarp and §7.1b's DBNet session) are `['webgpu','wasm']`, gated on
+`navigator.gpu`; the wasm provider's thread count follows `crossOriginIsolated` at runtime —
+multi-threaded (capped at `navigator.hardwareConcurrency`, `WASM_MAX_THREADS`) when the page was
+served with `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy:
+require-corp`, single-thread fallback otherwise. This app's Cloudflare Pages deploy sends both
+headers (`public/_headers`); the GitHub Pages mirror build cannot set them, so it runs
+single-thread automatically — no per-host code branch needed, this just reads what the browser
+reports. This has no effect on offline mode: `public/sw.js` never depends on cross-origin
+isolation, and the cached model bytes are identical either way — only how many WASM threads the
+already-cached model runs on changes. OpenCV.js remains single-thread regardless — it's a separate
+WASM build from ONNX Runtime Web's; switching it to a threaded variant is a separate, unrelated
+change.
 The **Dewarp supersample** setting (§14, default 2.0) renders the page larger before the mesh remap
 and downsamples after, trading time for less resampling blur — it has no effect on the not-warped
 branch.
@@ -994,15 +1004,16 @@ install/PWA-add-to-homescreen step is required either way.
 | Orchestration overhead (dispatch → cache lookup → batch loop), excluding the mocked adapter's own compute | Dewarp&Deskew < 0.5s, filter apply < 0.3s, over a multi-page selection — regression tests at the AppModel level with an instant-return mock adapter (tests/core/scan_orchestration_speed.test.ts), isolating pipeline/cache overhead from real OpenCV/ONNX cost (which is covered separately above and in tests/perf/scan_speed.test.ts) |
 | B/W or Sharpen filter per page | < 500ms (SIMD WASM opencv.js + downscaled illumination-flatten morphology) |
 | Auto-detect per page | < 100ms (SCANNED: raw source, not the processed work image; NORMAL: text-layer, no raster at all) |
-| Dewarp per page (ONNX stage) | seconds on the 1-thread WASM execution provider; fast on WebGPU where available |
+| Dewarp per page (ONNX stage) | low-single-digit seconds on single-thread WASM (no COOP/COEP, e.g. the GitHub Pages mirror); well under 1s multi-threaded (COOP/COEP present, e.g. this app's Cloudflare Pages deploy — see §7.1); fast on WebGPU where available |
 | Warp classifier per page (§7.1a, classic CV) | < 100ms — flag and investigate if exceeded |
-| Skew correction per page (§7.1b, DBNet + vanishing point) | < 1s — flag and investigate if exceeded; only reached on pages that already skipped the ONNX path |
+| Skew correction per page (§7.1b, DBNet + vanishing point) | < 1s — flag and investigate if exceeded; only reached on pages that already skipped the ONNX path; same COOP/COEP threading as the Dewarp row applies to the DBNet session |
 | Export per page (rasterized path) | < 300ms |
 | First OpenCV.js WASM load | < 3s, once per session (~10MB SIMD build, lazy — SCANNED documents only) |
 | First ONNX model fetch + init | < 5s, once per session (cached in IndexedDB after; 0ms on repeat sessions) |
 
-OpenCV.js is a SIMD (v128) WASM build, single-thread — no `SharedArrayBuffer`, no COOP/COEP (GitHub
-Pages cannot set those headers). The illumination-flatten background estimate for the B/W filter and
+OpenCV.js is a SIMD (v128) WASM build, single-thread regardless of COOP/COEP — it's a separate WASM
+build from ONNX Runtime Web's (§7.1), and switching it to a threaded variant would be a separate,
+unrelated change. The illumination-flatten background estimate for the B/W filter and
 Auto-detect (§7.2, §5) runs its 51×51 morphological close on a downscaled copy (`BG_DOWNSCALE`) and
 scales back up — near-lossless (the final bilevel output agrees with a full-resolution result at
 ~95% of pixels — the same numerical agreement opencv.js already has vs. a reference implementation

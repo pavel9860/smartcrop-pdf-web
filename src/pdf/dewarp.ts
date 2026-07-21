@@ -7,7 +7,7 @@ import type { InferenceSession } from 'onnxruntime-web'
 import { MissingDependencyError } from '@core/errors'
 import {
   DEWARP_MODEL_W, DEWARP_MODEL_H, DEWARP_UVDOC_URL, DEWARP_BILINEAR_URL,
-  DEWARP_UVDOC_CACHE_KEY, DEWARP_BILINEAR_CACHE_KEY,
+  DEWARP_UVDOC_CACHE_KEY, DEWARP_BILINEAR_CACHE_KEY, WASM_MAX_THREADS,
 } from '@core/constants'
 import { cv, type Mat } from './cv'
 import { open_idb, idb_req, idb_tx } from './idb'
@@ -37,20 +37,25 @@ export function ensure_onnx(): Promise<void> {
   return _onnx_init
 }
 
-// Shared with dbnet.ts (§7.1b) — same GH-Pages-COOP/COEP constraint applies to any ONNX model
-// this app loads, not just dewarp's. GH Pages cannot send those headers, so SharedArrayBuffer
-// (multi-threaded WASM) is unavailable — force the single-thread WASM build. WebGPU needs no SAB
-// either and is tried first where the browser exposes it; single-thread WASM+SIMD is the fallback.
-// Only request WebGPU when the browser exposes it; otherwise ORT would have to fall back
+// Shared with dbnet.ts (§7.1b) — same cross-origin-isolation constraint applies to any ONNX model
+// this app loads, not just dewarp's. Multi-threaded WASM needs SharedArrayBuffer, which only
+// exists when the page was served with COOP: same-origin + COEP: require-corp
+// (`crossOriginIsolated`). This app's Cloudflare Pages deploy sends both (`public/_headers`); the
+// GitHub Pages mirror build cannot, so it reads `crossOriginIsolated === false` and falls back to
+// the single-thread build automatically — no per-host branch needed here. WebGPU needs no SAB
+// either and is tried first where the browser exposes it; wasm+SIMD (threaded or not) is the
+// fallback. Only request WebGPU when the browser exposes it; otherwise ORT would have to fall back
 // internally. Explicit selection keeps behaviour deterministic across Firefox/Safari.
 export function resolve_onnx_execution_providers(ort: { env: { wasm: { numThreads?: number } } }): string[] {
-  ort.env.wasm.numThreads = 1
+  const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated
+  const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
+  ort.env.wasm.numThreads = isolated ? Math.max(1, Math.min(cores ?? 1, WASM_MAX_THREADS)) : 1
   const has_webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator
   const execution_providers = has_webgpu ? ['webgpu', 'wasm'] : ['wasm']
-  // One-time diagnostic (TODO §17): ONNX inference on the 1-thread WASM EP costs seconds/page —
-  // this line lets a user verify in the console whether WebGPU was even requested on their machine.
+  // One-time diagnostic (TODO §17): single-thread WASM inference costs seconds/page — this line
+  // lets a user verify in the console whether WebGPU/threading was actually available for them.
   console.info('[smartcrop] ONNX EPs requested:', execution_providers.join(','),
-    '— webgpu available:', has_webgpu)
+    '— webgpu available:', has_webgpu, '— wasm threads:', ort.env.wasm.numThreads)
   return execution_providers
 }
 

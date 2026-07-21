@@ -2,7 +2,7 @@
 // fetch_with_idb_cache). Excluded from the coverage gate for the rest of dewarp.ts
 // (vitest.config.ts) — ensure_onnx/apply_dewarp need a real ONNX+OpenCV runtime — but these
 // touch only pure bit math, `fetch`, and IndexedDB, all mockable under jsdom.
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -77,6 +77,38 @@ describe('f32_array_to_f16_bits / f16_data_to_f32_array (fp16 conversion)', () =
     const snapshot = Float32Array.from(input)
     f32_array_to_f16_bits(input)
     expect(input).toEqual(snapshot)
+  })
+})
+
+describe('resolve_onnx_execution_providers (wasm thread count follows crossOriginIsolated)', () => {
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('forces numThreads=1 when the page is not cross-origin isolated', async () => {
+    vi.stubGlobal('crossOriginIsolated', false)
+    vi.stubGlobal('navigator', { hardwareConcurrency: 8 })
+    const { resolve_onnx_execution_providers } = await import('@pdf/dewarp')
+    const ort = { env: { wasm: {} as { numThreads?: number } } }
+    resolve_onnx_execution_providers(ort)
+    expect(ort.env.wasm.numThreads).toBe(1)
+  })
+
+  it('requests multiple threads, capped at WASM_MAX_THREADS, when cross-origin isolated with plenty of cores', async () => {
+    vi.stubGlobal('crossOriginIsolated', true)
+    vi.stubGlobal('navigator', { hardwareConcurrency: 16 })
+    const { resolve_onnx_execution_providers } = await import('@pdf/dewarp')
+    const { WASM_MAX_THREADS } = await import('@core/constants')
+    const ort = { env: { wasm: {} as { numThreads?: number } } }
+    resolve_onnx_execution_providers(ort)
+    expect(ort.env.wasm.numThreads).toBe(WASM_MAX_THREADS)
+  })
+
+  it('never requests more threads than hardwareConcurrency reports, even when cross-origin isolated', async () => {
+    vi.stubGlobal('crossOriginIsolated', true)
+    vi.stubGlobal('navigator', { hardwareConcurrency: 2 })
+    const { resolve_onnx_execution_providers } = await import('@pdf/dewarp')
+    const ort = { env: { wasm: {} as { numThreads?: number } } }
+    resolve_onnx_execution_providers(ort)
+    expect(ort.env.wasm.numThreads).toBe(2)
   })
 })
 

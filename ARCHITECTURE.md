@@ -16,9 +16,11 @@ Where this document and the running code disagree rise an error and ask what to 
 - UI: Vanilla TS + DOM APIs, no framework runtime
 - Build: Vite 5
 - Image processing: OpenCV.js WASM (faithful box-filter Sauvola port — see §9)
-- Dewarp: ONNX Runtime Web + docuwarp model  SIMD and Multi-threadin
+- Dewarp: ONNX Runtime Web + docuwarp model, WASM SIMD; multi-threaded when `crossOriginIsolated`
+  (§18), else single-thread
 - Tests: Vitest (unit) + Playwright (e2e)
-- Deployment: GitHub Pages (static) + Cloudflare CDN
+- Deployment: Cloudflare Pages (static, primary — `public/_headers` sets COOP/COEP); a GitHub
+  Pages mirror still builds via the same Actions workflow as a CI gate/fallback (§18)
 - TIFF export: supported via a hand-rolled baseline encoder (`src/workers/tiff.ts`, uncompressed
   8-bit RGB single strip). Image exports (JPG/PNG/TIFF) are packed into one `.zip` (`fflate`).
 
@@ -739,7 +741,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | Unsharp mask (Sharpen) | `cv.bilateralFilter` (strength-scaled `d`/`sigmaColor`/`sigmaSpace` from `SHARPEN_STRENGTH`) → `cv.GaussianBlur` (strength-scaled radius) → `cv.addWeighted` (`CLEAN_AMOUNT` gain) | Implemented, strength now drives denoise/blur radius **and** gain|
 | DPI-scaled kernels | — | **Not ported.** `imaging.py`'s `_dpi_scale()` scales the Sauvola window / bg-kernel / min-area by source DPI (0.5×–4× clamp) so scans at different resolutions binarize comparably. The web always uses the base `SAUVOLA_WINDOW`/`BG_KERNEL_SIZE` regardless of DPI. Low-severity residual gap — SRC_DPI is fixed at 200 in the web (no variable-DPI source rasters), so this mainly affects the B/W filter's absolute kernel size relative to `imaging.py`'s 150 DPI reference, not correctness. |
 | 2× supersample refinement | — | **Not ported.** `clean_document_bilevel` upscales 2× before thresholding then downsamples for a cleaner edge; the web version thresholds at native resolution. Cosmetic quality difference only. |
-| Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model → bilinear resample | Implemented — two-stage ONNX pipeline, EPs `['webgpu','wasm']` gated on `navigator.gpu`, `numThreads=1` |
+| Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model → bilinear resample | Implemented — two-stage ONNX pipeline, EPs `['webgpu','wasm']` gated on `navigator.gpu`; wasm `numThreads` gated on `crossOriginIsolated` (§18) |
 | Deskew angle | `estimate_deskew()` (`pdf/deskew.ts`, warp classifier only) + `estimate_vanishing_point()`/`vp_center_angle()` (`pdf/vanishing_point.ts`) + `apply_vp_correction()` (`pdf/vp_correct.ts`) | **Web-only addition, not a desktop port.** Spec §7.1/§7.1b: a page the classic-CV warp classifier finds not-warped gets its own text-line-detection (`pdf/dbnet.ts`, DBNet ONNX) + vanishing-point fit, corrected via a single rotation remap — added because a page already dewarped elsewhere was being needlessly re-warped, introducing its own residual distortion. Desktop has no equivalent path; there is no parity gap to track here. |
 
 `detect_content()` downscales to `DETECT_MAX_PX` for speed used a direct `cv.adaptiveThreshold` call
@@ -961,15 +963,19 @@ colour channel).
 ## 18. Deployment
 
 ```
-GitHub repository → push to main → GitHub Actions:
-  npm ci
-  tsc --noEmit
-  vitest run --coverage
-  playwright test
-  vite build → dist/
-
-dist/ → GitHub Pages (source: Actions artifact)
-Cloudflare CDN: proxy GitHub Pages origin; edge cache for JS chunks + PDF.js worker
+GitHub repository → push to main
+  ├─ Cloudflare Pages (its own git integration, outside this repo's CI): vite build → dist/
+  │    → primary live host. Serves public/_headers on every response, which sets
+  │      Cross-Origin-Opener-Policy: same-origin + Cross-Origin-Embedder-Policy: require-corp —
+  │      this is what makes the page crossOriginIsolated, which is what lets ONNX Runtime Web's
+  │      wasm EP request multiple threads (dewarp.ts::resolve_onnx_execution_providers, §7.1/§16
+  │      spec-web) instead of falling back to one.
+  └─ GitHub Actions (deploy.yml), unchanged:
+       npm ci; tsc --noEmit; vitest run --coverage; playwright test; vite build → dist/
+       → GitHub Pages (source: Actions artifact) — kept as a build/typecheck/test CI gate and a
+         fallback mirror. GH Pages cannot serve custom response headers, so it's never cross-origin
+         isolated and always runs single-thread wasm — no code branch needed for this, the app
+         just reads `crossOriginIsolated` at runtime.
 ```
 
 **Asset sizing (gzip):**

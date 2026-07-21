@@ -1,0 +1,8 @@
+# Cloudflare Pages response headers (docs/SmartCrop_PDF_Specification_Web.md §7.1, ARCHITECTURE.md
+# §18). Cross-origin isolation (COOP+COEP) is what makes crossOriginIsolated true, which is what
+# lets ONNX Runtime Web's wasm execution provider use multiple threads instead of one
+# (dewarp.ts::resolve_onnx_execution_providers) — every asset this app loads is same-origin, so
+# require-corp has nothing to block here.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
