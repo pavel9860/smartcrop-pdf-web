@@ -18,7 +18,7 @@ describe('PagesPanel', () => {
   })
 
   it('builds the Document & State + Pages cards', () => {
-    expect(root.querySelector('#pp-load')).toBeTruthy()
+    expect(root.querySelector('#pp-load')!.textContent).toContain('Open PDF/Image Files')
     expect(root.querySelector('#pp-file')).toBeTruthy()
     expect(root.querySelectorAll('#pp-modes [data-mode]')).toHaveLength(4)
   })

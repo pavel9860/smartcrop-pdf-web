@@ -76,7 +76,7 @@ export class ExportService {
     // content.
     const use_vector = this._ctx.mode() === Mode.NORMAL && this._ctx.export_format() === 'PDF'
       && this._adapter.export_pdf_vector !== undefined
-    return start_batch(`Exporting ${this._ctx.export_format()}…`, total, job =>
+    return start_batch(`Saving ${this._ctx.export_format()}…`, total, job =>
       use_vector ? this._run_export_vector(job, filename) : this._run_export(job, filename),
       total_views)
   }

@@ -255,7 +255,7 @@ input, select { font: inherit; }
 }
 
 /* Loaded document name — its own card above Document & State. Same button-label font weight/size
-   as "Load PDF/Image Files"; ellipsised when the name is long. */
+   as "Open PDF/Image Files"; ellipsised when the name is long. */
 .doc-name-card { padding: 8px 12px; }
 .doc-name {
   font-size: 0.9375rem;

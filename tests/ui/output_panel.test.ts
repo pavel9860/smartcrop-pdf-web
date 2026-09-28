@@ -16,7 +16,7 @@ describe('OutputPanel', () => {
     panel = new OutputPanel(root, model, fc.ctrl)
   })
 
-  it('builds Output Quality + Export cards', () => {
+  it('builds Output Quality + Save cards', () => {
     expect(root.querySelector('#op-compress')).toBeTruthy()
     expect(root.querySelector('#op-colours')).toBeTruthy()
     expect(root.querySelector('#op-export')).toBeTruthy()
@@ -26,7 +26,7 @@ describe('OutputPanel', () => {
   it('refresh mirrors model settings onto the controls', () => {
     panel.refresh(model, false)
     expect(root.querySelector<HTMLSelectElement>('#op-format')!.value).toBe(model.export_format)
-    expect(root.querySelector('#op-export')!.textContent).toContain(model.export_format)
+    expect(root.querySelector('#op-export')!.textContent).toContain(`Save ${model.export_format}`)
   })
 
   it('changing colours / format dispatches through the model', () => {

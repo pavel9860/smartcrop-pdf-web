@@ -157,7 +157,7 @@ app's tooltip primitive — coverage of this is tracked as ongoing work, not yet
 | Control | Action |
 |---|---|
 | Mode badge | Non-interactive `NORMAL`/`SCANNED` marker (§1). |
-| Load PDF/Image Files | Opens a multi-select file picker (`Ctrl+O`) filtered to PDFs and images (`.pdf/.jpg/.jpeg/.png/.tif/.tiff`). Selected files combine into one working document (§9) → resets all per-document state (crops, rotation, detection, processing, history) → classifies → sets mode. |
+| Open PDF/Image Files | Opens a multi-select file picker (`Ctrl+O`) filtered to PDFs and images (`.pdf/.jpg/.jpeg/.png/.tif/.tiff`). Selected files combine into one working document (§9) → resets all per-document state (crops, rotation, detection, processing, history) → classifies → sets mode. |
 
 Undo/Redo/Reset live in the pinned bottom bar (§4.9), not this card.
 
@@ -227,9 +227,9 @@ DPI field) and an Output colours dropdown (`Original colors`/`Grayscale`). This 
 controls — is hidden and disabled whenever the loaded document is NORMAL and the export format is
 PDF, since that combination exports as a genuine vector PDF with no rasterization step for these
 settings to configure (§10.3). It reappears the moment the export format switches to JPG/PNG/TIFF,
-and is always shown for a SCANNED document. **Export**: a button (label tracks the chosen format,
-e.g. "Export PDF") plus an adjacent format `<select>` (PDF/JPG/PNG/TIFF); never gated by the rule
-above. `Ctrl+S` triggers Export.
+and is always shown for a SCANNED document. **Save** (card title and button; saving is the
+export operation described in §10): a button (label tracks the chosen format, e.g. "Save PDF") plus an adjacent format `<select>` (PDF/JPG/PNG/TIFF); never gated by the rule
+above. `Ctrl+S` triggers Save.
 
 Output-quality settings (compress preset, custom DPI, colours, export format) persist across
 document loads and browser sessions via `localStorage`.
@@ -751,7 +751,7 @@ delete.
 
 ## 9. Multi-file load & combine order
 
-Load Files opens a multi-select picker filtered to PDFs and images. The chosen inputs concatenate
+Open Files opens a multi-select picker filtered to PDFs and images. The chosen inputs concatenate
 into one working document, each contributing its pages in order: a PDF contributes all its pages in
 document order; an image becomes one page sized to the image. The combined order is the order the
 picker returns the selection. A document built entirely from images (no vector data) classifies
@@ -1089,7 +1089,7 @@ preset dropdown (`FONT_SIZE_PRESETS`: 8,10,12,15,18,22,25pt, default 15); UI zoo
 dropdown (`ZOOM_PRESETS`: 70–200%) layered on CSS `font-size` scaling, sharing state with the
 `Ctrl +/-`/`Ctrl 0` keyboard steps. Buttons carrying a primary action lead their label with a small
 glyph (`↩ Undo`, `↪ Redo`, `↺ Reset`, `✦ Auto-detect`, `✂️ Crop`, `↻ Rotate`, `🗑︎ Delete`,
-`📂︎ Load PDF/Image Files`, `💾︎ Export`, `⚙ Settings`, `? Help`), glyph first, then the control's
+`📂︎ Open PDF/Image Files`, `💾︎ Save`, `⚙ Settings`, `? Help`), glyph first, then the control's
 name. Nothing is drawn onto the page bitmap itself; the only canvas-adjacent text is the bottom-right
 cursor read-out (§3).
 
@@ -1122,9 +1122,9 @@ yes/no confirm dialog, single OK button), never a silent failure and never an au
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+O` | Load Files |
+| `Ctrl+O` | Open Files |
 | `Ctrl+Enter` | Apply Crop |
-| `Ctrl+S` | Export (current format) |
+| `Ctrl+S` | Save (current format) |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` | Redo |
 | `ArrowLeft`/`ArrowRight`, `PageUp`/`PageDown`, mouse wheel over canvas | Prev/Next page |

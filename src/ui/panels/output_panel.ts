@@ -41,9 +41,9 @@ export class OutputPanel {
     const export_el = document.createElement('div')
     export_el.className = 'panel-card'
     export_el.innerHTML = `
-      <div class="card-header"><span class="card-title">Export</span></div>
+      <div class="card-header"><span class="card-title">Save</span></div>
       <div class="export-row">
-        <button class="btn btn-secondary flex-1" id="op-export" title="Export the document (Ctrl+S)">💾︎  Export PDF</button>
+        <button class="btn btn-secondary flex-1" id="op-export" title="Save the document (Ctrl+S)">💾︎  Save PDF</button>
         <select class="select export-fmt" id="op-format" title="Output file format">${format_opts}</select>
       </div>`
     container.appendChild(export_el)
@@ -81,7 +81,7 @@ export class OutputPanel {
       CUSTOM_DPI_PRESET, String(model.custom_dpi))
     this._colours_sel.value  = model.output_colours
     this._format_sel.value   = model.export_format
-    this._export_btn.textContent = `💾︎  Export ${model.export_format}`
+    this._export_btn.textContent = `💾︎  Save ${model.export_format}`
     this._compress_sel.disabled   = busy || !show_quality
     this._custom_dpi_inp.disabled = busy || !show_quality
     this._colours_sel.disabled    = busy || !show_quality

@@ -18,7 +18,7 @@ export as PDF or a chosen image format.
 - **Scanned-document processing**: Dewarp & Deskew (page curl and tilt, each corrected only when
   actually present — see below), B/W and Sharpen filters.
 - **Rotate, delete, undo/redo**, per-page or batch.
-- **Export**: PDF (vector when the source is native PDF, rasterized for scans), or JPG/PNG/TIFF as
+- **Save**: PDF (vector when the source is native PDF, rasterized for scans), or JPG/PNG/TIFF as
   a single `.zip`. Configurable output DPI, paper size, and colour mode.
 - **Offline-capable**: works after one online load; an explicit "Enable offline mode" setting
   pre-caches every model so scanned-mode features work offline immediately, not just whichever

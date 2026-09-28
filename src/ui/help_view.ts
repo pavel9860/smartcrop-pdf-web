@@ -8,7 +8,7 @@ interface HelpSection { id: string; title: string; body: string }
 const SECTIONS: readonly HelpSection[] = [
   {
     id: 'open-files', title: '1. Open files',
-    body: 'Press Load Files or Ctrl+O. '
+    body: 'Press Open or Ctrl+O. '
       + 'You can pick several PDFs and images at once — they are joined into one document '
       + 'in the order you selected them. '
       + 'Each PDF adds all its pages. Each image adds one page. '
@@ -112,14 +112,14 @@ const SECTIONS: readonly HelpSection[] = [
       + 'they persist across documents and browser sessions.',
   },
   {
-    id: 'export', title: '12. Export',
-    body: 'Press Export or Ctrl+S. '
-      + 'Pages with a committed crop export exactly as shown on screen. '
-      + 'Pages without one export as the full, uncropped page — press Crop first if you want a '
+    id: 'export', title: '12. Save',
+    body: 'Press Save or Ctrl+S. '
+      + 'Pages with a committed crop are saved exactly as shown on screen. '
+      + 'Pages without one are saved as the full, uncropped page — press Crop first if you want a '
       + 'previewed crop to actually apply.\n\n'
       + 'PDF writes one file (a real vector PDF for a Normal document, §11 above). '
       + 'JPG, PNG and TIFF each write one .zip containing one file per output page. '
-      + 'Use the arrow on the Export button to switch format.\n\n'
+      + 'Pick the format in the list next to the Save button.\n\n'
       + 'A progress bar appears for multi-page jobs. Cancel stops cleanly — '
       + 'no partial file is written.',
   },
@@ -145,9 +145,9 @@ const SECTIONS: readonly HelpSection[] = [
   },
   {
     id: 'shortcuts', title: 'Keyboard shortcuts',
-    body: 'Ctrl+O — Load files\n'
+    body: 'Ctrl+O — Open files\n'
       + 'Ctrl+Enter — Apply crop\n'
-      + 'Ctrl+S — Export\n'
+      + 'Ctrl+S — Save\n'
       + 'Ctrl+Z — Undo\n'
       + 'Ctrl+Y — Redo\n'
       + 'Left / Right — Previous / next page\n'
