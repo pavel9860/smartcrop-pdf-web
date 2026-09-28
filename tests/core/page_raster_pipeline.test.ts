@@ -238,6 +238,69 @@ describe('PageRasterPipeline in-flight de-duplication (regression: two real call
   })
 })
 
+describe('PageRasterPipeline in-flight work never leaks across a cache wipe', () => {
+  const scanned_dewarp = (): RasterContext => ctx({
+    mode: () => Mode.SCANNED,
+    process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
+  })
+
+  it('after Delete (clear_ram), logical page 0 gets the new page\'s image, not the in-flight dewarp of the deleted one', async () => {
+    const gates: Array<(b: ImageBitmap) => void> = []
+    const a = adapter({
+      get_source_image: (orig) => Promise.resolve(bmp(100 + orig, 100)),
+      get_work_image: (src) => new Promise<ImageBitmap>(res => { gates.push(() => res(bmp(src.width, 1))) }),
+    })
+    const idx = new PageIndexMap()
+    idx.reset(2)
+    const p = new PageRasterPipeline(a, idx, scanned_dewarp())
+
+    const stale = p.get_work(0)
+    await Promise.resolve()
+    idx.remove(new Set([0]))
+    p.clear_ram()
+    const fresh = p.get_work(0)
+    await new Promise(r => setTimeout(r, 0))
+    gates.forEach(g => g(bmp()))
+
+    expect((await stale).width).toBe(100)
+    expect((await fresh).width).toBe(101)
+  })
+
+  it('after reset (new document), an in-flight source render is not reused', async () => {
+    let doc = 1
+    const gates: Array<() => void> = []
+    const a = adapter({
+      get_source_image: () => { const d = doc; return new Promise<ImageBitmap>(res => { gates.push(() => res(bmp(d, 1))) }) },
+    })
+    const p = pipeline(a, ctx())
+    const stale = p.get_source(0)
+    p.reset()
+    doc = 2
+    const fresh = p.get_source(0)
+    gates.forEach(g => g())
+    expect((await stale).width).toBe(1)
+    expect((await fresh).width).toBe(2)
+  })
+
+  it('a superseded in-flight job finishing does not drop the newer in-flight entry', async () => {
+    let calls = 0
+    const gates: Array<() => void> = []
+    const a = adapter({
+      get_source_image: () => { calls++; return new Promise<ImageBitmap>(res => { gates.push(() => res(bmp())) }) },
+    })
+    const p = pipeline(a, ctx())
+    void p.get_source(0)
+    p.clear_source()
+    const second = p.get_source(0)
+    gates[0]?.()
+    await new Promise(r => setTimeout(r, 0))
+    const third = p.get_source(0)
+    gates.forEach(g => g())
+    expect(await third).toBe(await second)
+    expect(calls).toBe(2)
+  })
+})
+
 describe('PageRasterPipeline.load_current / current', () => {
   it('load_current fetches the work raster and marks it as the on-screen bitmap', async () => {
     const p = pipeline(adapter(), ctx())

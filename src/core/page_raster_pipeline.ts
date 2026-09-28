@@ -89,7 +89,9 @@ export class PageRasterPipeline {
   ): Promise<ImageBitmap> {
     const pending = this._inflight.get(inflight_key)
     if (pending) return pending
-    const promise = compute().finally(() => { this._inflight.delete(inflight_key) })
+    const promise = compute().finally(() => {
+      if (this._inflight.get(inflight_key) === promise) this._inflight.delete(inflight_key)
+    })
     this._inflight.set(inflight_key, promise)
     return promise
   }
@@ -110,14 +112,7 @@ export class PageRasterPipeline {
   }
 
   // Full reset on document load/reopen: drop everything.
-  reset(): void {
-    this._clear_versions(this._source_versions)
-    this._clear_versions(this._work_versions)
-    this._clear_versions(this._dewarp_canonical)
-    this._clear_versions(this._dewarped_versions)
-    this._output_cache.clear()
-    this._current = null
-  }
+  reset(): void { this.clear_ram() }
 
   // Undo/redo (spec-web §12): drop only the cheap crop/split output preview. The source/work
   // per-page version histories are content-addressed and bounded by undo_depth — whatever state
@@ -128,7 +123,10 @@ export class PageRasterPipeline {
   // Delete (spec-web §12): every cache is keyed by LOGICAL page number, and delete shifts every
   // subsequent page's logical index — every entry's association is now wrong, not just stale, so
   // (unlike Undo/Redo) a wholesale wipe is the correct behavior here, not a shortcut.
+  // In-flight jobs are keyed by logical page too, so they are dropped with the caches: a job
+  // started before the wipe still resolves for its own caller, but is never joined afterwards.
   clear_ram(): void {
+    this._inflight.clear()
     this._clear_versions(this._source_versions)
     this._clear_versions(this._work_versions)
     this._clear_versions(this._dewarp_canonical)
@@ -137,7 +135,10 @@ export class PageRasterPipeline {
     this._current = null
   }
 
-  clear_source(): void { this._clear_versions(this._source_versions) }
+  clear_source(): void {
+    this._inflight.clear()
+    this._clear_versions(this._source_versions)
+  }
 
   private _clear_versions(map: Map<number, LRUCache<string, ImageBitmap>>): void {
     for (const cache of map.values()) cache.clear()

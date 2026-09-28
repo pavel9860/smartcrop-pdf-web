@@ -78,6 +78,7 @@ export class AppModel {
   // a display/viewport concern: SCANNED's SRC_DPI is untouched, and no crop/geometry math reads
   // this (page units for NORMAL are PDF points, independent of render resolution).
   private _display_dpi = NORMAL_DPI
+  private _view_ticket = 0
 
   // History and settings
   readonly history = new History(DEFAULT_UNDO_DEPTH)
@@ -524,20 +525,22 @@ export class AppModel {
   async prepare_current_view(): Promise<void> {
     if (!this._doc) return
     this._raster.is_loading = true
+    const ticket = ++this._view_ticket
     const p = this._current_page
     const rotation = this.document.rotation.get(p) ?? 0   // captured pre-fetch; work reflects it
 
     try {
       const work = await this._raster.get_work(p)
-      // A resolved-late fetch can outrun page nav OR a same-page re-rotate — commit only if both
-      // still match (bug: distortion on fast-scroll or rapid re-rotate, page_dims reads live).
-      if (p === this._current_page && rotation === (this.document.rotation.get(p) ?? 0)) {
+      // Only the latest request commits, and only if page and rotation still match: a late fetch
+      // can outrun nav, a re-rotate, or a Delete that re-points the same logical page index.
+      if (ticket === this._view_ticket && p === this._current_page
+          && rotation === (this.document.rotation.get(p) ?? 0)) {
         this._raster.current = work
         const committed = this.document.applied.get(p)
         if (committed) await this._raster.prerender_output_views(p, committed, this._page_dims(p), work)
       }
     } finally {
-      this._raster.is_loading = false
+      if (ticket === this._view_ticket) this._raster.is_loading = false
     }
 
     // Warm the adjacent pages in the background so next/prev is a cache hit instead of a blank

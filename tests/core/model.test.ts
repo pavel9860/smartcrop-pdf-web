@@ -1049,3 +1049,27 @@ describe('AppModel constructor / has_document edge cases', () => {
     expect(model.mode).toBe(Mode.NORMAL)
   })
 })
+
+describe('prepare_current_view: a superseded fetch never replaces the newer view', () => {
+  it('after Delete, a slow in-flight render of the deleted page does not become the current image', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>(r => { release = r })
+    const { adapter } = make_mock_adapter({ page_count: 2 })
+    const model = new AppModel({
+      ...adapter,
+      get_source_image: async (orig: number) => {
+        if (orig === 0) await gate
+        return make_bitmap(100 + orig, 300)
+      },
+    })
+    await model.load_files([FILE()])
+    const stale = model.prepare_current_view()
+    model.set_select_pattern('1'); model.set_pages_mode(PagesMode.SELECT)
+    model.delete_pages()
+    model.set_pages_mode(PagesMode.ALL)
+    await model.prepare_current_view()
+    release()
+    await stale
+    expect(model.view_snapshot().image?.width).toBe(101)
+  })
+})
