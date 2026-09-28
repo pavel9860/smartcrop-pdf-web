@@ -608,7 +608,9 @@ This exists because a page that has already been correctly dewarped elsewhere an
 incidental skew would otherwise be needlessly re-warped by the ONNX pass, which can introduce its
 own small residual distortion on input that didn't need mesh correction. Execution providers for
 the ONNX path (both UVDoc dewarp and §7.1b's DBNet session) are `['webgpu','wasm']`, gated on
-`navigator.gpu`; the wasm provider's thread count follows `crossOriginIsolated` at runtime —
+`navigator.gpu`. Sessions (all models) are created strictly one at a time — ORT's WebGPU EP rejects a
+session build while another is in progress (seen on Android Chrome) — and if a WebGPU-backed build
+fails, it is retried once on `['wasm']` (CPU) so the model still loads. The wasm provider's thread count follows `crossOriginIsolated` at runtime —
 multi-threaded (capped at `navigator.hardwareConcurrency`, `WASM_MAX_THREADS`) when the page was
 served with `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy:
 require-corp`, single-thread fallback otherwise. This app's Cloudflare Pages deploy sends both

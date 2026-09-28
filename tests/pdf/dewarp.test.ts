@@ -137,3 +137,55 @@ describe('fetch_with_idb_cache (M3)', () => {
     expect(stores.get('models')?.has('k')).toBe(true)
   })
 })
+
+describe('create_onnx_session (serialized builds, WebGPU → wasm fallback)', () => {
+  beforeEach(() => { vi.resetModules() })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  function fake_ort(fail_webgpu: boolean) {
+    let active = 0
+    const calls: string[][] = []
+    const ort: any = {
+      env: { wasm: {} },
+      InferenceSession: {
+        async create(_b: Uint8Array, opts: { executionProviders: string[] }) {
+          if (active > 0) throw new Error('another WebGPU EP inference session is being created')
+          active++
+          calls.push(opts.executionProviders)
+          await new Promise(r => setTimeout(r, 5))
+          active--
+          if (fail_webgpu && opts.executionProviders.includes('webgpu')) throw new Error('webgpu failed')
+          return { eps: opts.executionProviders }
+        },
+      },
+    }
+    return { ort, calls }
+  }
+
+  it('builds concurrent sessions one at a time', async () => {
+    vi.stubGlobal('navigator', { gpu: {}, hardwareConcurrency: 1 })
+    const { create_onnx_session } = await import('@pdf/dewarp')
+    const { ort, calls } = fake_ort(false)
+    const buf = new ArrayBuffer(1)
+    await Promise.all([create_onnx_session(ort, buf), create_onnx_session(ort, buf), create_onnx_session(ort, buf)])
+    expect(calls).toEqual([['webgpu', 'wasm'], ['webgpu', 'wasm'], ['webgpu', 'wasm']])
+  })
+
+  it('falls back to the wasm (CPU) provider when the WebGPU build fails', async () => {
+    vi.stubGlobal('navigator', { gpu: {}, hardwareConcurrency: 1 })
+    const { create_onnx_session } = await import('@pdf/dewarp')
+    const { ort, calls } = fake_ort(true)
+    const s: any = await create_onnx_session(ort, new ArrayBuffer(1))
+    expect(s.eps).toEqual(['wasm'])
+    expect(calls).toEqual([['webgpu', 'wasm'], ['wasm']])
+  })
+
+  it('a failed build does not block the next one', async () => {
+    vi.stubGlobal('navigator', {})
+    const { create_onnx_session } = await import('@pdf/dewarp')
+    const { ort } = fake_ort(false)
+    const bad: any = { ...ort, InferenceSession: { create: () => Promise.reject(new Error('x')) } }
+    await expect(create_onnx_session(bad, new ArrayBuffer(1))).rejects.toThrow('x')
+    await expect(create_onnx_session(ort, new ArrayBuffer(1))).resolves.toEqual({ eps: ['wasm'] })
+  })
+})

@@ -59,24 +59,39 @@ export function resolve_onnx_execution_providers(ort: { env: { wasm: { numThread
   return execution_providers
 }
 
+type OrtModule = typeof import('onnxruntime-web/webgpu')
+
+let _session_queue: Promise<unknown> = Promise.resolve()
+
+// Shared by every ONNX model (dewarp + dbnet.ts). ORT's WebGPU EP throws "another WebGPU EP
+// inference session is being created" on concurrent builds, so builds are serialized; a failed
+// WebGPU build is retried on the CPU (wasm) EP.
+export function create_onnx_session(ort: Pick<OrtModule, 'env' | 'InferenceSession'>, bytes: ArrayBuffer): Promise<InferenceSession> {
+  const build = async (): Promise<InferenceSession> => {
+    const eps = resolve_onnx_execution_providers(ort)
+    try {
+      return await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: eps })
+    } catch (e) {
+      if (!eps.includes('webgpu')) throw e
+      console.warn('[smartcrop] WebGPU session failed, falling back to wasm:', e)
+      return ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ['wasm'] })
+    }
+  }
+  const next = _session_queue.then(build, build)
+  _session_queue = next.catch(() => undefined)
+  return next
+}
+
 async function _load_onnx_sessions(): Promise<void> {
   try {
     const ort = await import('onnxruntime-web/webgpu')
-    const execution_providers = resolve_onnx_execution_providers(ort)
-    // Prefix with the deployment base so the vendored model weights resolve under a GH Pages
-    // project-page subpath (see vite.config.ts base / constants.ts note). Does not change ORT
-    // execution behaviour — same weights, same providers, only the fetch URL adapts.
     const base = import.meta.env.BASE_URL
     const [uvdoc_bytes, bilinear_bytes] = await Promise.all([
       fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL),
       fetch_with_idb_cache(DEWARP_BILINEAR_CACHE_KEY, base + DEWARP_BILINEAR_URL),
     ])
-    const [uvdoc_session, bilinear_session] = await Promise.all([
-      ort.InferenceSession.create(new Uint8Array(uvdoc_bytes), { executionProviders: execution_providers }),
-      ort.InferenceSession.create(new Uint8Array(bilinear_bytes), { executionProviders: execution_providers }),
-    ])
-    _uvdoc_session = uvdoc_session
-    _bilinear_session = bilinear_session
+    _uvdoc_session = await create_onnx_session(ort, uvdoc_bytes)
+    _bilinear_session = await create_onnx_session(ort, bilinear_bytes)
   } catch (e) {
     throw new MissingDependencyError(`Failed to load the dewarp model: ${String(e)}`)
   }

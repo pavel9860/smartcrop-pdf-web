@@ -37,7 +37,7 @@ function pdf_file(bytes: Uint8Array, name = 'book.pdf'): File {
   return new File([new Uint8Array(bytes)], name, { type: 'application/pdf' })
 }
 
-const PHOTO_PATH = 'tests/assets/test_pdf_distorted_page-0001.jpg'   // relative to the vitest root (project root)
+const PHOTO_PATH = 'tests/assets/ml_interview_warped_001.jpg'   // relative to the vitest root (project root)
 
 // A multi-page PDF where every page draws the SAME embedded photo (real, substantial byte data —
 // unlike a StandardFonts reference, which pdf-lib stores as a tiny by-name reference and would

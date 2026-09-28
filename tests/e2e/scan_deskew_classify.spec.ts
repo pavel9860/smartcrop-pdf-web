@@ -11,29 +11,19 @@ import { test, expect, type Page, type Locator } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 
 const SKEW_ONLY_JPG = fileURLToPath(new URL(
-  '../assets/Learning Python, 5th Edition_cropped_015_rot.jpg', import.meta.url))
+  '../assets/Learning Python_sample_content_rot_5.jpg', import.meta.url))
 // A real scanned page with a genuine skew (its own row-profile classic-CV read is ~1.6deg). Also
 // used as the rotation-fold regression below: this repo's automatic keystone correction was
 // investigated and abandoned (see docs/detrapezoid_research.md, gitignored, local reference only)
 // — this fixture only exercises skew correction now, same as SKEW_ONLY_JPG.
 const SKEWED_SCAN_PNG = fileURLToPath(new URL(
-  '../assets/Learning Python, 5th Edition_cropped_015_trap.png', import.meta.url))
+  '../assets/Learning Python_sample_content_trap.png', import.meta.url))
 // Same page as SKEWED_SCAN_PNG, rotated 90deg as a whole image — regression for a real bug: the
 // derived rotation was unbounded, so a page whose real content is itself rotated ~90deg (this
 // file, genuinely) got that whole reorientation undone by Dewarp & Deskew, which isn't its job
 // (Rotate's, §12). Only the small residual skew within that orientation should ever be corrected.
 const ROTATED_SCAN_PNG = fileURLToPath(new URL(
-  '../assets/Learning Python, 5th Edition_cropped_015_trap_90.png', import.meta.url))
-
-// §7.1b's own budget is <1s/page once the DBNet model is warm (spec-web §16); this ceiling also
-// covers the FIRST press's one-time model fetch+init (small, ~4.7MB, comparable order to UVDoc's
-// own first-load cost). The ONNX mesh-unwarp path this feature avoids for these two pages is
-// documented (scan_dewarp_cache.spec.ts) at single-digit seconds, observed up to ~60s under
-// sibling-worker contention — this ceiling stays clearly below that. Observed empirically at
-// ~8s isolated, ~16.6s under full-suite 6-worker contention (matching scan_dewarp_cache's own
-// ONNX path going from ~12s isolated to ~20s under the same contention) — set well above the
-// worst contended case observed, same "generous ceiling, not a tight budget" philosophy.
-const FAST_PATH_CEILING_MS = 30_000
+  '../assets/Learning Python_sample_content_rot_90_trap.png', import.meta.url))
 
 const checksum = (canvas: Locator): Promise<number> => canvas.evaluate((el: HTMLCanvasElement) => {
   const d = (el.getContext('2d') as CanvasRenderingContext2D).getImageData(0, 0, el.width, el.height).data
@@ -61,61 +51,47 @@ const ink_aspect = (canvas: Locator): Promise<number> => canvas.evaluate((el: HT
   return (x1 - x0) / (y1 - y0)
 })
 
-async function load_scan(page: Page, file: string): Promise<void> {
+// Which path ran is read from which model files the page fetched (each test context starts with an
+// empty IndexedDB model cache), not from wall-clock time, which parallel workers make meaningless.
+async function run_dewarp(page: Page, file: string): Promise<{ canvas: Locator; models: string[] }> {
+  const models: string[] = []
+  page.on('request', r => { if (r.url().includes('/models/')) models.push(r.url()) })
   await page.goto('/')
   await page.setInputFiles('#pp-file', file)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
   await expect(page.locator('#nav-total')).toHaveText('/ 1')
+  const canvas = page.locator('canvas.page-canvas')
+  const before = await checksum(canvas)
+  await page.click('#sp-dewarp')
+  await expect.poll(() => checksum(canvas), { timeout: 120_000, intervals: [250] }).not.toBe(before)
+  return { canvas, models }
 }
 
-test('a skew-only real scan (~1.82deg, no warp) is corrected via the fast vanishing-point path, not ONNX', async ({ page }) => {
-  test.setTimeout(60_000)
-  await load_scan(page, SKEW_ONLY_JPG)
-  const canvas = page.locator('canvas.page-canvas')
+const expect_fast_path = (models: string[]): void => {
+  expect(models.some(u => u.includes('PP-OCRv4_det'))).toBe(true)
+  expect(models.some(u => /uvdoc|bilinear/i.test(u))).toBe(false)
+}
 
-  const before = await checksum(canvas)
-  const t0 = Date.now()
-  await page.click('#sp-dewarp')
-  await expect.poll(() => checksum(canvas), { timeout: 30_000, intervals: [100] }).not.toBe(before)
-  const ms = Date.now() - t0
-
-  console.log(`[scan_deskew_classify] skew-only real scan: ${ms}ms`)
-  expect(ms).toBeLessThan(FAST_PATH_CEILING_MS)
+test('a skew-only real scan (~5deg, no warp) is corrected via the fast vanishing-point path, not ONNX', async ({ page }) => {
+  test.setTimeout(180_000)
+  expect_fast_path((await run_dewarp(page, SKEW_ONLY_JPG)).models)
 })
 
 test('a real skewed scan is corrected via DBNet + vanishing-point, not always-ONNX', async ({ page }) => {
-  test.setTimeout(60_000)
-  await load_scan(page, SKEWED_SCAN_PNG)
-  const canvas = page.locator('canvas.page-canvas')
-
-  const before = await checksum(canvas)
-  const t0 = Date.now()
-  await page.click('#sp-dewarp')
-  await expect.poll(() => checksum(canvas), { timeout: 30_000, intervals: [100] }).not.toBe(before)
-  const ms = Date.now() - t0
-
-  console.log(`[scan_deskew_classify] skewed real scan: ${ms}ms`)
-  expect(ms).toBeLessThan(FAST_PATH_CEILING_MS)
+  test.setTimeout(180_000)
+  expect_fast_path((await run_dewarp(page, SKEWED_SCAN_PNG)).models)
 })
 
 test('the same scan rotated 90deg is corrected without undoing the 90deg orientation', async ({ page }) => {
-  test.setTimeout(60_000)
-  await load_scan(page, ROTATED_SCAN_PNG)
-  const canvas = page.locator('canvas.page-canvas')
-
-  const before = await checksum(canvas)
-  const aspect_before = await ink_aspect(canvas)
-  const t0 = Date.now()
-  await page.click('#sp-dewarp')
-  await expect.poll(() => checksum(canvas), { timeout: 30_000, intervals: [100] }).not.toBe(before)
-  const ms = Date.now() - t0
+  test.setTimeout(180_000)
+  await page.goto('/')
+  await page.setInputFiles('#pp-file', ROTATED_SCAN_PNG)
+  await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
+  const aspect_before = await ink_aspect(page.locator('canvas.page-canvas'))
+  const { canvas, models } = await run_dewarp(page, ROTATED_SCAN_PNG)
+  expect_fast_path(models)
   const aspect_after = await ink_aspect(canvas)
-
-  console.log(`[scan_deskew_classify] rotated real scan: ${ms}ms, ink aspect ${aspect_before.toFixed(2)} -> ${aspect_after.toFixed(2)}`)
-  expect(ms).toBeLessThan(FAST_PATH_CEILING_MS)
-  // Rotation-fold regression: this page's content is genuinely rotated ~90deg — correcting its
-  // small residual skew must not also undo that orientation. A fine skew correction changes the
-  // aspect ratio only slightly; a coarse 90deg reorientation would flip which side is longer
-  // (aspect < 1 <-> aspect > 1). Both sides of the flip line stay on the same side.
+  // A fine skew correction changes the ink aspect only slightly; undoing the page's genuine ~90deg
+  // orientation would flip which side is longer.
   expect(aspect_before < 1).toBe(aspect_after < 1)
 })

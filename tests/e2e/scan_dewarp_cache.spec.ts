@@ -12,7 +12,7 @@
 import { test, expect, type Page, type Locator } from '@playwright/test'
 import { fileURLToPath } from 'node:url'
 
-const SCAN_JPG = fileURLToPath(new URL('../assets/test_pdf_distorted_page-0001.jpg', import.meta.url))
+const SCAN_JPG = fileURLToPath(new URL('../assets/ml_interview_warped_001.jpg', import.meta.url))
 
 const checksum = (canvas: Locator): Promise<number> => canvas.evaluate((el: HTMLCanvasElement) => {
   const d = (el.getContext('2d') as CanvasRenderingContext2D).getImageData(0, 0, el.width, el.height).data

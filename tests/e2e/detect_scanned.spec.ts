@@ -20,7 +20,7 @@ const readSnap = (page: Page): Promise<Snap> => page.evaluate(() => {
 })
 
 const SCAN_IMAGE = fileURLToPath(
-  new URL('../assets/Learning Python, 5th Edition_cropped_015.png', import.meta.url))
+  new URL('../assets/Learning Python_sample_content.png', import.meta.url))
 
 test('auto-detect on a real scanned text page finds the body text, not a sliver', async ({ page }) => {
   await page.goto('/')

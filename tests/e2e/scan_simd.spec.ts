@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 // An image file (not a PDF) always classifies SCANNED (spec §4) and exercises the identical
 // OpenCV.js pipeline — no PDF rasterization step needed for this test's purpose.
 const SCAN_PDF = fileURLToPath(
-  new URL('../assets/Learning Python, 5th Edition_cropped_015.png', import.meta.url))
+  new URL('../assets/Learning Python_sample_content.png', import.meta.url))
 
 test('a scanned PDF loads as SCANNED mode and the B/W filter renders correctly', async ({ page }) => {
   await page.goto('/')

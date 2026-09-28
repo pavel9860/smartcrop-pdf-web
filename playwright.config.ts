@@ -8,7 +8,7 @@ export default defineConfig({
   workers: process.env['CI'] ? 1 : undefined,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:5173',
+    baseURL: 'http://localhost:4173',
     trace: 'on-first-retry',
   },
   projects: [
@@ -16,8 +16,14 @@ export default defineConfig({
     { name: 'firefox',  use: { ...devices['Desktop Firefox'] } },
   ],
   webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
+    // Development-mode build (keeps import.meta.env.DEV test hooks) served by `vite preview`, not
+    // `vite dev`: the dev client opens a WebSocket inside ORT's WASM thread workers, which trips a
+    // Playwright Firefox assertion (FFPage._onWebSocketOpened). Separate outDir/port so neither
+    // dist/ nor a running dev server is touched.
+    command: 'npx vite build --mode development --outDir .e2e-dist && npx vite preview --outDir .e2e-dist --port 4173 --strictPort',
+    env: { NODE_ENV: 'development' },
+    timeout: 180_000,
+    url: 'http://localhost:4173',
     reuseExistingServer: !process.env['CI'],
   },
 })

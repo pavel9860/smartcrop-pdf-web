@@ -22,7 +22,7 @@ import {
 } from '@core/constants'
 
 // DESKTOP REFERENCE — captured once on this machine with the desktop app's own stack
-// (smartcrop-pdf-desktop/.venv: opencv-python 5.0.0, numpy) on tests/assets/test_pdf_distorted_
+// (smartcrop-pdf-desktop/.venv: opencv-python 5.0.0, numpy) on tests/assets/ml_interview_warped_
 // page-0001.jpg (1240×1755), mean of 5 iters after 2 warmup, upscale=1.0 to match this web port:
 //   • clean_document_bilevel (== B/W filter / detect binarization): ~190 ms/page
 //   • pymupdf 200-page open+insert_pdf+save (native export assembly): ~104 ms total
