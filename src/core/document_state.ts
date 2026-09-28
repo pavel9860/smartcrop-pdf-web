@@ -23,7 +23,7 @@ export interface PageProcessIntent {
 
 export interface DocumentState {
   applied:       Map<number, Box[]>               // committed crop(s) per source page
-  crop_rects:    Box[]                             // live split rectangles (split=2/4)
+  crop_rects:    Box[]                             // live split rectangles (split=2/4), page fractions
   rotation:      Map<number, number>               // page → degrees CW (0/90/180/270)
   processed:     Map<number, PageProcessIntent>    // scan-processing intent per page
   offsets:       Offsets

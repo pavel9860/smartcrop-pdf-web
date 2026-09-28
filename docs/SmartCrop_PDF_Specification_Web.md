@@ -181,13 +181,18 @@ explicitly undone; there is no separate "reverse" gesture on the same button (§
 
 ### 4.4 Split Each Page Into
 
-`1 / 2 / 4` → that many output pages per source page (§7.4). N > 1 reveals **Same size** and
+`1 / 2 / 4` → that many output pages per source page (§4.4). N > 1 reveals **Same size** and
 switches Detect/anchors to per-region detection (§4.5, §5a) — the drawn-window L/T/R/B fields
 (§4.6) stay split = 1 only, since a hand-drawn window is a single global rectangle with no notion
 of "region". Changing the split count clears any committed crop from the previous layout and
-re-seeds an even grid of N windows (§7.4), and discards any prior per-region detect result (the
+re-seeds an even grid of N windows, and discards any prior per-region detect result (the
 regions themselves changed shape/count) — Auto-detect needs a fresh press after a split-count
 change.
+
+The N split windows are one template for every selected page, held as **fractions of the page**:
+on a page of any size (or after a 90° rotation) they cover the same proportional regions, e.g. the
+left half stays the left half. They are shown and committed in each page's own units, so a window
+never extends past a page edge. Rotating pages re-seeds the even grid.
 
 **Keep ratio** (toggle + numeric field): when on, the crop height is locked to `width / ratio` for
 every crop source in both modes (§7.7). The field pre-populates from whatever crop shape is
@@ -201,7 +206,7 @@ currently on screen when the toggle turns on.
 | Anchor Left / Anchor Top | Left/top edge from this page's (or, at split > 1, this region's) own detected content (on) or the shared union edge (off). At least one anchor must be on for a crop to exist. |
 
 Re-running Auto-detect refreshes an already-committed page's crop to the fresh box instead of
-dropping it (§4.5, §7.4) — split = 1 and split > 1 alike.
+dropping it (§4.5) — split = 1 and split > 1 alike.
 
 ### 4.6 Drawn-window L/T/R/B fields *(split = 1)*
 
@@ -213,6 +218,10 @@ Editing a field moves that edge directly; dragging a handle and editing a field 
 describing the same window (§6.4's existing drag mechanics are unchanged — click outside it drops
 it and starts a new draw, same as any other drawn window). The fields have nothing to show while
 no window is drawn.
+
+Like the split windows, the drawn window is stored as fractions of the page it was drawn on and
+scales to every other page it is shown on or committed to — pages of different sizes get the same
+proportional region, never an empty or clipped crop.
 
 ### 4.7 Actions
 
@@ -1179,20 +1188,28 @@ yes/no confirm dialog, single OK button), never a silent failure and never an au
 21. Dewarp & Deskew's per-page pipeline (§7.1a/§7.1b) is deterministic and content-only: the same
     `source[i]` always classifies the same way and takes the same path (ONNX / skew correction /
     no-op), independent of page order, selection size, or prior Undo/Redo state.
-21. Crop with no source is a no-op: at split = 1 with no active detection and no drawn window on any
+22. Crop with no source is a no-op: at split = 1 with no active detection and no drawn window on any
     selected page, Crop commits nothing and takes no snapshot.
-22. A committed split page ignores window gestures except a fresh draw, which re-commits only the
+23. A committed split page ignores window gestures except a fresh draw, which re-commits only the
     window it was drawn on.
-23. A completed drag resize (auto crop, split window, drawn window) is undoable one drag at a time;
+24. A completed drag resize (auto crop, split window, drawn window) is undoable one drag at a time;
     finishing a rubber-band draw is not, by itself (§6.4, §12).
-24. Rotate and detection commute: rotating re-lays split windows out on the rotated page; the drawn
+25. Rotate and detection commute: rotating re-lays split windows out on the rotated page; the drawn
     window and committed/detected boxes rotate with their pages; detection on a rotated page returns
     its box in the rotated page's coordinate space.
-25. A failed dewarp inference does not crash the batch or commit a half-processed selection; the
+26. A failed dewarp inference does not crash the batch or commit a half-processed selection; the
     failure surfaces as an error dialog.
-26. A new live crop box (Auto-detect or a fresh draw) drops the previously active box and resets all
+27. A new live crop box (Auto-detect or a fresh draw) drops the previously active box and resets all
     four offsets to 0 before the new box appears.
-27. Navigating away before a page's bitmap fetch resolves never lets that late resolution become
+28. Navigating away before a page's bitmap fetch resolves never lets that late resolution become
     the shown bitmap — it is paired against whichever page is actually current when it lands, and a
     different rotation swaps width/height, so a stale bitmap there would show as a distorted page
-    for a moment. Only the fetch for the still-current page commits.
+    for a moment. Only the latest fetch for the still-current page commits. The same holds across a
+    Delete or a new document: work started for the old page at a logical index is never reused for,
+    or cached as, the page that now occupies that index.
+29. Split windows and the drawn window are page-proportional: on pages of different sizes they
+    cover the same fractional region, so no displayed or saved crop ever extends past a page edge or
+    collapses to an empty box (§4.4, §4.6).
+30. The page counter never points past the output total: whenever committed crops change the
+    number of views (Crop, split change, Undo/Redo, Delete), the position stays on the current source
+    page's first view.

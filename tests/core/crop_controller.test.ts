@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest'
 import { CropController, type CropContext } from '@core/crop_controller'
 import { History } from '@core/history'
 import { default_document_state, type DocumentState } from '@core/document_state'
-import type { Box } from '@core/geometry'
+import { scale_box, unscale_box, type Box } from '@core/geometry'
 import type { PageSize } from '@core/model'
 
 function ctx(overrides: Partial<CropContext> = {}): { doc: DocumentState; ctx: CropContext } {
@@ -47,9 +47,9 @@ describe('CropController anchors/offsets', () => {
 
 describe('CropController drawn-window L/T/R/B fields (spec-web §4.6, no separate switch)', () => {
   function drawn_controller(initial: Box | null = null): { c: CropController; drawn: () => Box | null } {
-    let drawn: Box | null = initial
+    let drawn: Box | null = initial && unscale_box(initial, 200, 300)
     const { c } = controller({ drawn: () => drawn, set_drawn: (b) => { drawn = b } })
-    return { c, drawn: () => drawn }
+    return { c, drawn: () => drawn && scale_box(drawn, 200, 300) }
   }
 
   it('drawn_offsets is null when no window is drawn', () => {
@@ -147,12 +147,14 @@ describe('CropController.set_same_size', () => {
     doc.crop_rects = [
       { x0: 0, y0: 0, x1: 50, y1: 50 },
       { x0: 100, y0: 100, x1: 120, y1: 120 },
-    ]
+    ].map(b => unscale_box(b, 200, 300))
     c.set_same_size(true)
     expect(c.same_size).toBe(true)
-    expect(doc.crop_rects[0]).toEqual({ x0: 0, y0: 0, x1: 50, y1: 50 })
+    const [r0, r1] = c.split_rects(0)
+    expect(r0!.x1).toBeCloseTo(50)
+    expect(r0!.y1).toBeCloseTo(50)
     // second window keeps its own origin, resized to the first window's 50x50 (within headroom)
-    expect(doc.crop_rects[1]!.x1 - doc.crop_rects[1]!.x0).toBeCloseTo(50)
+    expect(r1!.x1 - r1!.x0).toBeCloseTo(50)
   })
 
   it('turning off is a pure flag flip with no rect changes', () => {

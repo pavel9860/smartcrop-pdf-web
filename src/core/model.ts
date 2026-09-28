@@ -31,7 +31,7 @@ import {
 } from './constants'
 import { resolve_pages } from './parsing'
 import {
-  output_page_count, view_to_source,
+  output_page_count, view_to_source, source_to_first_view,
 } from './viewmodel'
 
 // Public contract types (RendererAdapter, DocInfo, OutputPage, VectorExportPage, ViewSnapshot,
@@ -68,7 +68,7 @@ export class AppModel {
   // used to be. `_drawn` (the pending hand-drawn window) lives here rather than in CropController
   // because apply_crop/_compute_crop_boxes_for_page/_build_overlay all read it too, outside any
   // drag — CropController reaches it live through CropContext.
-  private _drawn:        Box | null = null   // global hand-drawn window, page coords (§6.4)
+  private _drawn:        Box | null = null   // global hand-drawn window, page fractions (§6.4)
   private _detect_cache = new Map<number, Box>()   // per-page content box from last detect
   private _union:        Box | null = null   // aggregate detection union (§5)
   private _auto_active   = false             // auto-detect was run at least once
@@ -160,9 +160,7 @@ export class AppModel {
       set_detection: set_detection_state,
       recompute_union: (cache): Box | null => this._detection.compute_union(cache),
       set_current_page: (p): void => { this._current_page = p },
-      view_pos: (): number => this._view_pos,
-      set_view_pos: (pos): void => { this._view_pos = pos },
-      view_total: (): number => this.view_total,
+      sync_view_pos: (): void => { this._sync_view_pos() },
       page_count: (): number => this.page_count(),
       split_count: (): 1 | 2 | 4 => this._crop.split_count,
     })
@@ -173,6 +171,7 @@ export class AppModel {
       detection: detection_state,
       set_detection: set_detection_state,
       split_count: (): 1 | 2 | 4 => this._crop.split_count,
+      split_rects: (p): Box[] => this._crop.split_rects(p),
       same_size: (): boolean => this._crop.same_size,
       anchor_left: (): boolean => this._crop.anchor_left,
       anchor_top: (): boolean => this._crop.anchor_top,
@@ -207,7 +206,6 @@ export class AppModel {
       view_pos: (): number => this._view_pos,
       view_total: (): number => this.view_total,
       page_count: (): number => this.page_count(),
-      drawn: (): Box | null => this._drawn,
     })
   }
 
@@ -289,6 +287,15 @@ export class AppModel {
     this._invalidate_current_bitmap()
   }
 
+  // Committed crops decide how many output views each page has; after any change to them, keep the
+  // current source page and put the position back on its first view if it now points elsewhere.
+  private _sync_view_pos(): void {
+    const { src_page } = view_to_source(this._view_pos, this.page_count(), this.document.applied)
+    if (this._view_pos > this.view_total || src_page !== this._current_page) {
+      this._view_pos = source_to_first_view(this._current_page, this.document.applied)
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Pages selection
   // ---------------------------------------------------------------------------
@@ -360,11 +367,12 @@ export class AppModel {
     } else {
       this.history.push(this.document)
       for (const p of pages) {
-        this.document.applied.set(p, [...this.document.crop_rects])
+        this.document.applied.set(p, this._crop.split_rects(p))
         this._invalidate_output_cache(p)
       }
     }
     this._drawn = null   // the drawn window became the crop across all pages (§12.2)
+    this._sync_view_pos()
   }
 
   // Anchors/offsets/keep-ratio/split/same-size, and the full drag gesture state machine
@@ -373,7 +381,7 @@ export class AppModel {
   set_anchor(left: boolean | null, top: boolean | null): void { this._crop.set_anchor(left, top) }
   set_drawn_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_drawn_offset(edge, value) }
   set_keep_ratio(on: boolean, ratio?: number): void { this._crop.set_keep_ratio(on, ratio) }
-  set_split(n: 1 | 2 | 4): void { this._crop.set_split(n) }
+  set_split(n: 1 | 2 | 4): void { this._crop.set_split(n); this._sync_view_pos() }
   set_same_size(on: boolean): void { this._crop.set_same_size(on) }
   begin_drag(px: number, py: number, tol: number): void { this._crop.begin_drag(px, py, tol) }
   update_drag(px: number, py: number): void { this._crop.update_drag(px, py) }
@@ -416,6 +424,7 @@ export class AppModel {
     if (prev) {
       this.document = prev
       this._raster.clear_output()
+      this._sync_view_pos()
     }
   }
 
@@ -424,6 +433,7 @@ export class AppModel {
     if (next) {
       this.document = next
       this._raster.clear_output()
+      this._sync_view_pos()
     }
   }
 

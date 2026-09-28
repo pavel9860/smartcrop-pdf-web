@@ -206,12 +206,14 @@ export class PageRasterPipeline {
     // pass) — resolve it through its own cache, keyed only by rotation+supersample (no filter
     // component), so switching the filter while dewarp stays on reuses the dewarped raster instead
     // of re-running the dewarp pass on every filter change.
+    // Resolve the target cache BEFORE any await (here and in every helper below): a wipe during the
+    // await (Delete, new file) must leave this result in the discarded cache, never the new one.
+    const cache = intent.filter ? this._version_cache(slot.map, p) : null
     const base = intent.dewarp ? await this._get_dewarped(p, rotation, supersample) : await this.get_source(p)
     // Dewarp-only (no filter): the dewarped raster IS the work result — same double-close hazard as
     // the source-aliasing case above, don't also store it in _work_versions.
-    if (!intent.filter) return base
+    if (!intent.filter || !cache) return base
 
-    const cache = this._version_cache(slot.map, p)
     const cached = cache.get(slot.key)
     if (cached) return cached
 
@@ -244,10 +246,10 @@ export class PageRasterPipeline {
   // canonical (rotation=0) ONNX result via a cheap bitmap rotation rather than re-running the
   // model — rotate must never re-trigger Dewarp&Deskew's ONNX pass (spec-web §7).
   private async _get_dewarped(p: number, rotation: number, supersample: number): Promise<ImageBitmap> {
+    const cache = this._version_cache(this._dewarped_versions, p)
     const canonical = await this._get_dewarp_canonical(p, supersample)
     if (rotation === 0) return canonical
 
-    const cache = this._version_cache(this._dewarped_versions, p)
     const key = this._dewarped_key(rotation, supersample)
     const cached = cache.get(key)
     if (cached) return cached

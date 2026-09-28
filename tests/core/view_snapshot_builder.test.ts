@@ -59,7 +59,6 @@ function setup(page_count = 2): {
     view_pos: () => view_pos.v,
     view_total: () => idx.length,
     page_count: () => idx.length,
-    drawn: () => drawn.v,
     detected: (p) => detected.get(p) ?? null,
     union: () => union.v,
     auto_active: () => auto_active.v,
@@ -93,7 +92,7 @@ describe('ViewSnapshotBuilder.build — uncommitted page', () => {
   it('shows split-mode boxes as the overlay when split_count > 1', () => {
     const { builder, crop, doc } = setup()
     crop.set_split(2)
-    doc.crop_rects = [{ x0: 0, y0: 0, x1: 100, y1: 300 }, { x0: 100, y0: 0, x1: 200, y1: 300 }]
+    doc.crop_rects = [{ x0: 0, y0: 0, x1: 0.5, y1: 1 }, { x0: 0.5, y0: 0, x1: 1, y1: 1 }]
     const snap = builder.build()
     expect(snap.overlay).toEqual([
       { kind: 'split', box: { x0: 0, y0: 0, x1: 100, y1: 300 }, idx: 1 },
@@ -101,11 +100,11 @@ describe('ViewSnapshotBuilder.build — uncommitted page', () => {
     ])
   })
 
-  it('shows the drawn (hand-drawn) window, clamped to the page, when one is pending', () => {
+  it('shows the drawn (hand-drawn) window, scaled from page fractions, when one is pending', () => {
     const { builder, drawn } = setup()
-    drawn.v = { x0: -10, y0: -10, x1: 500, y1: 500 }   // deliberately outside the page
+    drawn.v = { x0: 0.25, y0: 0.5, x1: 0.75, y1: 1 }
     const snap = builder.build()
-    expect(snap.overlay).toEqual([{ kind: 'committed', box: { x0: 0, y0: 0, x1: 200, y1: 300 } }])
+    expect(snap.overlay).toEqual([{ kind: 'committed', box: { x0: 50, y0: 150, x1: 150, y1: 300 } }])
   })
 
   it('shows the live auto-crop when detection is active and anchored', () => {
@@ -139,7 +138,7 @@ describe('ViewSnapshotBuilder.build — committed page', () => {
   it('shows the drawn window clamped to the crop box, not the full page, once committed', () => {
     const { builder, doc, drawn } = setup()
     doc.applied.set(0, [{ x0: 20, y0: 30, x1: 120, y1: 180 }])
-    drawn.v = { x0: 0, y0: 0, x1: 500, y1: 500 }   // outside the crop box
+    drawn.v = { x0: 0, y0: 0, x1: 1, y1: 1 }   // whole page, larger than the crop box
     const snap = builder.build()
     expect(snap.overlay).toEqual([{ kind: 'committed', box: { x0: 20, y0: 30, x1: 120, y1: 180 } }])
   })

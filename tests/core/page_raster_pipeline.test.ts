@@ -420,3 +420,24 @@ describe('PageRasterPipeline.prerender_output_views', () => {
     expect(p.output_at(5, 0)).toBeNull()
   })
 })
+
+describe('PageRasterPipeline: a filter result finishing after Delete never lands in the new cache', () => {
+  it('get_work for the page now at index 0 renders its own source', async () => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>(r => { release = r })
+    const a = adapter({
+      get_source_image: async (orig) => { if (orig === 0) await gate; return bmp(100 + orig, 100) },
+      get_work_image: (src) => Promise.resolve(bmp(src.width, 2)),
+    })
+    const idx = new PageIndexMap()
+    idx.reset(2)
+    const c = ctx({ mode: () => Mode.SCANNED, process_intent: (): PageProcessIntent => ({ dewarp: false, filter: [FilterMode.BW, 1] }) })
+    const p = new PageRasterPipeline(a, idx, c)
+    const stale = p.get_work(0)
+    idx.remove(new Set([0]))
+    p.clear_ram()
+    release()
+    await stale
+    expect((await p.get_work(0)).width).toBe(101)
+  })
+})

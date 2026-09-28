@@ -35,7 +35,7 @@ function setup(page_count = 3): {
   doc: DocumentState
   detection: DetectionState
   current_page: { v: number }
-  view_pos: { v: number }
+  synced: { v: number }
   split_count: { v: 1 | 2 | 4 }
   history: History
   raster: PageRasterPipeline
@@ -51,7 +51,7 @@ function setup(page_count = 3): {
   const doc = default_document_state()
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
   const current_page = { v: 0 }
-  const view_pos = { v: 1 }
+  const synced = { v: 0 }
   const split_count: { v: 1 | 2 | 4 } = { v: 1 }
   const ctx: PageOpsContext = {
     document: () => doc,
@@ -68,15 +68,13 @@ function setup(page_count = 3): {
     },
     current_page: () => current_page.v,
     set_current_page: (p) => { current_page.v = p },
-    view_pos: () => view_pos.v,
-    set_view_pos: (p) => { view_pos.v = p },
-    view_total: () => idx.length,
+    sync_view_pos: () => { synced.v++ },
     page_count: () => idx.length,
     split_count: () => split_count.v,
   }
   const history = new History(20)
   const svc = new PageOpsService(history, idx, raster, ctx)
-  return { svc, doc, detection, current_page, view_pos, split_count, history, raster }
+  return { svc, doc, detection, current_page, synced, split_count, history, raster }
 }
 
 describe('PageOpsService.rotate', () => {
@@ -125,13 +123,13 @@ describe('PageOpsService.rotate', () => {
     expect(raster.output_at(0, 0)).toBeNull()
   })
 
-  it('reseeds crop_rects to a fresh grid sized for the current page when split > 1 (bug: stayed stale after rotate)', () => {
+  it('reseeds crop_rects to a fresh page-fraction grid when split > 1 (bug: stayed stale after rotate)', () => {
     const { svc, doc, split_count, current_page } = setup()
     split_count.v = 2
     current_page.v = 0
     doc.crop_rects = [{ x0: 999, y0: 999, x1: 1000, y1: 1000 }, { x0: 0, y0: 0, x1: 1, y1: 1 }]
     svc.rotate([0])
-    expect(doc.crop_rects).toEqual(split_rects_grid(2, 200, 300))
+    expect(doc.crop_rects).toEqual(split_rects_grid(2, 1, 1))
   })
 
   it('leaves crop_rects untouched when split === 1', () => {
@@ -180,13 +178,12 @@ describe('PageOpsService.delete', () => {
     expect(detection.union).not.toBeNull()
   })
 
-  it('clamps current_page and view_pos into the shrunk range', () => {
-    const { svc, current_page, view_pos } = setup(3)
+  it('clamps current_page into the shrunk range and re-syncs the view position', () => {
+    const { svc, current_page, synced } = setup(3)
     current_page.v = 2
-    view_pos.v = 3
     svc.delete([1, 2])   // only page 0 survives
     expect(current_page.v).toBe(0)
-    expect(view_pos.v).toBe(1)
+    expect(synced.v).toBe(1)
   })
 
   it('is destructive, not undoable — clears history rather than pushing a checkpoint', () => {

@@ -10,8 +10,10 @@ import { default_document_state, type DocumentState } from '@core/document_state
 import { Mode } from '@core/enums'
 import { Ok, Failed, Cancelled } from '@core/batch'
 import type { RendererAdapter, PageSize } from '@core/model'
-import type { Box } from '@core/geometry'
-import { make_adapter } from './harness'
+import { scale_box, type Box } from '@core/geometry'
+import { make_adapter, round6 } from './harness'
+
+const page_rects = (doc: DocumentState): Box[] => doc.crop_rects.map(b => round6(scale_box(b, 200, 300)))
 
 function setup(opts: {
   page_count?: number
@@ -60,6 +62,7 @@ function setup(opts: {
     detection: () => detection,
     set_detection: (d) => { detection.cache = d.cache; detection.union = d.union; detection.auto_active = d.auto_active },
     split_count: () => opts.split_count ?? 1,
+    split_rects: () => doc.crop_rects.map(b => scale_box(b, dims.width, dims.height)),
     same_size: () => opts.same_size ?? false,
     current_page: () => opts.current_page ?? 0,
     anchor_left: () => anchor.left,
@@ -196,7 +199,7 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
     const result = await svc.detect([0]).result()
     expect(result).toBeInstanceOf(Ok)
     expect(content_box).toHaveBeenCalledTimes(2)   // once per region
-    expect(doc.crop_rects).toEqual([
+    expect(page_rects(doc)).toEqual([
       { x0: 10, y0: 10, x1: 90, y1: 290 },
       { x0: 110, y0: 10, x1: 190, y1: 290 },
     ])
@@ -211,7 +214,7 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
     })
     await svc.detect([0]).result()
     expect(text_box).toHaveBeenCalledTimes(2)
-    expect(doc.crop_rects).toEqual([
+    expect(page_rects(doc)).toEqual([
       { x0: 5, y0: 5, x1: 95, y1: 295 },
       { x0: 105, y0: 5, x1: 195, y1: 295 },
     ])
@@ -231,9 +234,9 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
     })
     await svc.detect([0]).result()
     // Left grew to the right region's 70x260 size, anchored at its own union's top-left (20,20).
-    expect(doc.crop_rects[0]).toEqual({ x0: 20, y0: 20, x1: 90, y1: 280 })
+    expect(page_rects(doc)[0]).toEqual({ x0: 20, y0: 20, x1: 90, y1: 280 })
     // Right was already the largest — unchanged.
-    expect(doc.crop_rects[1]).toEqual({ x0: 120, y0: 20, x1: 190, y1: 280 })
+    expect(page_rects(doc)[1]).toEqual({ x0: 120, y0: 20, x1: 190, y1: 280 })
   })
 
   it('n=4: detects within each quadrant independently', async () => {
@@ -259,7 +262,7 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
       adapter: { detect_content_box: content_box },
     })
     await svc.detect([0]).result()
-    expect(doc.crop_rects[0]).toEqual({ x0: 0, y0: 0, x1: 100, y1: 300 })   // the raw left region
+    expect(page_rects(doc)[0]).toEqual({ x0: 0, y0: 0, x1: 100, y1: 300 })   // the raw left region
   })
 
   it('regression: crop_rects is independent of which page happens to be "current" (root cause of the ' +
@@ -333,7 +336,7 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
     })
     doc.applied.set(0, [{ x0: 0, y0: 0, x1: 1, y1: 1 }, { x0: 0, y0: 0, x1: 1, y1: 1 }])
     await svc.detect([0]).result()
-    expect(doc.applied.get(0)).toEqual(doc.crop_rects)
+    expect(doc.applied.get(0)?.map(round6)).toEqual(page_rects(doc))
     expect(invalidated).toContain(0)
   })
 })

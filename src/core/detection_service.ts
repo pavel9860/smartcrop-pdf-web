@@ -7,7 +7,7 @@
 import type { Box } from './geometry'
 import {
   auto_crop_rect, centered_crop_rect, box_width, box_height, detection_union,
-  split_rects_grid, translate_box, clamp_box_shift,
+  split_rects_grid, translate_box, clamp_box_shift, unscale_box,
 } from './geometry'
 import type { DocumentState } from './document_state'
 import type { History } from './history'
@@ -30,6 +30,7 @@ export interface DetectionContext {
   detection(): DetectionState
   set_detection(d: DetectionState): void
   split_count(): 1 | 2 | 4
+  split_rects(p: number): Box[]
   same_size(): boolean
   current_page(): number
   anchor_left(): boolean
@@ -244,12 +245,12 @@ export class DetectionService {
     })
 
     const doc = this._ctx.document()
-    doc.crop_rects = rects
+    doc.crop_rects = rects.map(b => unscale_box(b, sz.width, sz.height))
     // Re-detect refreshes already-committed split pages instead of dropping them (mirrors
     // _refresh_committed_crops_after_detect's split=1 behaviour, spec §4.5).
     for (const p of pages) {
       if (!doc.applied.has(p)) continue
-      doc.applied.set(p, [...rects])
+      doc.applied.set(p, this._ctx.split_rects(p))
       this._ctx.invalidate_output(p)
     }
   }

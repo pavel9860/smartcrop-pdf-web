@@ -6,7 +6,7 @@ import { AppModel } from '@core/model'
 import { clamp_edge_deltas, type Box, type EdgeDeltas } from '@core/geometry'
 import { Mode, PagesMode } from '@core/enums'
 import { EmptySelectionError } from '@core/errors'
-import { make_adapter, FILE } from './harness'
+import { make_adapter, FILE, split_rects, round6 } from './harness'
 
 async function loaded(pc = 4, mode = Mode.NORMAL, w = 200, h = 300): Promise<AppModel> {
   const m = new AppModel(make_adapter(pc, mode, w, h)); await m.load_files([FILE()]); return m
@@ -87,8 +87,8 @@ describe('same-size resize mirroring (2-split)', () => {
     m.set_split(2); m.set_same_size(true)
     m.begin_drag(0, 150, 8)              // L handle of window0
     m.update_drag(10, 150)
-    expect(m.document.crop_rects[0]).toEqual({ x0: 10, y0: 0, x1: 100, y1: 300 })
-    expect(m.document.crop_rects[1]).toEqual({ x0: 100, y0: 0, x1: 190, y1: 300 })
+    expect(split_rects(m)[0]).toEqual({ x0: 10, y0: 0, x1: 100, y1: 300 })
+    expect(split_rects(m)[1]).toEqual({ x0: 100, y0: 0, x1: 190, y1: 300 })
     m.end_drag()
   })
 
@@ -97,30 +97,30 @@ describe('same-size resize mirroring (2-split)', () => {
     m.set_split(2); m.set_same_size(true)
     m.begin_drag(50, 0, 8)                // T handle of window0
     m.update_drag(50, 20)
-    expect(m.document.crop_rects[0]).toEqual({ x0: 0, y0: 20, x1: 100, y1: 300 })
-    expect(m.document.crop_rects[1]).toEqual({ x0: 100, y0: 20, x1: 200, y1: 300 })
+    expect(split_rects(m)[0]).toEqual({ x0: 0, y0: 20, x1: 100, y1: 300 })
+    expect(split_rects(m)[1]).toEqual({ x0: 100, y0: 20, x1: 200, y1: 300 })
     m.end_drag()
   })
 
   it('a MOVE (interior drag) never propagates to the other window, even with same-size on', async () => {
     const m = await loaded()
     m.set_split(2); m.set_same_size(true)
-    const before1 = { ...m.document.crop_rects[1] }
+    const before1 = { ...split_rects(m)[1] }
     m.begin_drag(50, 150, 8)              // interior of window0 -> move
     m.update_drag(60, 150)
-    expect(m.document.crop_rects[0]).toEqual({ x0: 10, y0: 0, x1: 110, y1: 300 })
-    expect(m.document.crop_rects[1]).toEqual(before1)   // untouched
+    expect(split_rects(m)[0]).toEqual({ x0: 10, y0: 0, x1: 110, y1: 300 })
+    expect(split_rects(m)[1]).toEqual(before1)   // untouched
     m.end_drag()
   })
 
   it('Esc/cancel during the drag restores every window (frozen §9.6)', async () => {
     const m = await loaded()
     m.set_split(2); m.set_same_size(true)
-    const before = m.document.crop_rects.map(r => ({ ...r }))
+    const before = split_rects(m).map(r => ({ ...r }))
     m.begin_drag(0, 150, 8)
     m.update_drag(30, 150)
     m.cancel_drag()
-    expect(m.document.crop_rects).toEqual(before)
+    expect(split_rects(m)).toEqual(before)
   })
 
   it('growth is capped at the tightest window\'s headroom instead of a partner deforming (bug #2)', async () => {
@@ -133,12 +133,12 @@ describe('same-size resize mirroring (2-split)', () => {
     m.begin_drag(50, 150, 8)
     m.update_drag(130, 150)               // window0 -> {80,0,180,300}
     m.end_drag()
-    expect(m.document.crop_rects[0]).toEqual({ x0: 80, y0: 0, x1: 180, y1: 300 })
-    expect(m.document.crop_rects[1]).toEqual({ x0: 100, y0: 0, x1: 200, y1: 300 })
+    expect(split_rects(m)[0]).toEqual({ x0: 80, y0: 0, x1: 180, y1: 300 })
+    expect(split_rects(m)[1]).toEqual({ x0: 100, y0: 0, x1: 200, y1: 300 })
 
     m.begin_drag(100, 150, 8)             // L handle of window1
     m.update_drag(-50, 150)               // dragged far past what window1 alone could take
-    const w0 = m.document.crop_rects[0]!, w1 = m.document.crop_rects[1]!
+    const w0 = split_rects(m)[0]!, w1 = split_rects(m)[1]!
     expect(w1.x1 - w1.x0).toBeCloseTo(w0.x1 - w0.x0)   // still equal size — not deformed apart
     expect(w0.x1).toBeLessThanOrEqual(200)             // window0 never exceeds the page
     expect(w1.x0).toBeGreaterThanOrEqual(0)
@@ -152,20 +152,20 @@ describe('same-size resize mirroring (4-split)', () => {
     m.set_split(4); m.set_same_size(true)
     m.begin_drag(50, 0, 8)                // T handle of TL
     m.update_drag(50, 10)
-    expect(m.document.crop_rects[0]).toEqual({ x0: 0,   y0: 10,  x1: 100, y1: 150 })
-    expect(m.document.crop_rects[1]).toEqual({ x0: 0,   y0: 150, x1: 100, y1: 290 })
-    expect(m.document.crop_rects[2]).toEqual({ x0: 100, y0: 10,  x1: 200, y1: 150 })
-    expect(m.document.crop_rects[3]).toEqual({ x0: 100, y0: 150, x1: 200, y1: 290 })
+    expect(split_rects(m)[0]).toEqual({ x0: 0,   y0: 10,  x1: 100, y1: 150 })
+    expect(split_rects(m)[1]).toEqual({ x0: 0,   y0: 150, x1: 100, y1: 290 })
+    expect(split_rects(m)[2]).toEqual({ x0: 100, y0: 10,  x1: 200, y1: 150 })
+    expect(split_rects(m)[3]).toEqual({ x0: 100, y0: 150, x1: 200, y1: 290 })
     m.end_drag()
   })
 
   it('a MOVE of one 4-split window leaves the other three untouched', async () => {
     const m = await loaded()
     m.set_split(4); m.set_same_size(true)
-    const before = m.document.crop_rects.slice(1).map(r => ({ ...r }))
+    const before = split_rects(m).slice(1).map(r => ({ ...r }))
     m.begin_drag(50, 75, 8)               // interior of TL -> move
     m.update_drag(60, 85)
-    expect(m.document.crop_rects.slice(1)).toEqual(before)
+    expect(split_rects(m).slice(1)).toEqual(before)
     m.end_drag()
   })
 })
@@ -177,12 +177,12 @@ describe('same-size toggle normalization (bug #2: same size at all times)', () =
     m.begin_drag(200, 150, 8)             // R handle of window1 (x=100 would ambiguously also hit
     m.update_drag(170, 150)               // window0's R handle, since the two windows share that edge)
     m.end_drag()
-    expect(m.document.crop_rects[1]).toEqual({ x0: 100, y0: 0, x1: 170, y1: 300 })   // width 70, differs
+    expect(split_rects(m)[1]).toEqual({ x0: 100, y0: 0, x1: 170, y1: 300 })   // width 70, differs
 
     m.set_same_size(true)
     // window0 (first) is untouched at {0,0,100,300}; window1 SNAPS to that width, own origin kept.
-    expect(m.document.crop_rects[0]).toEqual({ x0: 0,   y0: 0, x1: 100, y1: 300 })
-    expect(m.document.crop_rects[1]).toEqual({ x0: 100, y0: 0, x1: 200, y1: 300 })
+    expect(split_rects(m)[0]).toEqual({ x0: 0,   y0: 0, x1: 100, y1: 300 })
+    expect(split_rects(m)[1]).toEqual({ x0: 100, y0: 0, x1: 200, y1: 300 })
   })
 
   it('normalization caps to whatever fits every window\'s own origin, without moving it', async () => {
@@ -191,13 +191,13 @@ describe('same-size toggle normalization (bug #2: same size at all times)', () =
     m.begin_drag(100, 150, 8)             // R handle of window0
     m.update_drag(150, 150)               // window0 -> {0,0,150,300}
     m.end_drag()
-    expect(m.document.crop_rects[0]).toEqual({ x0: 0, y0: 0, x1: 150, y1: 300 })
+    expect(split_rects(m)[0]).toEqual({ x0: 0, y0: 0, x1: 150, y1: 300 })
 
     m.set_same_size(true)
     // window1's own origin (x0=100) has only 100 of headroom to the page edge (200) — the shared
     // size is capped to THAT, not window0's 150; neither window's own origin moves.
-    expect(m.document.crop_rects[0]).toEqual({ x0: 0,   y0: 0, x1: 100, y1: 300 })
-    expect(m.document.crop_rects[1]).toEqual({ x0: 100, y0: 0, x1: 200, y1: 300 })
+    expect(split_rects(m)[0]).toEqual({ x0: 0,   y0: 0, x1: 100, y1: 300 })
+    expect(split_rects(m)[1]).toEqual({ x0: 100, y0: 0, x1: 200, y1: 300 })
   })
 })
 
@@ -279,7 +279,7 @@ describe('committed-page draw (spec §9.3)', () => {
     expect([s.page_w, s.page_h]).toEqual([140, 240])   // STILL the committed crop, not 200×300
     expect(s.crop_origin).toEqual({ x: 10, y: 10 })
     const win = s.overlay.find(o => o.kind === 'committed')
-    expect(win?.box).toEqual({ x0: 30, y0: 40, x1: 120, y1: 200 })  // drawn window over the crop
+    expect(win && round6(win.box)).toEqual({ x0: 30, y0: 40, x1: 120, y1: 200 })  // drawn window over the crop
   })
 
   it('only Crop commits — a draw does not change applied (crop dims unchanged until Crop)', async () => {
@@ -288,7 +288,7 @@ describe('committed-page draw (spec §9.3)', () => {
     expect([m.view_snapshot().page_w, m.view_snapshot().page_h]).toEqual([140, 240])
     m.apply_crop()                                     // now commit the drawn window
     await m.prepare_current_view()
-    expect([m.view_snapshot().page_w, m.view_snapshot().page_h]).toEqual([90, 160])
+    expect([m.view_snapshot().page_w, m.view_snapshot().page_h].map(v => +v.toFixed(6))).toEqual([90, 160])
   })
 
   it('the committed crop is not a drag target — a grab at its corner draws, never resizes applied', async () => {

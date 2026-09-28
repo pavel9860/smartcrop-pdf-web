@@ -13,7 +13,7 @@ import {
   CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DEFAULT_CUSTOM_PAPER_IN,
   SRC_DPI, NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX,
 } from '@core/constants'
-import { make_bitmap, FILE } from './harness'
+import { make_bitmap, FILE, split_rects, round6 } from './harness'
 
 // ---------------------------------------------------------------------------
 // Mock adapter — this file needs call-count/arg-tracking instrumentation the shared
@@ -398,12 +398,14 @@ describe('detect_content / apply_crop', () => {
   it('cancel_drag on an EXISTING drawn window restores it, not drops it (H1)', async () => {
     const model = await loaded_model()
     model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()   // drawn={40,50,160,250}
-    const before = model.view_snapshot().overlay[0]?.box
+    const box0 = model.view_snapshot().overlay[0]?.box
+    const before = box0 && round6(box0)
     model.begin_drag(40, 50, 8)      // grab the TL handle of the existing drawn window
     model.update_drag(80, 90)        // resize it
     expect(model.view_snapshot().overlay[0]?.box).not.toEqual(before)   // live during the drag
     model.cancel_drag()
-    expect(model.view_snapshot().overlay[0]?.box).toEqual(before)   // cancel changes nothing (help_view §5)
+    const box1 = model.view_snapshot().overlay[0]?.box
+    expect(box1 && round6(box1)).toEqual(before)   // cancel changes nothing (help_view §5)
   })
 
   it('starting a new draw drops the old drawn window immediately on press (bug 6)', async () => {
@@ -427,11 +429,11 @@ describe('detect_content / apply_crop', () => {
   it('set_keep_ratio(true) at split>1 prefers a manually resized window over the fresh-grid cell aspect (bug #4)', async () => {
     const model = await loaded_model({ page_w: 200, page_h: 300 })
     model.set_split(2)
-    const r = model.document.crop_rects[0]!            // {0,0,100,300}
+    const r = split_rects(model)[0]!            // {0,0,100,300}
     model.begin_drag(r.x1, (r.y0 + r.y1) / 2, 8)        // R handle
     model.update_drag(180, (r.y0 + r.y1) / 2)           // manually resize BEFORE keep-ratio is pressed
     model.end_drag()
-    expect(model.document.crop_rects[0]!.x1).toBeCloseTo(180)
+    expect(split_rects(model)[0]!.x1).toBeCloseTo(180)
 
     model.set_keep_ratio(true)
     // the fresh-grid cell aspect would be 100/300; the manual edit's own aspect must win instead.
@@ -683,15 +685,15 @@ describe('undo / redo', () => {
   it('a completed split-drag resize is undoable (C1)', async () => {
     const model = await loaded_model({ page_w: 200, page_h: 300 })
     model.set_split(2)
-    const before = [...model.document.crop_rects]
-    const r = model.document.crop_rects[0]
+    const before = [...split_rects(model)]
+    const r = split_rects(model)[0]
     if (!r) throw new Error('no split rect')
     model.begin_drag(r.x0, r.y0, 8)
     model.update_drag(r.x0 + 15, r.y0 + 15)
     model.end_drag()
-    expect(model.document.crop_rects).not.toEqual(before)
+    expect(split_rects(model)).not.toEqual(before)
     model.undo()
-    expect(model.document.crop_rects).toEqual(before)
+    expect(split_rects(model)).toEqual(before)
   })
 
   it('anchor_left/anchor_top are deliberately non-undoable interaction settings (L5)', async () => {
@@ -850,7 +852,7 @@ describe('keep-ratio live + anchored', () => {
     const model = await loaded_model({ page_w: 400, page_h: 120 })
     model.set_split(2)
     model.set_keep_ratio(true, 2.0)                            // width:height = 2:1
-    const r0 = model.document.crop_rects[0]!                   // {0,0,200,120}
+    const r0 = split_rects(model)[0]!                   // {0,0,200,120}
     model.begin_drag(r0.x1, r0.y1, 10)                         // BR handle
     model.update_drag(300, 120)                                // target width 300 = 75% of the page
     const box = model.view_snapshot().overlay.find(o => o.kind === 'split')?.box
@@ -1071,5 +1073,54 @@ describe('prepare_current_view: a superseded fetch never replaces the newer view
     release()
     await stale
     expect(model.view_snapshot().image?.width).toBe(101)
+  })
+})
+
+describe('mixed page sizes: split and drawn windows are page-proportional (spec-web §4.4, §4.6)', () => {
+  async function mixed(): Promise<AppModel> {
+    const { adapter } = make_mock_adapter({ page_count: 2 })
+    const sizes = [{ width: 600, height: 800 }, { width: 150, height: 150 }]
+    const m = new AppModel({ ...adapter, load_files: f => Promise.resolve({ page_count: 2, page_sizes: sizes, file_names: f.map(x => x.name), mode: Mode.NORMAL }) })
+    await m.load_files([FILE()])
+    return m
+  }
+
+  it('split windows set on a large page are the same halves on a small page', async () => {
+    const m = await mixed()
+    m.set_split(2)
+    m.jump_to_output_page(2)
+    expect(split_rects(m)).toEqual([{ x0: 0, y0: 0, x1: 75, y1: 150 }, { x0: 75, y0: 0, x1: 150, y1: 150 }])
+  })
+
+  it('a window drawn in the lower right of a large page never commits an empty crop on a small page', async () => {
+    const m = await mixed()
+    m.begin_drag(300, 400, 8); m.update_drag(600, 800); m.end_drag()
+    m.apply_crop()
+    m.jump_to_output_page(2)
+    await m.prepare_current_view()
+    const v = m.view_snapshot()
+    expect([v.crop_origin.x, v.crop_origin.y, v.page_w, v.page_h].map(n => +n.toFixed(6))).toEqual([75, 75, 75, 75])
+  })
+})
+
+describe('view position follows the current page when committed crops change the view count', () => {
+  it('leaving split mode from a late split view does not leave the position past the end', async () => {
+    const model = await loaded_model({ page_count: 4 })
+    model.set_split(4)
+    model.apply_crop()
+    model.jump_to_output_page(11)
+    model.set_split(1)
+    expect(model.view_position).toBeLessThanOrEqual(model.view_total)
+    expect(model.view_snapshot().position).toBe(3)
+  })
+
+  it('undo of a split crop keeps showing the same source page', async () => {
+    const model = await loaded_model({ page_count: 3 })
+    model.jump_to_output_page(2)
+    model.set_split(2)
+    model.apply_crop()
+    expect(model.view_position).toBe(3)
+    model.undo()
+    expect(model.view_position).toBe(2)
   })
 })

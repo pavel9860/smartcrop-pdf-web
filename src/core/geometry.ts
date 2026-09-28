@@ -513,3 +513,12 @@ export function box_area(b: Box): number { return box_width(b) * box_height(b) }
 export function translate_box(b: Box, dx: number, dy: number): Box {
   return { x0: b.x0 + dx, y0: b.y0 + dy, x1: b.x1 + dx, y1: b.y1 + dy }
 }
+
+// Page-fraction <-> page-unit conversion for the shared split/drawn window templates.
+export function scale_box(b: Box, sx: number, sy: number): Box {
+  return { x0: b.x0 * sx, y0: b.y0 * sy, x1: b.x1 * sx, y1: b.y1 * sy }
+}
+
+export function unscale_box(b: Box, sx: number, sy: number): Box {
+  return { x0: b.x0 / sx, y0: b.y0 / sy, x1: b.x1 / sx, y1: b.y1 / sy }
+}

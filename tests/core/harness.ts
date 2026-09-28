@@ -1,6 +1,7 @@
 // Shared mock RendererAdapter/bitmap for src/core/ tests (AppModel and its extracted services).
 // Mirrors tests/ui/harness.ts's naming for the same concepts, one layer down.
-import type { RendererAdapter, DocInfo, OutputPage } from '@core/model'
+import type { AppModel, RendererAdapter, DocInfo, OutputPage } from '@core/model'
+import type { Box } from '@core/geometry'
 import { Mode } from '@core/enums'
 
 export function make_bitmap(w = 200, h = 300): ImageBitmap {
@@ -35,3 +36,12 @@ export function make_adapter(
 }
 
 export const FILE = (name = 'a.pdf'): File => new File(['x'], name, { type: 'application/pdf' })
+
+export const round6 = (b: Box): Box => ({
+  x0: +b.x0.toFixed(6), y0: +b.y0.toFixed(6), x1: +b.x1.toFixed(6), y1: +b.y1.toFixed(6),
+})
+
+// The split windows on the current page, in page units, via the public view snapshot.
+export function split_rects(m: AppModel): Box[] {
+  return m.view_snapshot().overlay.filter(o => o.kind === 'split').map(o => round6(o.box))
+}

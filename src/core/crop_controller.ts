@@ -8,10 +8,10 @@
 import type { Box } from './geometry'
 import {
   hit_handle, apply_handle_drag, auto_crop_rect, centered_crop_rect,
-  offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag, clamp_box_to_page,
+  offsets_from_rect, keep_ratio_normalise, keep_ratio_anchored, clamp_box_drag,
   split_rects_grid, split_grid_position, edge_deltas, apply_edge_deltas, clamp_edge_deltas,
   drawn_offset_rect, offsets_from_drawn_rect,
-  MIN_RECT, box_width, box_height,
+  MIN_RECT, box_width, box_height, scale_box, unscale_box,
 } from './geometry'
 import type { DocumentState, Offsets } from './document_state'
 import type { History } from './history'
@@ -76,8 +76,9 @@ export class CropController {
   // when no window is drawn: the fields have nothing to show/edit until one exists (split = 1 only
   // — `drawn` is always null at split > 1, see set_split below).
   drawn_offsets(): Offsets | null {
-    const drawn = this._ctx.drawn()
-    if (!drawn || !this._ctx.has_document()) return null
+    if (!this._ctx.has_document()) return null
+    const drawn = this.drawn_rect(this._ctx.current_page())
+    if (!drawn) return null
     const sz = this._ctx.page_dims(this._ctx.current_page())
     return offsets_from_drawn_rect(drawn, sz.width, sz.height)
   }
@@ -93,7 +94,7 @@ export class CropController {
       bottom: edge === 'B' ? clamped : o.bottom,
     }
     const sz = this._ctx.page_dims(this._ctx.current_page())
-    this._ctx.set_drawn(drawn_offset_rect(next, sz.width, sz.height))
+    this._set_drawn_on(drawn_offset_rect(next, sz.width, sz.height), sz)
   }
 
   // Ratio source after a fresh detect is the detection UNION's aspect ratio, not the page's
@@ -110,8 +111,8 @@ export class CropController {
     if (!this._ctx.has_document()) return null
     const sz = this._ctx.page_dims(p)
 
-    const drawn = this._ctx.drawn()
-    if (drawn) return [clamp_box_to_page(drawn, sz.width, sz.height)]
+    const drawn = this.drawn_rect(p)
+    if (drawn) return [drawn]
 
     const detected = this._ctx.detected(p)
     const union    = this._ctx.union()
@@ -158,11 +159,11 @@ export class CropController {
   // made before Keep-ratio is pressed is not silently discarded. Falls back to the detection
   // union, then the page aspect, only when no concrete crop shape exists yet (bug E).
   private _default_ratio(): number {
-    if (this._split_count > 1) {
-      const r = this._ctx.document().crop_rects[0]
+    if (this._split_count > 1 && this._ctx.has_document()) {
+      const r = this.split_rects(this._ctx.current_page())[0]
       if (r && box_height(r) > 0) return box_width(r) / box_height(r)
     } else {
-      const d = this._ctx.drawn()
+      const d = this._ctx.has_document() ? this.drawn_rect(this._ctx.current_page()) : null
       if (d && box_height(d) > 0) return box_width(d) / box_height(d)
     }
     const u = this._ctx.union()
@@ -183,11 +184,8 @@ export class CropController {
     doc.applied.clear()
     this._ctx.set_drawn(null)
     this._split_count = n
-    if (this._ctx.has_document()) {
-      const sz = this._ctx.page_dims(this._ctx.current_page())
-      // n === 1 has no split rectangles (desktop clears crop_rects); 2/4 auto-lay the grid.
-      doc.crop_rects = n === 1 ? [] : split_rects_grid(n, sz.width, sz.height)
-    }
+    // n === 1 has no split rectangles (desktop clears crop_rects); 2/4 auto-lay the grid.
+    doc.crop_rects = n === 1 ? [] : split_rects_grid(n, 1, 1)
     // A split-count change always re-derives the ratio fresh from the newly-reseeded grid — it
     // does not carry the previous ratio forward proportionally (bug #3; explicit user decision:
     // "drop the previous ratio if the split changes"). Reuses the same source set_keep_ratio's
@@ -206,17 +204,41 @@ export class CropController {
     const turning_on = on && !this._same_size
     this._same_size = on
     if (!turning_on) return
+    if (!this._ctx.has_document()) return
     const doc = this._ctx.document()
-    const rects = doc.crop_rects
-    const first = rects[0]
-    if (!this._ctx.has_document() || !first) return
     const sz = this._ctx.page_dims(this._ctx.current_page())
+    const rects = this.split_rects(this._ctx.current_page())
+    const first = rects[0]
+    if (!first) return
     const max_w = Math.min(...rects.map(r => sz.width - r.x0))
     const max_h = Math.min(...rects.map(r => sz.height - r.y0))
     const w = Math.max(MIN_RECT, Math.min(box_width(first), max_w))
     const h = Math.max(MIN_RECT, Math.min(box_height(first), max_h))
     this._history.push(doc)
-    doc.crop_rects = rects.map(r => ({ x0: r.x0, y0: r.y0, x1: r.x0 + w, y1: r.y0 + h }))
+    this._store_split_rects(rects.map(r => ({ x0: r.x0, y0: r.y0, x1: r.x0 + w, y1: r.y0 + h })), sz)
+  }
+
+  // Split windows are stored as fractions of the page (one template shared by pages of any size,
+  // spec-web §4.4) and resolved to page units here, for the page they are shown on or cut from.
+  // The hand-drawn window, stored the same way (fractions of the page it was drawn on).
+  drawn_rect(p: number): Box | null {
+    const d = this._ctx.drawn()
+    if (!d) return null
+    const sz = this._ctx.page_dims(p)
+    return scale_box(d, sz.width, sz.height)
+  }
+
+  private _set_drawn_on(rect: Box, sz: PageSize): void {
+    this._ctx.set_drawn(unscale_box(rect, sz.width, sz.height))
+  }
+
+  split_rects(p: number): Box[] {
+    const sz = this._ctx.page_dims(p)
+    return this._ctx.document().crop_rects.map(b => scale_box(b, sz.width, sz.height))
+  }
+
+  private _store_split_rects(rects: readonly Box[], sz: PageSize): void {
+    this._ctx.document().crop_rects = rects.map(b => unscale_box(b, sz.width, sz.height))
   }
 
   // ---------------------------------------------------------------------------
@@ -233,7 +255,7 @@ export class CropController {
     // A pending manual window (drawn): grab a handle to resize, press INSIDE to move it,
     // press OUTSIDE to drop it and rubber-band a new one (desktop WindowDrag / DrawDrag, §9.3/§9.4).
     // hit_handle() itself returns 'move' for any interior point, so a hit here is never null.
-    const drawn = this._ctx.drawn()
+    const drawn = this.drawn_rect(p)
     if (drawn) {
       const h = hit_handle(drawn, px, py, tol)
       if (h) {
@@ -259,16 +281,16 @@ export class CropController {
     pt: readonly [number, number], tol: number, sz: PageSize,
   ): void {
     const [px, py] = pt
-    const doc = this._ctx.document()
-    for (let i = 0; i < doc.crop_rects.length; i++) {
-      const rect = doc.crop_rects[i]
+    const rects = this.split_rects(this._ctx.current_page())
+    for (let i = 0; i < rects.length; i++) {
+      const rect = rects[i]
       if (!rect) continue
       const h = hit_handle(rect, px, py, tol)
       if (h) {
-        this._history.push(doc)   // snapshot BEFORE the drag mutates crop_rects live
+        this._history.push(this._ctx.document())   // snapshot BEFORE the drag mutates crop_rects live
         this._drag = {
           kind: 'split', idx: i, handle: h, rect0: rect,
-          rects0: [...doc.crop_rects],   // same-size v2 bases + §9.6 cancel restore
+          rects0: rects,   // page units; same-size v2 bases + §9.6 cancel restore
           start: pt, page_w: sz.width, page_h: sz.height,
         } satisfies SplitDrag
         return
@@ -358,14 +380,13 @@ export class CropController {
     if (this._keep_ratio && drag.handle !== 'move') {
       updated = keep_ratio_anchored(updated, this._ratio, drag.handle, drag.page_w, drag.page_h)
     }
-    const doc = this._ctx.document()
-    const rects = [...doc.crop_rects]
+    const rects = [...drag.rects0]
     rects[drag.idx] = updated
     // Same-size propagates ONLY on a resize (spec-web §W2 row 10) — `move` (dragging a window's
     // interior to translate it) NEVER syncs partners, in any state; this is a deliberate,
     // permanent exclusion (a prior design mirrored move deltas too, and that was wrong).
     if (this._same_size && drag.handle !== 'move') this._propagate_same_size(drag, updated, rects)
-    doc.crop_rects = rects
+    this._store_split_rects(rects, { width: drag.page_w, height: drag.page_h })
   }
 
   // Same-size RESIZE (spec-web §W2 row 10): the dragged window's raw edge deltas mirror by grid
@@ -395,9 +416,9 @@ export class CropController {
       drag.start, [px, py], drag.page_w, drag.page_h)
     // Keep-ratio holds LIVE during a resize, anchored opposite the dragged handle so only the
     // dragged side moves (spec-web §W2 row 9). A move ('move' handle) preserves the ratio.
-    this._ctx.set_drawn((this._keep_ratio && drag.handle !== 'move')
+    this._set_drawn_on((this._keep_ratio && drag.handle !== 'move')
       ? keep_ratio_anchored(box, this._ratio, drag.handle, drag.page_w, drag.page_h)
-      : box)
+      : box, { width: drag.page_w, height: drag.page_h })
   }
 
   end_drag(): void {
@@ -410,18 +431,15 @@ export class CropController {
       const rect = this._draw_rect
       this._draw_rect = null
       if (!rect || box_width(rect) < 2 * MIN_RECT || box_height(rect) < 2 * MIN_RECT) return
-      let drawn = rect
-      if (this._keep_ratio) {
-        const sz = this._ctx.page_dims(this._ctx.current_page())
-        drawn = keep_ratio_normalise(rect, this._ratio, sz.width, sz.height)
-      }
+      const sz = { width: drag.page_w, height: drag.page_h }
+      const drawn = this._keep_ratio ? keep_ratio_normalise(rect, this._ratio, sz.width, sz.height) : rect
       // The drawn window is a GLOBAL pending crop shown as an outline on every page — it is NOT
       // committed here. Clicking Crop maps it onto each selected page then clears it, so a hand-
       // drawn window crops ALL pages (desktop §9.3/§12.2), and the page never zooms to the crop
       // on mouse-up (was the "magnification" bug). drawn is non-undoable working state (§W9.2) —
       // no history.push here (removed): finishing a rubber-band draw must not clear the redo
       // stack, since nothing undo-tracked changes until Crop commits it into `applied`.
-      this._ctx.set_drawn(drawn)
+      this._set_drawn_on(drawn, sz)
       return
     }
 
@@ -449,12 +467,12 @@ export class CropController {
     } else if (drag.kind === 'split') {
       // §9.6: Esc/right-click during a drag leaves the windows unchanged — restore EVERY window
       // (same-size v2 moves partners live, so the dragged rect alone is not enough).
-      this._ctx.document().crop_rects = [...drag.rects0]
+      this._store_split_rects(drag.rects0, { width: drag.page_w, height: drag.page_h })
     } else if (drag.kind === 'drawn') {
       // Cancelling a move/resize of an EXISTING window restores it, not drops it (help_view §5:
       // cancel changes nothing) — distinct from the no-drag Esc above, which intentionally drops
       // a pending window that was never being edited.
-      this._ctx.set_drawn(drag.rect0)
+      this._set_drawn_on(drag.rect0, { width: drag.page_w, height: drag.page_h })
     }
     // 'draw': nothing to restore — _begin_draw_drag already cleared any prior drawn window at
     // press time (bug 6), and no window was committed yet.

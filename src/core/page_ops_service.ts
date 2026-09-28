@@ -30,9 +30,7 @@ export interface PageOpsContext {
   recompute_union(cache: Map<number, Box>): Box | null
   current_page(): number
   set_current_page(p: number): void
-  view_pos(): number
-  set_view_pos(pos: number): void
-  view_total(): number
+  sync_view_pos(): void
   page_count(): number
   split_count(): 1 | 2 | 4
 }
@@ -49,19 +47,10 @@ export class PageOpsService {
     this._history.push(this._ctx.document())
     for (const p of pages) this._rotate_page(p)
 
-    // Split windows (crop_rects) are a live template, not a per-page map like applied/detect_cache
-    // above — rotating doesn't rotate them, it invalidates their sizing (a 90° swap changes
-    // page_w/page_h). Reseed a fresh even grid against a page that was actually just rotated (not
-    // necessarily the current page — `current_page()` need not be in `pages`, and using it anyway
-    // would size the grid from a page whose dims never changed), same as set_split() does when
-    // first turning split on — any prior manual window positioning was sized for the pre-rotation
-    // page anyway.
+    // Split windows (crop_rects, page fractions) are one template, not a per-page map like
+    // applied/detect_cache above: a rotated page gets a fresh even grid, same as set_split().
     const n = this._ctx.split_count()
-    const first = pages[0]
-    if (n > 1 && first !== undefined) {
-      const sz = this._ctx.page_dims(first)
-      this._ctx.document().crop_rects = split_rects_grid(n, sz.width, sz.height)
-    }
+    if (n > 1) this._ctx.document().crop_rects = split_rects_grid(n, 1, 1)
   }
 
   private _rotate_page(p: number): void {
@@ -132,6 +121,6 @@ export class PageOpsService {
 
     this._raster.clear_ram()
     this._ctx.set_current_page(Math.min(this._ctx.current_page(), this._ctx.page_count() - 1))
-    this._ctx.set_view_pos(Math.min(this._ctx.view_pos(), this._ctx.view_total()))
+    this._ctx.sync_view_pos()
   }
 }

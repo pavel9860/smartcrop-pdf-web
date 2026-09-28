@@ -3,7 +3,7 @@
 // §W8). Synchronous; reads only pre-fetched bitmaps from the raster cache (prepare_current_view()
 // must run first, still owned by AppModel, since it's async cache-warming, not view computation).
 import type { Box } from './geometry'
-import { box_width, box_height, auto_crop_rect, centered_crop_rect, keep_ratio_normalise, clamp_box_to_page } from './geometry'
+import { box_width, box_height, auto_crop_rect, centered_crop_rect, keep_ratio_normalise } from './geometry'
 import type { DocumentState } from './document_state'
 import { view_to_source } from './viewmodel'
 import { SYNTH_W, SYNTH_H } from './constants'
@@ -18,7 +18,6 @@ export interface ViewContext {
   view_pos(): number
   view_total(): number
   page_count(): number
-  drawn(): Box | null
   detected(p: number): Box | null
   union(): Box | null
   auto_active(): boolean
@@ -52,7 +51,7 @@ export class ViewSnapshotBuilder {
         page_w: box ? box_width(box)  : sz.width,
         page_h: box ? box_height(box) : sz.height,
         crop_origin: box ? { x: box.x0, y: box.y0 } : { x: 0, y: 0 },
-        overlay: this._committed_overlay(box),
+        overlay: this._committed_overlay(p, box),
         draw_rect:  this._crop.draw_rect,
         position:   view_pos,
         total:      this._ctx.view_total(),
@@ -76,8 +75,8 @@ export class ViewSnapshotBuilder {
   // The outline shown over a committed (cropped) page: only the drawn window, clamped to the crop
   // box so it can never paint outside the cropped view (spec-web §6.3). Empty when no window is
   // being drawn (a plain committed crop shows no frame — bug 18).
-  private _committed_overlay(box: Box | undefined): OverlayBox[] {
-    const drawn = this._ctx.drawn()
+  private _committed_overlay(p: number, box: Box | undefined): OverlayBox[] {
+    const drawn = this._crop.drawn_rect(p)
     if (!drawn || !box) return []
     return [{ kind: 'committed', box: {
       x0: Math.max(box.x0, Math.min(drawn.x0, box.x1)),
@@ -92,19 +91,15 @@ export class ViewSnapshotBuilder {
     const doc = this._ctx.document()
 
     if (this._crop.split_count > 1) {
-      for (let i = 0; i < doc.crop_rects.length; i++) {
-        const box = doc.crop_rects[i]
-        if (box) out.push({ kind: 'split', box, idx: i + 1 })
-      }
+      this._crop.split_rects(p).forEach((box, i) => out.push({ kind: 'split', box, idx: i + 1 }))
       return out
     }
 
     // Global drawn window (pending crop) — outline on every page, clamped to it; overrides the
     // auto/committed display until Crop maps it in.
-    const drawn = this._ctx.drawn()
+    const drawn = this._crop.drawn_rect(p)
     if (drawn) {
-      const sz = this._ctx.page_dims(p)
-      out.push({ kind: 'committed', box: clamp_box_to_page(drawn, sz.width, sz.height) })
+      out.push({ kind: 'committed', box: drawn })
       return out
     }
 
