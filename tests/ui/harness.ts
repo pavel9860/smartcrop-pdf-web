@@ -3,9 +3,10 @@
 // fake controller invokes dispatched commands synchronously so a click exercises both the panel
 // wiring AND the underlying AppModel method, then records the call for assertions.
 import { vi } from 'vitest'
-import { AppModel, type RendererAdapter, type DocInfo, type OutputPage } from '@core/model'
+import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
 import type { AppController } from '@ui/app'
 import { Mode } from '@core/enums'
+import { recording_sink } from '../core/harness'
 
 /** jsdom has no canvas backend (no getContext('2d')) and no ResizeObserver — CanvasView (and
  * anything that constructs one, e.g. AppController) only needs permissive stand-ins for both, not
@@ -44,8 +45,7 @@ export function make_adapter(page_count = 3, mode: Mode = Mode.NORMAL): Renderer
     render_output_image: (_s, box) => Promise.resolve(
       make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
     detect_content_box: (_i, w, h) => Promise.resolve({ x0: 20, y0: 20, x1: w - 20, y1: h - 20 }),
-    export_pdf: (_p: OutputPage[]) => Promise.resolve(new Uint8Array([1, 2, 3])),
-    export_images: () => Promise.resolve(new Uint8Array([4, 5, 6])),
+    begin_export: () => recording_sink(),
     make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
     close: (): void => { /* no-op */ },
   }

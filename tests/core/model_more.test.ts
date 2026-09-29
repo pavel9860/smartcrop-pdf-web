@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { AppModel } from '@core/model'
 import { Mode, PagesMode } from '@core/enums'
 import { Failed, Ok } from '@core/batch'
-import { make_adapter, make_bitmap, FILE } from './harness'
+import { make_adapter, make_bitmap, FILE, recording_sink } from './harness'
 
 async function loaded(pc = 4, mode = Mode.NORMAL, w = 200, h = 300): Promise<AppModel> {
   const m = new AppModel(make_adapter(pc, mode, w, h)); await m.load_files([FILE()]); return m
@@ -28,7 +28,7 @@ describe('export box variants', () => {
 
   it('a failing export resolves Failed', async () => {
     const a = make_adapter()
-    a.export_pdf = () => Promise.reject(new Error('boom'))
+    a.begin_export = () => ({ ...recording_sink(), finish: () => Promise.reject(new Error('boom')) })
     const m = new AppModel(a)
     await m.load_files([FILE()])
     expect(await m.export('x.pdf').result()).toBeInstanceOf(Failed)

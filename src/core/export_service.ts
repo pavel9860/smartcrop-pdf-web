@@ -10,10 +10,10 @@ import {
   DPI_PRESETS, CUSTOM_DPI_PRESET, PAPER_SIZES, DEFAULT_PAPER, CUSTOM_PAPER_PRESET,
 } from './constants'
 import {
-  type BatchJob, type BatchController, type PageBatchJob, Ok, Cancelled,
+  type BatchJob, type PageBatchJob, Ok, Cancelled,
   start_batch, fail_batch, make_paint_yielder,
 } from './batch'
-import type { PageSize, RendererAdapter, OutputPage, VectorExportPage } from './model'
+import type { PageSize, RendererAdapter, VectorExportPage } from './model'
 import type { PageIndexMap } from './page_index_map'
 import type { PageRasterPipeline } from './page_raster_pipeline'
 
@@ -62,52 +62,48 @@ export class ExportService {
   }
 
   export(filename: string): BatchJob {
-    // Image formats have a second, equally-long phase (encode + zip) after rendering; double the
-    // BAR's total so it keeps advancing through encoding instead of freezing at 100% (bug: progress
-    // bar completes, then a long invisible zip pass). PDF has no separate per-page encode phase —
-    // true for both the raster and vector PDF paths, so total sizing is unaffected by which runs.
-    // display_total stays the real page count either way — the doubled total is bar-smoothing
-    // bookkeeping only, and must never surface as "2x more pages" in the counter text (bug).
-    const total_views = this._ctx.view_total()
-    const is_image = this._ctx.export_format() !== 'PDF'
-    const total = is_image ? total_views * 2 : total_views
     // Vector export (§W9.3): NORMAL document, PDF output, adapter supports it. No rasterization —
     // crop/rotate/split go straight through pdf-lib embedPage/copyPages against the original page
     // content.
     const use_vector = this._ctx.mode() === Mode.NORMAL && this._ctx.export_format() === 'PDF'
       && this._adapter.export_pdf_vector !== undefined
-    return start_batch(`Saving ${this._ctx.export_format()}…`, total, job =>
-      use_vector ? this._run_export_vector(job, filename) : this._run_export(job, filename),
-      total_views)
+    return start_batch(`Saving ${this._ctx.export_format()}…`, this._ctx.view_total(), job =>
+      use_vector ? this._run_export_vector(job, filename) : this._run_export(job, filename))
   }
 
+  // Streams pages through the adapter's export sink (spec-web §21 #9): each page is rendered, then
+  // handed off to be encoded while the next one renders — at most one raw bitmap waits in flight.
   private async _run_export(job: PageBatchJob, filename: string): Promise<void> {
     const ctrl = job.controller
     const target_long_px = this._resolved_target_long_px()
     const greyscale = this._ctx.output_colours() === 'Grayscale'
-
-    const pages_out = await this._render_export_pages(ctrl, target_long_px, greyscale)
-    if (!pages_out) return
-
+    const format = this._ctx.export_format()
+    // The archive is `<base>.zip` with `<base>_NNN.<ext>` entries — strip any extension first.
+    const base = filename.replace(/\.[^.]+$/, '')
+    const sink = this._adapter.begin_export(format, base)
+    const yield_to_paint = make_paint_yielder()
+    let in_flight: Promise<void> = Promise.resolve()
     try {
-      const format = this._ctx.export_format()
-      if (format === 'PDF') {
-        const bytes = await this._adapter.export_pdf(pages_out)
-        this._download_pdf(bytes, filename)
-      } else {
-        // Strip any extension off the suggested name — the archive is `<base>.zip` and entries
-        // are `<base>_NNN.<ext>`; a name like "doc_cropped.png" would yield "doc_cropped.png.zip".
-        const base = filename.replace(/\.[^.]+$/, '')
-        const zip = await this._adapter.export_images(
-          pages_out, format, base,
-          (done, total) => { if (total > 0) ctrl.advance() })
-        this._download_zip(zip, base)
+      for (let p = 0; p < this._ctx.page_count(); p++) {
+        const sz = this._ctx.page_dims(p)
+        const src = await this._raster.get_work(p)
+        for (const box of this._export_boxes_for_page(p, sz)) {
+          if (ctrl.is_cancelled) { await in_flight.catch(() => undefined); sink.abort(); ctrl.complete(new Cancelled()); return }
+          const bitmap = await this._adapter.render_output_image(src, box, sz.width, sz.height, target_long_px, greyscale)
+          await in_flight
+          in_flight = sink.add({ bitmap, width: bitmap.width, height: bitmap.height }).then(() => { ctrl.advance() })
+        }
+        await yield_to_paint()
       }
+      await in_flight
+      const bytes = await sink.finish()
+      if (format === 'PDF') this._download_pdf(bytes, filename)
+      else this._download_zip(bytes, base)
     } catch (e) {
+      sink.abort()
       fail_batch(ctrl, e)
       return
     }
-
     ctrl.complete(new Ok())
   }
 
@@ -143,35 +139,6 @@ export class ExportService {
       return
     }
     ctrl.complete(new Ok())
-  }
-
-  private async _render_export_pages(
-    ctrl: BatchController,
-    target_long_px: number | null, greyscale: boolean,
-  ): Promise<OutputPage[] | null> {
-    const pages_out: OutputPage[] = []
-    const yield_to_paint = make_paint_yielder()
-    for (let p = 0; p < this._ctx.page_count(); p++) {
-      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }
-      const sz = this._ctx.page_dims(p)
-      try {
-        const src   = await this._raster.get_work(p)
-        const boxes = this._export_boxes_for_page(p, sz)
-        for (const box of boxes) {
-          const bitmap = await this._adapter.render_output_image(
-            src, box, sz.width, sz.height, target_long_px, greyscale)
-          pages_out.push({ bitmap, width: bitmap.width, height: bitmap.height })
-          ctrl.advance()
-        }
-      } catch (e) {
-        fail_batch(ctrl, e)
-        return null
-      }
-      // Yield so the progress overlay repaints (render_output_image runs on the main thread) —
-      // gated on elapsed time (PAINT_YIELD_INTERVAL_MS), not once per page.
-      await yield_to_paint()
-    }
-    return pages_out
   }
 
   // Resolve the export target LONG-SIDE pixel count (spec-web §W2 row 8): the output page's long

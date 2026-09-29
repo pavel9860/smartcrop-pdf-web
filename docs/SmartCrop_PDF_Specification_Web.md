@@ -886,10 +886,11 @@ Cancel sets a flag checked before each page and stops promptly with no partial f
 is busy, controls are disabled and further clicks are ignored (no command queueing). A per-page
 exception surfaces as an error dialog (§19) and ends the batch cleanly.
 
-`BatchJob.total` (the bar's step count) and `display_total` (the counter's page count) can differ:
-an image export doubles `total` — render phase + encode phase — so the bar keeps moving instead of
-stalling at 100% while the zip is encoded, but the counter always shows real progress against
-`display_total`, never the doubled internal count.
+Raster export streams (§21 #9): each output page is rendered, then handed to `export.worker.ts`,
+which encodes it at once (JPEG/PNG/TIFF bytes, or a JPEG page added to the PDF) and releases the
+bitmap while the next page renders — at most two raw page bitmaps exist at any moment, however long
+the document, and only compressed bytes accumulate until the final PDF/zip is assembled. The bar
+therefore advances once per encoded page (`total === display_total`).
 
 ---
 

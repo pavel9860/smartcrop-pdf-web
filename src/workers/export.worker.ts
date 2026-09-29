@@ -1,100 +1,76 @@
-// export.worker.ts — pdf-lib PDF assembly and image encoding.
-// Initialized on first export(); stays alive for the session.
-
+// export.worker.ts — streamed raster export (spec-web §10, §21 #9): the main thread opens a session,
+// sends one rendered page at a time (bitmap transferred, encoded here at once and closed), then
+// finishes it. Only compressed bytes accumulate, never a document's worth of raw bitmaps.
 import { PDFDocument } from 'pdf-lib'
 import { zipSync, type Zippable } from 'fflate'
 import type { OutputPage } from '@core/model'
+import type { ExportFormat } from '@core/constants'
 import { CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import { encode_tiff } from './tiff'
 
-type ImageFormat = 'JPG' | 'PNG' | 'TIFF'
-const EXT: Record<ImageFormat, string> = { JPG: 'jpg', PNG: 'png', TIFF: 'tif' }
+const EXT: Record<Exclude<ExportFormat, 'PDF'>, string> = { JPG: 'jpg', PNG: 'png', TIFF: 'tif' }
 
-type Req =
-  | { id: number; type: 'export_pdf';    pages: OutputPage[]; quality: number }
-  | { id: number; type: 'export_images'; pages: OutputPage[]; format: ImageFormat; base: string; quality: number }
+type Req = { id: number; session: number } & (
+  | { type: 'begin'; format: ExportFormat; base: string; quality: number }
+  | { type: 'page'; page: OutputPage }
+  | { type: 'finish' }
+  | { type: 'abort' })
 
-type Res =
-  | { id: number; type: 'ok';       payload: unknown }
-  | { id: number; type: 'error';    message: string }
-  | { id: number; type: 'progress'; done: number; total: number }
+type Res = { id: number; type: 'ok'; payload: unknown } | { id: number; type: 'error'; message: string }
+
+interface Session {
+  format: ExportFormat
+  base: string
+  quality: number
+  pdf: PDFDocument | null
+  entries: Zippable
+  count: number
+}
+
+const sessions = new Map<number, Session>()
 
 self.onmessage = async (ev: MessageEvent<Req>): Promise<void> => {
   const msg = ev.data
   try {
-    switch (msg.type) {
-      case 'export_pdf': {
-        const bytes = await build_pdf(msg.pages, msg.quality)
-        self.postMessage({ id: msg.id, type: 'ok', payload: bytes } satisfies Res,
-          [bytes.buffer])
-        return
-      }
-      case 'export_images': {
-        const zip = await zip_images(msg.pages, msg.format, msg.base, msg.quality,
-          (done, total) => { self.postMessage({ id: msg.id, type: 'progress', done, total } satisfies Res) })
-        self.postMessage({ id: msg.id, type: 'ok', payload: zip } satisfies Res, [zip.buffer])
-        return
-      }
-    }
+    const payload = await handle(msg)
+    const transfer = payload instanceof Uint8Array ? [payload.buffer] : []
+    self.postMessage({ id: msg.id, type: 'ok', payload } satisfies Res, transfer)
   } catch (e) {
-    err(msg.id, String(e))
+    if (msg.type === 'page') close_quietly(msg.page.bitmap)
+    self.postMessage({ id: msg.id, type: 'error', message: String(e) } satisfies Res)
   }
 }
 
-async function build_pdf(pages: OutputPage[], quality: number): Promise<Uint8Array> {
-  const doc = await PDFDocument.create()
-  try {
-    for (const p of pages) {
-      const jpeg  = await bitmap_to_jpeg(p.bitmap, quality)
-      const img   = await doc.embedJpg(jpeg)
-      const page  = doc.addPage([p.width, p.height])
-      page.drawImage(img, { x: 0, y: 0, width: p.width, height: p.height })
-      p.bitmap.close()
-    }
-  } catch (e) {
-    // A mid-batch failure (e.g. context unavailable for one page) must not leak every
-    // not-yet-processed page's bitmap — close what's left, then let the error propagate.
-    for (const p of pages) close_quietly(p.bitmap)
-    throw e
+async function handle(msg: Req): Promise<unknown> {
+  if (msg.type === 'begin') {
+    sessions.set(msg.session, {
+      format: msg.format, base: msg.base, quality: msg.quality,
+      pdf: msg.format === 'PDF' ? await PDFDocument.create() : null, entries: {}, count: 0,
+    })
+    return null
   }
-  return doc.save({ useObjectStreams: true })
+  const s = sessions.get(msg.session)
+  if (!s) throw new Error(`Unknown export session ${msg.session}`)
+  if (msg.type === 'abort') { sessions.delete(msg.session); return null }
+  if (msg.type === 'page') { await add_page(s, msg.page); return null }
+  sessions.delete(msg.session)
+  return s.pdf ? s.pdf.save({ useObjectStreams: true }) : zipSync(s.entries)
 }
 
-// ImageBitmap.close() on an already-closed bitmap is a no-op in every real implementation but
-// isn't spec-guaranteed — swallow a double-close rather than let cleanup itself throw.
-function close_quietly(b: ImageBitmap): void {
-  try { b.close() } catch { /* already closed */ }
-}
-
-// Encode every output page and pack into ONE zip (spec-web §W: image formats deliver a single
-// archive, not N loose downloads). Level 0 for JPG/PNG (already compressed); level 1 (fast
-// deflate) for uncompressed TIFF — level 6 made the final zipSync the long pole with no progress.
-// Per-page progress is reported so the bar keeps moving through the encode phase.
-async function zip_images(
-  pages: OutputPage[], format: ImageFormat, base: string, quality: number,
-  on_progress: (done: number, total: number) => void,
-): Promise<Uint8Array> {
-  const ext = EXT[format]
-  const level = format === 'TIFF' ? 1 : 0
-  const total = pages.length
-  const entries: Zippable = {}
-  let i = 0
-  try {
-    for (const p of pages) {
-      const idx = String(++i).padStart(3, '0')
-      entries[`${base}_${idx}.${ext}`] = [await encode_page(p, format, quality), { level }]
-      on_progress(i, total)
-    }
-  } catch (e) {
-    // Mirrors build_pdf's cleanup: a mid-batch failure must not leak the remaining pages'
-    // bitmaps (encode_page already closes the one it was working on via its own finally).
-    for (const p of pages) close_quietly(p.bitmap)
-    throw e
+// Level 0 for JPG/PNG (already compressed), level 1 (fast deflate) for uncompressed TIFF.
+async function add_page(s: Session, p: OutputPage): Promise<void> {
+  const fmt = s.format === 'PDF' ? 'JPG' : s.format
+  const bytes = await encode_page(p, fmt, s.quality)
+  s.count++
+  if (s.pdf) {
+    const img = await s.pdf.embedJpg(bytes)
+    s.pdf.addPage([p.width, p.height]).drawImage(img, { x: 0, y: 0, width: p.width, height: p.height })
+    return
   }
-  return zipSync(entries)
+  s.entries[`${s.base}_${String(s.count).padStart(3, '0')}.${EXT[fmt]}`] = [bytes, { level: fmt === 'TIFF' ? 1 : 0 }]
 }
 
-async function encode_page(p: OutputPage, format: ImageFormat, quality: number): Promise<Uint8Array> {
+async function encode_page(p: OutputPage, format: Exclude<ExportFormat, 'PDF'>, quality: number): Promise<Uint8Array> {
   try {
     const canvas = new OffscreenCanvas(p.width, p.height)
     const ctx = canvas.getContext('2d')
@@ -104,23 +80,15 @@ async function encode_page(p: OutputPage, format: ImageFormat, quality: number):
       const { data } = ctx.getImageData(0, 0, p.width, p.height)
       return encode_tiff(data, p.width, p.height)
     }
-    const mime = format === 'JPG' ? 'image/jpeg' : 'image/png'
-    const blob = await canvas.convertToBlob({ type: mime, quality })
+    const blob = await canvas.convertToBlob({ type: format === 'JPG' ? 'image/jpeg' : 'image/png', quality })
     return new Uint8Array(await blob.arrayBuffer())
   } finally {
-    p.bitmap.close()
+    close_quietly(p.bitmap)
   }
 }
 
-async function bitmap_to_jpeg(bitmap: ImageBitmap, quality: number): Promise<Uint8Array> {
-  const canvas = new OffscreenCanvas(bitmap.width, bitmap.height)
-  const ctx = canvas.getContext('2d')
-  if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
-  ctx.drawImage(bitmap, 0, 0)
-  const blob = await canvas.convertToBlob({ type: 'image/jpeg', quality })
-  return new Uint8Array(await blob.arrayBuffer())
-}
-
-function err(id: number, message: string): void {
-  self.postMessage({ id, type: 'error', message } satisfies Res)
+// ImageBitmap.close() on an already-closed bitmap is a no-op in every real implementation but
+// isn't spec-guaranteed — swallow a double-close rather than let cleanup itself throw.
+function close_quietly(b: ImageBitmap): void {
+  try { b.close() } catch { /* already closed */ }
 }

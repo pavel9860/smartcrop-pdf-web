@@ -6,7 +6,7 @@ import { Mode, FilterMode, PagesMode } from '@core/enums'
 import { Failed, type BatchJob } from '@core/batch'
 import { SmartCropError } from '@core/errors'
 import type { Box } from '@core/geometry'
-import { make_adapter, make_bitmap, FILE } from './harness'
+import { make_adapter, make_bitmap, FILE, recording_sink } from './harness'
 
 const SIZES = [{ width: 200, height: 300 }, { width: 420, height: 297 }, { width: 150, height: 150 }, { width: 612, height: 792 }]
 const EPS = 1e-6
@@ -47,8 +47,7 @@ function adapter(mode: Mode, page_count: number): Harness {
         return Promise.resolve({ x0: r.x0 + dx, y0: r.y0 + dy, x1: r.x1 - dx, y1: r.y1 - dy })
       },
       detect_text_box: (_i, region) => Promise.resolve(region ?? null),
-      export_pdf: pages => { exported = pages.length; return Promise.resolve(new Uint8Array([1])) },
-      export_images: pages => { exported = pages.length; return Promise.resolve(new Uint8Array([1])) },
+      begin_export: () => { exported = 0; return { ...recording_sink(), add: () => { exported++; return Promise.resolve() } } },
       export_pdf_vector: pages => { exported = pages.reduce((n, p) => n + p.boxes.length, 0); return Promise.resolve(new Uint8Array([1])) },
     },
   }

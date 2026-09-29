@@ -5,6 +5,7 @@
 import type { Box } from './geometry'
 import type { PageProcessIntent } from './document_state'
 import type { Mode } from './enums'
+import type { ExportFormat } from './constants'
 
 // ---------------------------------------------------------------------------
 // Injected async adapter (keeps core/ DOM-free, fully unit-testable with mocks)
@@ -21,6 +22,12 @@ export interface DocInfo {
   // synthetic doc have no PageSource; they must render via make_synth_page, not
   // get_source_image. Omitted (falsy) for every real load.
   synthetic?: boolean
+}
+
+export interface ExportSink {
+  add(page: OutputPage): Promise<void>
+  finish(): Promise<Uint8Array>
+  abort(): void
 }
 
 export interface OutputPage {
@@ -69,15 +76,13 @@ export interface RendererAdapter {
   // Fast NORMAL-mode detection from the PDF text layer (desktop detect.py normal_page_box) — no
   // image processing. Optional: absent/returns null → caller falls back to detect_content_box.
   detect_text_box?(page_idx: number, region?: Box): Promise<Box | null>
-  export_pdf(pages: OutputPage[]): Promise<Uint8Array>
+  // Streamed raster export (spec-web §21 #9): pages are added one at a time and encoded as they
+  // arrive; finish() returns the PDF (format 'PDF') or one .zip of images. abort() discards it.
+  begin_export(format: ExportFormat, base: string): ExportSink
   // Lossless vector PDF export for NORMAL-mode documents (spec-web §W9.3): crops/rotates/splits
   // via the ORIGINAL PDF page content (pdf-lib embedPage), never rasterizes. Optional — an adapter
   // without it (test mocks) simply means AppModel falls back to the raster export path.
   export_pdf_vector?(pages: readonly VectorExportPage[]): Promise<Uint8Array>
-  export_images(
-    pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
-    on_progress?: (done: number, total: number) => void,
-  ): Promise<Uint8Array>
   make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>
   close(): void
 }

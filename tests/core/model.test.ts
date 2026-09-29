@@ -13,7 +13,7 @@ import {
   CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DEFAULT_CUSTOM_PAPER_IN,
   SRC_DPI, NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX,
 } from '@core/constants'
-import { make_bitmap, FILE, split_rects, round6 } from './harness'
+import { make_bitmap, FILE, split_rects, round6, recording_sink } from './harness'
 
 // ---------------------------------------------------------------------------
 // Mock adapter — this file needs call-count/arg-tracking instrumentation the shared
@@ -82,13 +82,9 @@ function make_mock_adapter(opts: MockOpts = {}): {
       bump('detect_text_box')
       return Promise.resolve({ x0: 20, y0: 20, x1: page_w - 20, y1: page_h - 20 })
     },
-    export_pdf: () => {
-      bump('export_pdf')
-      return Promise.resolve(new Uint8Array([1, 2, 3]))
-    },
-    export_images: () => {
-      bump('export_images')
-      return Promise.resolve(new Uint8Array([4, 5, 6]))
+    begin_export: (format) => {
+      bump(format === 'PDF' ? 'export_pdf' : 'export_images')
+      return recording_sink()
     },
     make_synth_page: (_idx, w, h) => {
       bump('make_synth_page')
@@ -995,12 +991,12 @@ describe('export', () => {
     expect(name.endsWith('.tif')).toBe(true)
   })
 
-  it('image export doubles the job total so progress spans render + encode', async () => {
+  it('export progress counts output pages for every format (encoding is streamed per page)', async () => {
     const { adapter } = make_mock_adapter({ page_count: 3 })
     const model = new AppModel(adapter)
     await model.load_files([FILE()])
     model.set_export_format('JPG')
-    expect(model.export('out').total).toBe(model.view_total * 2)
+    expect(model.export('out').total).toBe(model.view_total)
     model.set_export_format('PDF')
     expect(model.export('out.pdf').total).toBe(model.view_total)
   })

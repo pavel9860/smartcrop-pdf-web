@@ -7,6 +7,7 @@ import { AppModel, type RendererAdapter, type DocInfo, type VectorExportPage } f
 import { Mode, PagesMode } from '@core/enums'
 import { Failed, Cancelled, Ok } from '@core/batch'
 import { detection_union } from '@core/geometry'
+import { recording_sink } from './harness'
 
 function bmp(w = 100, h = 100): ImageBitmap { return { width: w, height: h, close: (): void => {} } }
 function adapter(): RendererAdapter {
@@ -19,8 +20,7 @@ function adapter(): RendererAdapter {
     rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: () => Promise.reject(new Error('render boom')),
     detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
-    export_pdf: () => Promise.resolve(new Uint8Array([1])),
-    export_images: () => Promise.resolve(new Uint8Array()),
+    begin_export: () => recording_sink(),
     make_synth_page: (_i, w, h) => Promise.resolve(bmp(w, h)),
     close: (): void => {},
   }
@@ -68,8 +68,7 @@ function vector_adapter(opts: {
     render_output_image: () => Promise.resolve(bmp()),
     detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
     detect_text_box: (_i) => Promise.resolve({ x0: 20, y0: 20, x1: 180, y1: 280 }),
-    export_pdf: () => Promise.resolve(new Uint8Array([9])),
-    export_images: () => Promise.resolve(new Uint8Array()),
+    begin_export: () => recording_sink(),
     make_synth_page: (_i, w, h) => Promise.resolve(bmp(w, h)),
     close: (): void => {},
     ...(export_pdf_vector ? { export_pdf_vector } : {}),

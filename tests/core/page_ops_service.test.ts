@@ -10,6 +10,7 @@ import { default_document_state, type DocumentState } from '@core/document_state
 import { DeleteAllPagesError } from '@core/errors'
 import { Mode } from '@core/enums'
 import type { RendererAdapter, DocInfo, PageSize } from '@core/model'
+import { recording_sink } from './harness'
 
 function bmp(w = 100, h = 100): ImageBitmap { return { width: w, height: h, close: (): void => {} } }
 function adapter(page_count = 3): RendererAdapter {
@@ -23,8 +24,7 @@ function adapter(page_count = 3): RendererAdapter {
     rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: () => Promise.resolve(bmp()),
     detect_content_box: (_i, w, h) => Promise.resolve({ x0: 0, y0: 0, x1: w, y1: h }),
-    export_pdf: () => Promise.resolve(new Uint8Array()),
-    export_images: () => Promise.resolve(new Uint8Array()),
+    begin_export: () => recording_sink(),
     make_synth_page: (_i, w, h) => Promise.resolve(bmp(w, h)),
     close: (): void => {},
   }

@@ -1,6 +1,6 @@
 // Shared mock RendererAdapter/bitmap for src/core/ tests (AppModel and its extracted services).
 // Mirrors tests/ui/harness.ts's naming for the same concepts, one layer down.
-import type { AppModel, RendererAdapter, DocInfo, OutputPage } from '@core/model'
+import type { AppModel, RendererAdapter, DocInfo, OutputPage, ExportSink } from '@core/model'
 import type { Box } from '@core/geometry'
 import { Mode } from '@core/enums'
 
@@ -28,8 +28,7 @@ export function make_adapter(
     // NORMAL-mode detect is text-layer only, no raster fallback — mirrors detect_content_box's
     // inset box so NORMAL-mode detect_content() behaves the same as the SCANNED path in tests.
     detect_text_box: () => Promise.resolve({ x0: 20, y0: 20, x1: page_w - 20, y1: page_h - 20 }),
-    export_pdf: (_p: OutputPage[]) => Promise.resolve(new Uint8Array([1, 2, 3])),
-    export_images: () => Promise.resolve(new Uint8Array([4, 5, 6])),
+    begin_export: () => recording_sink(),
     make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
     close: (): void => { /* no-op */ },
   }
@@ -44,4 +43,13 @@ export const round6 = (b: Box): Box => ({
 // The split windows on the current page, in page units, via the public view snapshot.
 export function split_rects(m: AppModel): Box[] {
   return m.view_snapshot().overlay.filter(o => o.kind === 'split').map(o => round6(o.box))
+}
+
+// Export sink that records every added page; finish() resolves to `bytes`.
+export function recording_sink(pages: OutputPage[] = [], bytes = new Uint8Array([1, 2, 3])): ExportSink {
+  return {
+    add: (page: OutputPage): Promise<void> => { pages.push(page); return Promise.resolve() },
+    finish: (): Promise<Uint8Array> => Promise.resolve(bytes),
+    abort: (): void => undefined,
+  }
 }

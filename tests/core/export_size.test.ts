@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
 import { Mode } from '@core/enums'
 import { PAPER_SIZES, DEFAULT_PAPER } from '@core/constants'
+import { recording_sink } from './harness'
 
 function make_bitmap(w = 100, h = 100): ImageBitmap {
   return { width: w, height: h, close: (): void => { /* no-op */ } }
@@ -29,8 +30,7 @@ function make_adapter(): { adapter: RendererAdapter; long_px: (number | null)[] 
       return Promise.resolve(make_bitmap())
     },
     detect_content_box: () => Promise.resolve({ x0: 20, y0: 20, x1: 120, y1: 280 }),
-    export_pdf:    () => Promise.resolve(new Uint8Array([1])),
-    export_images: () => Promise.resolve(new Uint8Array([2])),
+    begin_export: () => recording_sink(),
     make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
     close: (): void => { /* no-op */ },
   }

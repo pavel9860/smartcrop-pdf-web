@@ -7,8 +7,9 @@ import { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { default_document_state, type DocumentState } from '@core/document_state'
 import { Mode } from '@core/enums'
 import { Failed, Cancelled } from '@core/batch'
-import type { RendererAdapter, PageSize, VectorExportPage } from '@core/model'
-import { make_adapter } from './harness'
+import type { RendererAdapter, PageSize, VectorExportPage, OutputPage } from '@core/model'
+import type { Box } from '@core/geometry'
+import { make_adapter, make_bitmap, recording_sink } from './harness'
 
 function setup(opts: {
   page_count?: number
@@ -71,57 +72,66 @@ describe('ExportService.suggested_export_name', () => {
   })
 })
 
-describe('ExportService.export — raster path', () => {
-  it('renders every page, downloads via export_pdf for PDF format', async () => {
-    const export_pdf = vi.fn(() => Promise.resolve(new Uint8Array([9, 9, 9])))
-    const { svc, pdf_bytes } = setup({ export_format: 'PDF', adapter: { export_pdf } })
+describe('ExportService.export — raster path (streamed, spec-web §21 #9)', () => {
+  it('streams every page into a PDF sink and downloads the PDF', async () => {
+    const pages: OutputPage[] = []
+    const begin_export = vi.fn(() => recording_sink(pages, new Uint8Array([9, 9, 9])))
+    const { svc, pdf_bytes } = setup({ page_count: 3, export_format: 'PDF', adapter: { begin_export } })
     const result = await svc.export('out.pdf').result()
     expect(result).not.toBeInstanceOf(Failed)
-    expect(export_pdf).toHaveBeenCalledTimes(1)
+    expect(begin_export).toHaveBeenCalledWith('PDF', 'out')
+    expect(pages).toHaveLength(3)
     expect(pdf_bytes).toHaveLength(1)
   })
 
-  it('uses export_images and downloads a zip for image formats', async () => {
-    const export_images = vi.fn(() => Promise.resolve(new Uint8Array([1])))
-    const { svc, zip_bytes } = setup({ export_format: 'PNG', adapter: { export_images } })
+  it('image formats stream into one zip, base name without the extension', async () => {
+    const begin_export = vi.fn(() => recording_sink())
+    const { svc, zip_bytes } = setup({ export_format: 'PNG', adapter: { begin_export } })
     await svc.export('out.png').result()
-    expect(export_images).toHaveBeenCalledTimes(1)
+    expect(begin_export).toHaveBeenCalledWith('PNG', 'out')
     expect(zip_bytes).toHaveLength(1)
   })
 
-  it('doubles total for the progress bar (render+encode phases) but keeps display_total the real page count (bug: export progress showing 2x pages)', () => {
+  it('progress counts real pages (total === display_total)', () => {
     const { svc } = setup({ page_count: 3, export_format: 'PNG' })
     const job = svc.export('out.png')
-    expect(job.total).toBe(6)           // 3 pages x 2 phases
-    expect(job.display_total).toBe(3)   // real page count, what the counter should show
-  })
-
-  it('PDF (no separate encode phase) has display_total equal to total', () => {
-    const { svc } = setup({ page_count: 3, export_format: 'PDF' })
-    const job = svc.export('out.pdf')
     expect(job.total).toBe(3)
     expect(job.display_total).toBe(3)
   })
 
-  it('strips the extension before handing the base name to export_images', async () => {
-    const export_images = vi.fn(() => Promise.resolve(new Uint8Array([1])))
-    const { svc } = setup({ export_format: 'PNG', adapter: { export_images } })
-    await svc.export('out.png').result()
-    expect(export_images).toHaveBeenCalledWith(expect.anything(), 'PNG', 'out', expect.anything())
+  it('never holds more than two rendered, un-encoded pages (slow encoder)', async () => {
+    let rendered = 0, encoded = 0, peak = 0
+    const render_output_image = vi.fn((_s: ImageBitmap, box: Box) => {
+      rendered++
+      peak = Math.max(peak, rendered - encoded)
+      return Promise.resolve(make_bitmap(box.x1 - box.x0, box.y1 - box.y0))
+    })
+    const begin_export = vi.fn(() => ({
+      ...recording_sink(),
+      add: () => new Promise<void>(r => setTimeout(() => { encoded++; r() }, 5)),
+    }))
+    const { svc } = setup({ page_count: 8, export_format: 'JPG', adapter: { render_output_image, begin_export } })
+    expect(await svc.export('out.jpg').result()).not.toBeInstanceOf(Failed)
+    expect(encoded).toBe(8)
+    expect(peak).toBeLessThanOrEqual(2)
   })
 
-  it('completes Failed when rendering throws', async () => {
+  it('completes Failed and aborts the sink when rendering throws', async () => {
+    const sink = { ...recording_sink(), abort: vi.fn() }
     const render_output_image = vi.fn(() => Promise.reject(new Error('render failed')))
-    const { svc } = setup({ adapter: { render_output_image } })
-    const result = await svc.export('out.pdf').result()
-    expect(result).toBeInstanceOf(Failed)
+    const { svc } = setup({ adapter: { render_output_image, begin_export: () => sink } })
+    expect(await svc.export('out.pdf').result()).toBeInstanceOf(Failed)
+    expect(sink.abort).toHaveBeenCalled()
   })
 
-  it('cancels cleanly mid-render', async () => {
-    const { svc } = setup({ page_count: 5 })
+  it('cancels cleanly with no partial file', async () => {
+    const sink = { ...recording_sink(), abort: vi.fn(), finish: vi.fn(() => Promise.resolve(new Uint8Array())) }
+    const { svc, pdf_bytes } = setup({ page_count: 5, adapter: { begin_export: () => sink } })
     const job = svc.export('out.pdf')
     job.cancel()
     expect(await job.result()).toBeInstanceOf(Cancelled)
+    expect(sink.finish).not.toHaveBeenCalled()
+    expect(pdf_bytes).toHaveLength(0)
   })
 })
 
@@ -141,14 +151,14 @@ describe('ExportService.export — vector path', () => {
 
   it('does NOT use the vector path in SCANNED mode even if the adapter supports it', async () => {
     const export_pdf_vector = vi.fn(() => Promise.resolve(new Uint8Array([7])))
-    const export_pdf = vi.fn(() => Promise.resolve(new Uint8Array([8])))
+    const begin_export = vi.fn(() => recording_sink())
     const { svc } = setup({
       mode: Mode.SCANNED, export_format: 'PDF',
-      adapter: { export_pdf_vector, export_pdf },
+      adapter: { export_pdf_vector, begin_export },
     })
     await svc.export('out.pdf').result()
     expect(export_pdf_vector).not.toHaveBeenCalled()
-    expect(export_pdf).toHaveBeenCalledTimes(1)
+    expect(begin_export).toHaveBeenCalledTimes(1)
   })
 
   it('does NOT use the vector path for an image export format', async () => {
@@ -162,10 +172,10 @@ describe('ExportService.export — vector path', () => {
   })
 
   it('falls back to the raster export when export_pdf_vector is not defined', async () => {
-    const export_pdf = vi.fn(() => Promise.resolve(new Uint8Array([8])))
-    const { svc } = setup({ mode: Mode.NORMAL, export_format: 'PDF', adapter: { export_pdf } })
+    const begin_export = vi.fn(() => recording_sink())
+    const { svc } = setup({ mode: Mode.NORMAL, export_format: 'PDF', adapter: { begin_export } })
     await svc.export('out.pdf').result()
-    expect(export_pdf).toHaveBeenCalledTimes(1)
+    expect(begin_export).toHaveBeenCalledTimes(1)
   })
 
   it('passes each page a box from document.applied when committed, else the full page', async () => {

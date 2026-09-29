@@ -192,8 +192,9 @@ C:/DOCS/Code/SmartCroPDF-Web/
                                 null for a page with no usable text (image page, or a degenerate box);
                                 AppModel records no detected box for that page rather than
                                 rasterizing (spec-web §5).
-                              - export_pdf(pages) / export_images(pages, format) → export.worker,
-                                lazy-initialised on first export (the one real Worker left).
+                              - begin_export(format, base) → ExportSink {add, finish, abort}: one
+                                streamed session in export.worker (lazy-initialised on first export,
+                                the one real Worker left) — pages encode as they arrive.
                               - export_pdf_vector(pages) → Promise<Uint8Array> — NORMAL-mode PDF
                                 export (spec-web §10.3), main thread, no worker, no rasterization.
                                 Unsplit pages (one crop window): `copyPages`+`setCropBox`+
@@ -405,12 +406,10 @@ interface RendererAdapter {
                       target_long_px: number | null, greyscale: boolean): Promise<ImageBitmap>
   detect_content_box(img: ImageBitmap, page_w: number, page_h: number, mode: Mode, region?: Box): Promise<Box>
   detect_text_box?(page_idx: number, region?: Box): Promise<Box | null>
-  export_pdf(pages: OutputPage[]): Promise<Uint8Array>
+  begin_export(format: ExportFormat, base: string): ExportSink   // streamed PDF or single .zip
   // Vector PDF export for NORMAL-mode (spec-web §W9.3) — optional; adapters without it (test
   // mocks) fall back to the raster export path.
   export_pdf_vector?(pages: readonly VectorExportPage[]): Promise<Uint8Array>
-  export_images(pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
-               on_progress?: (done: number, total: number) => void): Promise<Uint8Array>  // single .zip
   make_synth_page(idx: number, w: number, h: number): Promise<ImageBitmap>
   close(): void
 }

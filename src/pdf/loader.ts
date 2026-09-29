@@ -1,14 +1,14 @@
 // loader.ts — PDF.js loading/rendering (main thread) + imaging/export worker RPC.
 import * as pdfjs from 'pdfjs-dist'
 import { PDFDocument, degrees, type PDFPage } from 'pdf-lib'
-import type { DocInfo, RendererAdapter, OutputPage, VectorExportPage, PageSize } from '@core/model'
+import type { DocInfo, RendererAdapter, ExportSink, VectorExportPage, PageSize } from '@core/model'
 import type { Box } from '@core/geometry'
 import { to_native_frame } from '@core/geometry'
 import type { PageProcessIntent } from '@core/document_state'
 import { Mode } from '@core/enums'
 import { DocumentLoadError, CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import {
-  JPEG_QUALITY, SYNTH_PAGES, SYNTH_W, SYNTH_H,
+  JPEG_QUALITY, type ExportFormat, SYNTH_PAGES, SYNTH_W, SYNTH_H,
   SYNTH_BG_COLOR, SYNTH_BORDER_COLOR, SYNTH_TEXT_COLOR, SYNTH_FONT, SYNTH_PADDING,
   MODE_TEXT_MIN,
 } from '@core/constants'
@@ -172,14 +172,11 @@ async function reencode_as_png(blob: Blob): Promise<Uint8Array> {
 // Generic worker RPC helper
 // ---------------------------------------------------------------------------
 
-type WorkerMsg = { id: number; type: 'ok'; payload: unknown }
-               | { id: number; type: 'error'; message: string }
-               | { id: number; type: 'progress'; done: number; total: number }
+type WorkerMsg = { id: number; type: 'ok'; payload: unknown } | { id: number; type: 'error'; message: string }
 
 interface Pending {
   resolve: (v: unknown) => void
   reject: (e: Error) => void
-  on_progress?: ((done: number, total: number) => void) | undefined
 }
 
 class RpcWorker {
@@ -193,7 +190,6 @@ class RpcWorker {
       const { id, type } = ev.data
       const p = this._pending.get(id)
       if (!p) return
-      if (type === 'progress') { p.on_progress?.(ev.data.done, ev.data.total); return }
       this._pending.delete(id)
       if (type === 'ok') p.resolve((ev.data as { payload: unknown }).payload)
       else p.reject(new Error((ev.data as { message: string }).message))
@@ -208,13 +204,10 @@ class RpcWorker {
     }
   }
 
-  call<T>(
-    msg: Record<string, unknown>, transfer: Transferable[] = [],
-    on_progress?: (done: number, total: number) => void,
-  ): Promise<T> {
+  call<T>(msg: Record<string, unknown>, transfer: Transferable[] = []): Promise<T> {
     const id = this._next_id++
     return new Promise<T>((resolve, reject) => {
-      this._pending.set(id, { resolve: v => { resolve(v as T) }, reject, on_progress })
+      this._pending.set(id, { resolve: v => { resolve(v as T) }, reject })
       this._w.postMessage({ id, ...msg }, transfer)
     })
   }
@@ -244,6 +237,7 @@ export class PdfRendererAdapter implements RendererAdapter {
   private _pdfs: pdfjs.PDFDocumentProxy[] = []
   private _pages: PageSource[] = []
   private _export:  RpcWorker | null = null
+  private _next_export_session = 0
   private _doc_info: DocInfo | null  = null
   private _files: File[] = []
 
@@ -481,21 +475,17 @@ export class PdfRendererAdapter implements RendererAdapter {
     return box
   }
 
-  async export_pdf(pages: OutputPage[]): Promise<Uint8Array> {
-    const exp = await this._export_worker()
-    return exp.call<Uint8Array>(
-      { type: 'export_pdf', pages, quality: JPEG_QUALITY },
-      pages.map(p => p.bitmap))
-  }
-
-  async export_images(
-    pages: OutputPage[], format: 'JPG' | 'PNG' | 'TIFF', base: string,
-    on_progress?: (done: number, total: number) => void,
-  ): Promise<Uint8Array> {
-    const exp = await this._export_worker()
-    return exp.call<Uint8Array>(
-      { type: 'export_images', pages, format, base, quality: JPEG_QUALITY },
-      pages.map(p => p.bitmap), on_progress)
+  begin_export(format: ExportFormat, base: string): ExportSink {
+    const session = this._next_export_session++
+    const worker = this._export_worker()
+    const call = async <T>(msg: Record<string, unknown>, transfer: Transferable[] = []): Promise<T> =>
+      (await worker).call<T>({ session, ...msg }, transfer)
+    const begun = call<null>({ type: 'begin', format, base, quality: JPEG_QUALITY })
+    return {
+      add: async (page): Promise<void> => { await begun; await call<null>({ type: 'page', page }, [page.bitmap]) },
+      finish: async (): Promise<Uint8Array> => { await begun; return call<Uint8Array>({ type: 'finish' }) },
+      abort: (): void => { void begun.then(() => call<null>({ type: 'abort' })).catch(() => undefined) },
+    }
   }
 
   // Vector PDF export (spec-web §W9.3): crops/rotates/splits via pdf-lib's embedPage against the

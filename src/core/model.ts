@@ -38,7 +38,7 @@ import {
 // OverlayBox, OverlayKind, PageSize) live in model_types.ts — re-exported here so every existing
 // import of these types via this module keeps working unchanged.
 export type {
-  PageSize, DocInfo, OutputPage, VectorExportPage, RendererAdapter,
+  PageSize, DocInfo, OutputPage, ExportSink, VectorExportPage, RendererAdapter,
   OverlayKind, OverlayBox, ViewSnapshot,
 } from './model_types'
 import type { PageSize, DocInfo, RendererAdapter, ViewSnapshot } from './model_types'

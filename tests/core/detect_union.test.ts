@@ -7,6 +7,7 @@ import { describe, it, expect } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo, type PageSize, type OutputPage } from '@core/model'
 import { Mode, PagesMode } from '@core/enums'
 import type { Box } from '@core/geometry'
+import { recording_sink } from './harness'
 
 function make_bitmap(w = 100, h = 100): ImageBitmap {
   return { width: w, height: h, close: (): void => { /* no-op */ } }
@@ -50,8 +51,7 @@ function make_adapter(page_sizes: PageSize[], detect_boxes: Box[]): {
       if (!b) throw new Error('detect queue exhausted')
       return Promise.resolve(b)
     },
-    export_pdf:    () => Promise.resolve(new Uint8Array()),
-    export_images: () => Promise.resolve(new Uint8Array()),
+    begin_export: () => recording_sink(),
     make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
     close: (): void => { /* no-op */ },
   }
@@ -312,11 +312,8 @@ describe('export never applies an uncommitted crop (spec-web §10.6)', () => {
   it('an active but uncommitted auto-crop still exports the full page, not the detected box', async () => {
     const sizes = [{ width: 200, height: 300 }]
     const { adapter } = make_adapter(sizes, [{ x0: 20, y0: 20, x1: 120, y1: 280 }])
-    let exported: OutputPage[] = []
-    const with_capture: RendererAdapter = {
-      ...adapter,
-      export_pdf: (pages): Promise<Uint8Array> => { exported = pages; return Promise.resolve(new Uint8Array()) },
-    }
+    const exported: OutputPage[] = []
+    const with_capture: RendererAdapter = { ...adapter, begin_export: () => recording_sink(exported) }
     const model = new AppModel(with_capture)
     await model.load_files([FILE()])
     await model.detect_content().result()
