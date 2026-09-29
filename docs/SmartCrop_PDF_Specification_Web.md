@@ -52,15 +52,6 @@ a SCANNED document.
 With no file open, a synthetic placeholder document (`SYNTH_PAGES = 1` blank page, drawn directly
 via the Canvas API, no PDF.js involved) is shown so every control is usable immediately.
 
-Over the placeholder, the canvas area shows a **start guide** (three short illustrated pages with
-Back/Next and page dots): page 1 is the whole workflow — Open (button or drop anywhere), then for a
-scan Dewarp & Deskew and a B/W or Sharpen filter, then Auto-detect or draw a box, Crop, Save — with
-both branches (native PDF vs scan) side by side; page 2 covers Split 1/2/4 and the Pages selection;
-page 3 tips (Undo/Redo, keyboard shortcuts, Settings, local-only processing). It disappears once a
-real file is open and returns after Reset to the placeholder; its ✕ closes it for the session. Only
-the card takes pointer input, so the placeholder page stays usable around it. `? Help` keeps the
-full reference.
-
 ---
 
 ## 2. Coordinate system & page view

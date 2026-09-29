@@ -1137,13 +1137,3 @@ describe('a failed scan batch commits nothing (spec-web §21 #26)', () => {
     expect(model.view_snapshot().image).not.toBeNull()
   })
 })
-
-describe('is_placeholder', () => {
-  it('is true for the no-file placeholder and false once a real file is open', async () => {
-    const { adapter } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    expect(model.is_placeholder).toBe(true)
-    await model.load_files([FILE()])
-    expect(model.is_placeholder).toBe(false)
-  })
-})

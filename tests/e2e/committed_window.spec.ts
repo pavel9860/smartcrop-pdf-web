@@ -33,7 +33,6 @@ async function drag(page: Page, ox: number, oy: number,
 
 test('drawing on a committed page stays cropped and never flips to the full page', async ({ page }) => {
   await page.goto('/')
-  await page.click('.start-guide [data-act="close"]')
   const canvas = page.locator('canvas.page-canvas')
   await expect(canvas).toBeVisible()
   const box = await canvas.boundingBox()

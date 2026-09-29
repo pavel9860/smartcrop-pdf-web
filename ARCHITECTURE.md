@@ -436,7 +436,6 @@ class AppModel {
   async reset(): Promise<void>
   page_count(): number
   get has_document(): boolean
-  get is_placeholder(): boolean       // no real file open (synthetic page) — start guide, spec-web §1
   get document_name(): string         // sidebar doc-name card, spec-web §3
 
   // navigation
