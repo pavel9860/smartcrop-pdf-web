@@ -504,7 +504,6 @@ export class AppController {
 
   destroy(): void {
     this._off_module_status()
-    this._page_strip.destroy()
     this._canvas_view.destroy()
     this._adapter.close()
     window.removeEventListener('keydown', this._on_shortcut)

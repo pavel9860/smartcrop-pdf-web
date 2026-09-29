@@ -148,11 +148,9 @@ tapping the dimmed backdrop (or ☰ again) closes it. Settings/Help open full-wi
 The canvas's ◀/▶ page arrows stay visible (no hover on touch) and, with the page strip, keep
 navigation available while the drawer is closed.
 
-**Page strip** — a horizontal, scrollable row of page thumbnails under the canvas, one per source
-page, numbered. The current page is highlighted, pages in the Pages-to-process selection are
-outlined in the accent colour, and a click shows that page. Thumbnails are low-resolution
-(`THUMB_MAX_PX` long side), rendered lazily only when scrolled into view, one at a time, and never
-share or evict the full-size page rasters; they show the page's rotation but not scan processing.
+**Page strip** — a horizontal, scrollable row of numbered page chips under the canvas, one per
+source page (no thumbnails: nothing is rendered for it). The current page is highlighted, pages in
+the Pages-to-process selection are outlined in the accent colour, and a click shows that page.
 Hidden when only one page is open.
 
 Exact icon set, control widths, switch/field styling and per-control coloring must match

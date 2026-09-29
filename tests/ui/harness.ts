@@ -24,11 +24,6 @@ export function stub_canvas_apis(): void {
     disconnect(): void { /* no-op */ }
   })
   Element.prototype.scrollIntoView = vi.fn()
-  vi.stubGlobal('IntersectionObserver', class {
-    observe(): void { /* no-op */ }
-    unobserve(): void { /* no-op */ }
-    disconnect(): void { /* no-op */ }
-  })
 }
 
 export function make_bitmap(w = 200, h = 300): ImageBitmap {

@@ -338,21 +338,6 @@ export class PdfRendererAdapter implements RendererAdapter {
     return rotate_bitmap_cw(bitmap, rotation)
   }
 
-  // Page-strip thumbnail: decoded/rendered straight at thumbnail size, never at full resolution.
-  async render_thumbnail(page_idx: number, max_px: number, rotation: number): Promise<ImageBitmap> {
-    const source = this._source(page_idx)
-    const size = this._doc_info?.page_sizes[page_idx] ?? { width: max_px, height: max_px }
-    const k = max_px / Math.max(size.width, size.height)
-    const bitmap = source.kind === 'image'
-      ? await createImageBitmap(source.blob, {
-        resizeWidth: Math.max(1, Math.round(size.width * k)),
-        resizeHeight: Math.max(1, Math.round(size.height * k)),
-        resizeQuality: 'medium',
-      })
-      : await this._render_pdf(source, k)
-    return rotate_bitmap_cw(bitmap, rotation)
-  }
-
   private _source(page_idx: number): PageSource {
     const source = this._pages[page_idx]
     if (!source) throw new Error(`No source for page index ${page_idx}`)
@@ -360,7 +345,7 @@ export class PdfRendererAdapter implements RendererAdapter {
   }
 
   // page.cleanup() frees the page's resources but also cancels any render of that page still in
-  // flight (e.g. the main view while a thumbnail or Auto-detect finishes) — only clean up when idle.
+  // flight (e.g. the main view while Auto-detect finishes on the same page) — only clean up when idle.
   private _release(page: pdfjs.PDFPageProxy): void {
     if (!this._renders.get(page)) page.cleanup()
   }

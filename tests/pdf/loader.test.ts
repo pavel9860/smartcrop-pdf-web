@@ -280,7 +280,7 @@ describe('detect_text_box whitespace trim (ghost-width fix, spec-web §5)', () =
   })
 })
 
-describe('overlapping renders of one page (page strip + main view)', () => {
+describe('overlapping renders of one page (e.g. a display-DPI re-render)', () => {
   it('page.cleanup() runs once, only after the last render finishes', async () => {
     const pdf = fake_pdf(1, true)
     const finish: Array<() => void> = []
@@ -298,9 +298,9 @@ describe('overlapping renders of one page (page strip + main view)', () => {
     await a.load_files([pdf_file('a.pdf')])
     cleanup.mockClear()                 // load-time classification cleans up on its own
     const main = a.get_source_image(0, 150, 0)
-    const thumb = a.render_thumbnail(0, 160, 0)
+    const thumb = a.get_source_image(0, 300, 0)
     await new Promise(r => setTimeout(r, 0))
-    finish[1]?.()                       // the thumbnail finishes first
+    finish[1]?.()                       // the second render finishes first
     await thumb
     expect(cleanup).not.toHaveBeenCalled()
     finish[0]?.()
