@@ -29,12 +29,12 @@ export class NavBar {
         <button class="btn btn-secondary flex-1" id="nav-reset" title="Reset the document to its just-opened state (cannot be undone)">↺  Reset</button>
       </div>
       <div class="nav-bar__row nav-bar__row--pages">
-        <button class="btn btn-secondary flex-1" id="nav-prev" aria-label="Previous page" title="Previous page">◀ Prev</button>
+        <button class="btn btn-secondary flex-1" id="nav-prev" aria-label="Previous page" title="Previous page (← or PgUp)">◀ Prev</button>
         <div class="page-center">
           <input  class="page-input" id="nav-page" type="number" min="1" value="1" title="Jump to output page (Enter)" />
           <span class="page-total" id="nav-total">/ 0</span>
         </div>
-        <button class="btn btn-secondary flex-1" id="nav-next" aria-label="Next page" title="Next page">Next ▶</button>
+        <button class="btn btn-secondary flex-1" id="nav-next" aria-label="Next page" title="Next page (→ or PgDn)">Next ▶</button>
       </div>`
 
     sidebar.appendChild(bar)

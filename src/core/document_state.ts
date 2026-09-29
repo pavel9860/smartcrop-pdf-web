@@ -1,4 +1,4 @@
-// DocumentState — exactly the 8 undoable fields (spec-web §12, ARCHITECTURE §5.1).
+// DocumentState — exactly the 9 undoable fields (spec-web §12, ARCHITECTURE §5.1).
 // Nothing outside this list is snapshotted. drawn/detect_cache/union/auto_active are non-undoable
 // AppModel fields, not DocumentState fields — they are detection/drag scaffolding used to arrive
 // at a committed operation, not an operation themselves. See model.ts's
@@ -22,6 +22,7 @@ export interface PageProcessIntent {
 }
 
 export interface DocumentState {
+  pages:         number[]                          // logical page -> original page index (Delete)
   applied:       Map<number, Box[]>               // committed crop(s) per source page
   crop_rects:    Box[]                             // live split rectangles (split=2/4), page fractions
   rotation:      Map<number, number>               // page → degrees CW (0/90/180/270)
@@ -34,6 +35,7 @@ export interface DocumentState {
 
 export function default_document_state(): DocumentState {
   return {
+    pages:          [],
     applied:        new Map(),
     crop_rects:     [],
     rotation:       new Map(),
@@ -49,6 +51,7 @@ export function default_document_state(): DocumentState {
 // Box is replaced, never mutated in place, so shallow list copies are safe.
 export function snapshot(state: DocumentState): DocumentState {
   return {
+    pages:          [...state.pages],
     applied:        new Map([...state.applied].map(([k, v]) => [k, [...v]])),
     crop_rects:     [...state.crop_rects],
     rotation:       new Map(state.rotation),

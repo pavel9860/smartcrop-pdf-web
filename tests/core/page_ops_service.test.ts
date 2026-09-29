@@ -49,6 +49,7 @@ function setup(page_count = 3): {
     undo_depth: () => 2,
   })
   const doc = default_document_state()
+  doc.pages = Array.from({ length: page_count }, (_, i) => i)
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
   const current_page = { v: 0 }
   const synced = { v: 0 }
@@ -186,11 +187,10 @@ describe('PageOpsService.delete', () => {
     expect(synced.v).toBe(1)
   })
 
-  it('is destructive, not undoable — clears history rather than pushing a checkpoint', () => {
+  it('is undoable — pushes a checkpoint holding the pre-delete page order', () => {
     const { svc, doc, history } = setup(3)
-    history.push(doc)
-    expect(history.can_undo).toBe(true)
     svc.delete([0])
-    expect(history.can_undo).toBe(false)
+    expect(doc.pages).toEqual([1, 2])
+    expect(history.undo(doc)?.pages).toEqual([0, 1, 2])
   })
 })

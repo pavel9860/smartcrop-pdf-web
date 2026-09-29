@@ -76,7 +76,7 @@ export class CropPanel {
       <button class="btn btn-secondary w-full" id="cp-crop" title="Commit the current crop to the selected pages (Ctrl+Enter)">✂️  Crop</button>
       <div class="btn-row">
         <button class="btn btn-secondary flex-1" id="cp-rotate" title="Rotate the selected pages 90° clockwise">↻  Rotate</button>
-        <button class="btn btn-secondary flex-1" id="cp-delete" title="Remove the selected pages (cannot be undone)">🗑︎  Delete</button>
+        <button class="btn btn-secondary flex-1" id="cp-delete" title="Remove the selected pages (Del) — Undo brings them back">🗑︎  Delete</button>
       </div>`
     container.appendChild(actions_card)
 

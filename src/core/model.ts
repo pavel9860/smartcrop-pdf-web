@@ -8,7 +8,7 @@ import {
 } from './document_state'
 import { History } from './history'
 import { type Settings, default_settings } from './settings'
-import { PageIndexMap } from './page_index_map'
+import { PageIndexMap, remap_pages, follow_page } from './page_index_map'
 import { PageRasterPipeline } from './page_raster_pipeline'
 import { CropController } from './crop_controller'
 import { PageOpsService, type DetectionState } from './page_ops_service'
@@ -241,7 +241,8 @@ export class AppModel {
     this._union = null
     this._auto_active = false
     this._raster.reset()
-    this._page_index.reset(this._doc ? this._doc.page_count : 0)
+    this.document.pages = Array.from({ length: this._doc?.page_count ?? 0 }, (_, i) => i)
+    this._page_index.set(this.document.pages)
     // Keep-ratio initialises to the first page's real w/h, not a bare 1.0, so the ratio field
     // shows a meaningful default from the moment a document opens.
     const sz0 = this._doc?.page_sizes[0]
@@ -421,20 +422,29 @@ export class AppModel {
 
   undo(): void {
     const prev = this.history.undo(this.document)
-    if (prev) {
-      this.document = prev
-      this._raster.clear_output()
-      this._sync_view_pos()
-    }
+    if (prev) this._restore(prev)
   }
 
   redo(): void {
     const next = this.history.redo(this.document)
-    if (next) {
-      this.document = next
-      this._raster.clear_output()
-      this._sync_view_pos()
+    if (next) this._restore(next)
+  }
+
+  // A restored snapshot may carry a different page order (Undo/Redo of Delete): re-sync the index
+  // map, carry the non-undoable detection cache across by original page, and stay on the same page.
+  private _restore(state: DocumentState): void {
+    const prev = this._page_index.pages
+    this.document = state
+    this._raster.clear_output()
+    if (state.pages.length !== prev.length || state.pages.some((o, i) => o !== prev[i])) {
+      this._page_index.set(state.pages)
+      this._detect_cache = remap_pages(this._detect_cache, prev, state.pages)
+      this._union = this._auto_active ? this._detection.compute_union(this._detect_cache) : null
+      this._auto_active = this._union !== null
+      this._current_page = follow_page(prev, state.pages, this._current_page)
+      this._raster.invalidate_current()
     }
+    this._sync_view_pos()
   }
 
   get can_undo(): boolean { return this.history.can_undo }

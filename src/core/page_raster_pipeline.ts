@@ -108,11 +108,8 @@ export class PageRasterPipeline {
   set is_loading(v: boolean) { this._loading = v }
 
   output_at(p: number, split_idx: number): ImageBitmap | null {
-    return this._output_cache.get(`${p}:${split_idx}`) ?? null
+    return this._output_cache.get(`${this._page_index.orig(p)}:${split_idx}`) ?? null
   }
-
-  // Full reset on document load/reopen: drop everything.
-  reset(): void { this.clear_ram() }
 
   // Undo/redo (spec-web §12): drop only the cheap crop/split output preview. The source/work
   // per-page version histories are content-addressed and bounded by undo_depth — whatever state
@@ -120,12 +117,9 @@ export class PageRasterPipeline {
   // clean recompute otherwise) — so they are deliberately left alone.
   clear_output(): void { this._output_cache.clear() }
 
-  // Delete (spec-web §12): every cache is keyed by LOGICAL page number, and delete shifts every
-  // subsequent page's logical index — every entry's association is now wrong, not just stale, so
-  // (unlike Undo/Redo) a wholesale wipe is the correct behavior here, not a shortcut.
-  // In-flight jobs are keyed by logical page too, so they are dropped with the caches: a job
-  // started before the wipe still resolves for its own caller, but is never joined afterwards.
-  clear_ram(): void {
+  // Document load/reopen: drop everything. In-flight jobs go too — one started before the reset
+  // still resolves for its own caller, but is never joined afterwards.
+  reset(): void {
     this._inflight.clear()
     this._clear_versions(this._source_versions)
     this._clear_versions(this._work_versions)
@@ -146,19 +140,23 @@ export class PageRasterPipeline {
   }
 
   invalidate_output(p: number): void {
-    for (let i = 0; i < MAX_SPLIT; i++) this._output_cache.delete(`${p}:${i}`)
+    const o = this._page_index.orig(p)
+    for (let i = 0; i < MAX_SPLIT; i++) this._output_cache.delete(`${o}:${i}`)
   }
 
   invalidate_current(): void { this._current = null }
 
+  // Every cache is keyed by the ORIGINAL page index (PageIndexMap), not the logical position, so a
+  // Delete or its Undo never re-points a cached or in-flight raster at a different page.
   private _version_cache(
     map: Map<number, LRUCache<string, ImageBitmap>>, p: number,
   ): LRUCache<string, ImageBitmap> {
-    let cache = map.get(p)
+    const o = this._page_index.orig(p)
+    let cache = map.get(o)
     if (!cache) {
       cache = new LRUCache<string, ImageBitmap>(this._ctx.undo_depth() + 1,
         (_, b) => { if (b !== this._current) b.close() })
-      map.set(p, cache)
+      map.set(o, cache)
     }
     return cache
   }
@@ -176,7 +174,7 @@ export class PageRasterPipeline {
     const key = String(rotation)
     const cached = cache.get(key)
     if (cached) return cached
-    return this._dedup(`src:${p}:${key}`, async () => {
+    return this._dedup(`src:${this._page_index.orig(p)}:${key}`, async () => {
       const dpi = this._ctx.mode() === Mode.SCANNED ? SRC_DPI : this._ctx.display_dpi()
       // p is logical (post-delete); the adapter only knows original pdf.js page indices.
       const orig = this._page_index.orig(p)
@@ -268,7 +266,7 @@ export class PageRasterPipeline {
     const key = String(supersample)
     const cached = cache.get(key)
     if (cached) return cached
-    return this._dedup(`dwc:${p}:${key}`, async () => {
+    return this._dedup(`dwc:${this._page_index.orig(p)}:${key}`, async () => {
       const src0 = await this._get_source_at(p, 0)
       const dewarped = await this._adapter.get_work_image(src0, { dewarp: true, filter: null }, supersample)
       cache.set(key, dewarped)
@@ -301,15 +299,17 @@ export class PageRasterPipeline {
   // Background-warms an adjacent page so next/prev is a cache hit instead of a blank "Loading…"
   // flash while the (potentially heavy, scanned-mode) work raster renders on demand.
   prefetch(p: number): void {
-    if (p < 0 || p >= this._page_index.length || this._prefetching.has(p)) return
+    if (p < 0 || p >= this._page_index.length) return
+    const o = this._page_index.orig(p)
+    if (this._prefetching.has(o)) return
     const slot = this._work_slot(p)
     const warm = slot === 'source'
-      ? (this._source_versions.get(p)?.has(String(this._ctx.rotation(p))) ?? false)
-      : (slot.map.get(p)?.has(slot.key) ?? false)
+      ? (this._source_versions.get(o)?.has(String(this._ctx.rotation(p))) ?? false)
+      : (slot.map.get(o)?.has(slot.key) ?? false)
     if (warm) return
-    this._prefetching.add(p)
+    this._prefetching.add(o)
     void this.get_work(p).catch(() => { /* best-effort warm */ })
-      .finally(() => { this._prefetching.delete(p) })
+      .finally(() => { this._prefetching.delete(o) })
   }
 
   // Pre-render every split view's output bitmap for a committed page (so jumping between split
@@ -320,7 +320,7 @@ export class PageRasterPipeline {
     p: number, committed: readonly Box[], sz: PageSize, work: ImageBitmap,
   ): Promise<void> {
     for (let i = 0; i < committed.length; i++) {
-      const key = `${p}:${i}`
+      const key = `${this._page_index.orig(p)}:${i}`
       if (this._output_cache.has(key)) continue
       const box = committed[i]
       if (!box) continue

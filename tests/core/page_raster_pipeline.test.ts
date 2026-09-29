@@ -244,7 +244,7 @@ describe('PageRasterPipeline in-flight work never leaks across a cache wipe', ()
     process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
   })
 
-  it('after Delete (clear_ram), logical page 0 gets the new page\'s image, not the in-flight dewarp of the deleted one', async () => {
+  it('after Delete, logical page 0 gets the new page\'s image, not the in-flight dewarp of the deleted one', async () => {
     const gates: Array<(b: ImageBitmap) => void> = []
     const a = adapter({
       get_source_image: (orig) => Promise.resolve(bmp(100 + orig, 100)),
@@ -256,8 +256,7 @@ describe('PageRasterPipeline in-flight work never leaks across a cache wipe', ()
 
     const stale = p.get_work(0)
     await Promise.resolve()
-    idx.remove(new Set([0]))
-    p.clear_ram()
+    idx.set([1])
     const fresh = p.get_work(0)
     await new Promise(r => setTimeout(r, 0))
     gates.forEach(g => g(bmp()))
@@ -349,7 +348,7 @@ describe('PageRasterPipeline eviction never double-closes the on-screen bitmap',
   })
 })
 
-describe('PageRasterPipeline.reset / clear_ram', () => {
+describe('PageRasterPipeline.reset / page order changes', () => {
   it('reset() clears the on-screen bitmap and forces a re-render on the next get_source', async () => {
     let calls = 0
     const a = adapter({ get_source_image: () => { calls++; return Promise.resolve(bmp()) } })
@@ -361,11 +360,19 @@ describe('PageRasterPipeline.reset / clear_ram', () => {
     expect(calls).toBe(2)
   })
 
-  it('clear_ram() drops every RAM raster (used by delete, whose page-index shift invalidates every key)', async () => {
-    const p = pipeline(adapter(), ctx())
-    await p.load_current(0)
-    p.clear_ram()
-    expect(p.current).toBeNull()
+  it('caches are keyed by original page: a Delete (or its Undo) re-renders nothing that survives', async () => {
+    const calls: number[] = []
+    const a = adapter({ get_source_image: (orig) => { calls.push(orig); return Promise.resolve(bmp(100 + orig, 100)) } })
+    const idx = new PageIndexMap()
+    idx.reset(3)
+    const p = new PageRasterPipeline(a, idx, ctx())
+    await p.get_source(1)
+    await p.get_source(2)
+    idx.set([1, 2])                                    // Delete logical page 0
+    expect((await p.get_source(0)).width).toBe(101)
+    idx.set([0, 1, 2])                                 // Undo
+    expect((await p.get_source(2)).width).toBe(102)
+    expect(calls).toEqual([1, 2])
   })
 
   it('clear_output() drops only the crop/split preview cache, not source/work (used by undo/redo)', async () => {
@@ -434,8 +441,7 @@ describe('PageRasterPipeline: a filter result finishing after Delete never lands
     const c = ctx({ mode: () => Mode.SCANNED, process_intent: (): PageProcessIntent => ({ dewarp: false, filter: [FilterMode.BW, 1] }) })
     const p = new PageRasterPipeline(a, idx, c)
     const stale = p.get_work(0)
-    idx.remove(new Set([0]))
-    p.clear_ram()
+    idx.set([1])
     release()
     await stale
     expect((await p.get_work(0)).width).toBe(101)

@@ -470,24 +470,6 @@ export function split_grid_position(n: 1 | 2 | 4, i: number): { col: number; row
   return { col: box && box.x0 > 0 ? 1 : 0, row: box && box.y0 > 0 ? 1 : 0 }
 }
 
-// Reindex a per-page map after page deletion.
-// `deleted` is a sorted array of 0-based source indices that were removed. Binary search per key
-// (O(n log d)) instead of a full scan of `deleted` per key (O(n·d)): `lo` lands on the first
-// deleted index >= k, which is both the count of deleted indices below k and the membership check.
-export function reindex_map<V>(map: Map<number, V>, deleted: readonly number[]): Map<number, V> {
-  const result = new Map<number, V>()
-  for (const [k, v] of map) {
-    let lo = 0, hi = deleted.length
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1
-      if ((deleted[mid] ?? Infinity) < k) lo = mid + 1
-      else hi = mid
-    }
-    if (deleted[lo] !== k) result.set(k - lo, v)
-  }
-  return result
-}
-
 export function box_width(b: Box): number { return b.x1 - b.x0 }
 export function box_height(b: Box): number { return b.y1 - b.y0 }
 

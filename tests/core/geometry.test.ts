@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest'
 import {
   hit_handle, clamp_box_shift, clamp_box_drag, apply_handle_drag,
   auto_crop_rect, offsets_from_rect, detection_union, union_box, keep_ratio_normalise,
-  keep_ratio_anchored, rotate_box_cw, rotate_box_ccw, to_native_frame, split_rects_grid, reindex_map,
+  keep_ratio_anchored, rotate_box_cw, rotate_box_ccw, to_native_frame, split_rects_grid,
   box_width, box_height,
   MIN_RECT, type Box,
 } from '@core/geometry'
@@ -408,16 +408,3 @@ describe('split_rects_grid (spec §7.3, §9.6)', () => {
   })
 })
 
-describe('reindex_map (spec §13 delete)', () => {
-  it('drops deleted keys and shifts surviving keys down', () => {
-    const m = new Map<number, string>([[0, 'a'], [1, 'b'], [2, 'c'], [3, 'd']])
-    const r = reindex_map(m, [1])   // delete page 1
-    expect([...r.entries()].sort()).toEqual([[0, 'a'], [1, 'c'], [2, 'd']])
-  })
-  it('handles multiple deletions (shift = count of deleted indices below each surviving key)', () => {
-    const m = new Map<number, string>([[0, 'a'], [2, 'c'], [4, 'e']])
-    const r = reindex_map(m, [0, 3])
-    // key 2: one deleted index (0) below it -> 2-1=1. key 4: two deleted indices (0,3) below it -> 4-2=2.
-    expect([...r.entries()].sort()).toEqual([[1, 'c'], [2, 'e']])
-  })
-})

@@ -90,7 +90,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               — committed-split pages expand to N views
 
       document_state.ts     Offsets (frozen), PageProcessIntent (frozen), DocumentState
-                              (8 undoable fields: applied, crop_rects, rotation, processed,
+                              (9 undoable fields: pages, applied, crop_rects, rotation, processed,
                               offsets, dewarp_on, filter_mode, filter_strength + snapshot()).
                               detect_cache/union/auto_active/drawn are non-undoable AppModel
                               fields, not DocumentState fields (spec-web §12).
@@ -815,7 +815,7 @@ const session = await ort.InferenceSession.create(modelBytes, { executionProvide
 `DocumentState`, `History`, `Settings`, `DragState`.
 
 The defining rules are preserved:
-- `DocumentState` holds exactly the 8 undoable fields (`applied`, `crop_rects`, `rotation`,
+- `DocumentState` holds exactly the 9 undoable fields (`pages`, `applied`, `crop_rects`, `rotation`,
   `processed`, `offsets`, `dewarp_on`, `filter_mode`, `filter_strength`); `snapshot()` deep-copies
   the per-page maps and shares the frozen scalars. `detect_cache`/`union`/`auto_active`/`drawn`
   are non-undoable `AppModel` fields, 

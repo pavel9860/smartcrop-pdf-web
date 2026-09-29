@@ -896,7 +896,8 @@ therefore advances once per encoded page (`total === display_total`).
 
 ## 12. History, reset, rotate, delete
 
-`DocumentState`'s undo boundary is exactly 8 fields: `applied` (committed crop/split), `crop_rects`
+`DocumentState`'s undo boundary is exactly 9 fields: `pages` (the document's page order — the
+original page index behind each logical page), `applied` (committed crop/split), `crop_rects`
 (live split layout), `rotation`, `processed` (scan-processing intent), `offsets`, `dewarp_on`,
 `filter_mode`, `filter_strength`. Auto-detect's results (the per-page detected-box cache, the union,
 whether detection has run at all — plus, at split > 1, the per-region equivalents, §5a) and the
@@ -912,9 +913,9 @@ split>1 per-region result instead (§5a's residual note) — the next Auto-detec
 
 - **Undo/Redo** — a bounded stack of `DocumentState` snapshots, depth from the Undo/redo-depth
   setting (preset dropdown, `UNDO_DEPTH_OPTIONS = [1,2,4,8]`, default 2). A snapshot is taken before
-  every undoable mutation (Crop, offset commit, a completed drag resize, rotate) — see above for what
+  every undoable mutation (Crop, offset commit, a completed drag resize, rotate, delete) — see above for what
   is deliberately excluded. Restoring a snapshot drops only the cheap crop/split output preview (§7);
-  the source and processed-page raster caches are content-addressed by (page, rotation, dewarp,
+  the source and processed-page raster caches are content-addressed by (original page, rotation, dewarp,
   filter, strength) — except the Dewarp&Deskew result itself, addressed by page only, deliberately
   not rotation (§7.1) — and are left alone, since a reverted combination naturally resolves to its
   own cache entry — a hit if still resident, one clean recompute if it was evicted. Neither cache is
@@ -934,12 +935,13 @@ split>1 per-region result instead (§5a's residual note) — the next Auto-detec
   active, the windows reset to a fresh even grid sized for the rotated page (any prior manual window
   positioning was sized for the pre-rotation page and is discarded, same as first turning split on).
   Fully undoable.
-- **Delete** — removes the Pages selection, refuses to delete every page, confirms first. Reindexes
+- **Delete** — removes the Pages selection, refuses to delete every page, confirms first. Remaps
   every per-page map (`applied`, `rotation`, `processed`, the detection cache) so surviving pages'
-  adjustments are preserved; the page-index map is rebuilt *before* the union rebuild, since the
-  union math judges each remaining box against its own post-reindex page dimensions. **Not
-  undoable** (`history.clear()`, not push) — the page-index map lives outside `DocumentState`, so a
-  restored snapshot could reference indices the map no longer has.
+  adjustments are preserved; `pages` is updated *before* the union rebuild, since the union math
+  judges each remaining box against its own post-delete page dimensions. **Fully undoable**: Undo
+  restores `pages` and the per-page maps from the snapshot, and the non-undoable detection cache is
+  remapped through the old and new page order. Raster caches are keyed by the original page index,
+  so neither Delete nor its Undo discards or re-renders a surviving page.
 
 ---
 
@@ -1165,7 +1167,7 @@ yes/no confirm dialog, single OK button), never a silent failure and never an au
 2. Dragging any handle leaves every non-dragged edge pixel-stable across the whole drag.
 3. Repeated Dewarp/filter presses produce the same `work` raster as one press (idempotent from
    `source`, §7).
-4. Undo reverts crop, rotate, and (SCANNED) dewarp/filter; it does **not** revert a bare Auto-detect
+4. Undo reverts crop, rotate, delete, and (SCANNED) dewarp/filter; it does **not** revert a bare Auto-detect
    or an uncommitted drawn window (§12). Reset re-opens the whole document.
 5. Rotate preserves filtering and the committed/detected crop (boxes rotate with the page); Delete
    preserves kept pages' adjustments via reindexing, never a wipe (§12).

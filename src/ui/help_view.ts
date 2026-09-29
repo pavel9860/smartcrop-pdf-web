@@ -94,7 +94,7 @@ const SECTIONS: readonly HelpSection[] = [
     id: 'rotate-delete', title: '10. Rotate and delete',
     body: 'Rotate turns the selected pages 90° clockwise. Press it again for 180°, again for 270°. '
       + 'Delete removes the selected pages from the document. '
-      + 'Both act on the Pages selector. Delete cannot be undone.',
+      + 'Both act on the Pages selector, and both can be undone.',
   },
   {
     id: 'compress-colour', title: '11. Output Quality',

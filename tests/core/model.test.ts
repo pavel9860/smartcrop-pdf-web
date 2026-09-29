@@ -1133,3 +1133,36 @@ describe('a failed scan batch commits nothing (spec-web §21 #26)', () => {
     expect(model.view_snapshot().image).not.toBeNull()
   })
 })
+
+describe('Delete is undoable (spec-web §12)', () => {
+  it('undo restores the pages, their crops and the viewed page without re-rendering; redo deletes again', async () => {
+    const { adapter, calls } = make_mock_adapter({ page_count: 4 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    model.begin_drag(20, 20, 5); model.update_drag(120, 220); model.end_drag()
+    model.set_select_pattern('2'); model.set_pages_mode(PagesMode.SELECT)
+    model.apply_crop()                                       // crop page 2 only
+    model.set_pages_mode(PagesMode.ALL)
+    for (let p = 1; p <= 4; p++) { model.jump_to_output_page(p); await model.prepare_current_view() }
+    const renders = calls['get_source_image']
+
+    model.jump_to_output_page(3)                             // view page 3
+    model.set_select_pattern('1-2'); model.set_pages_mode(PagesMode.SELECT)
+    model.delete_pages()
+    model.set_pages_mode(PagesMode.ALL)
+    expect(model.page_count()).toBe(2)
+    expect(model.view_position).toBe(1)                      // old page 3 is now page 1
+    expect(model.can_undo).toBe(true)
+
+    model.undo()
+    expect(model.page_count()).toBe(4)
+    expect(model.view_position).toBe(3)                      // still on the same page
+    model.jump_to_output_page(2)
+    await model.prepare_current_view()
+    expect(model.view_snapshot().page_w).toBeCloseTo(100)    // page 2's crop is back
+    expect(calls['get_source_image']).toBe(renders)          // nothing re-rendered
+
+    model.redo()
+    expect(model.page_count()).toBe(2)
+  })
+})

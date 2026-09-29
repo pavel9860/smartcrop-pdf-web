@@ -5,13 +5,13 @@
 // — see PageOpsContext below, the same "shared state stays on AppModel, exposed live" pattern
 // PageRasterPipeline/CropController already established).
 import type { Box } from './geometry'
-import { rotate_box_cw, reindex_map, split_rects_grid } from './geometry'
+import { rotate_box_cw, split_rects_grid } from './geometry'
 import type { DocumentState } from './document_state'
 import type { History } from './history'
 import { DEFAULT_OFFSETS } from './document_state'
 import { DeleteAllPagesError } from './errors'
 import type { PageSize } from './model'
-import type { PageIndexMap } from './page_index_map'
+import { remap_pages, follow_page, type PageIndexMap } from './page_index_map'
 import type { PageRasterPipeline } from './page_raster_pipeline'
 
 export interface DetectionState {
@@ -85,30 +85,20 @@ export class PageOpsService {
   delete(pages: readonly number[]): void {
     if (pages.length >= this._ctx.page_count()) throw new DeleteAllPagesError('Cannot delete all pages')
 
-    const sorted = [...pages].sort((a, b) => a - b)
-    const removed = new Set(sorted)
-
-    // Delete is destructive, not undoable (clears history rather than snapshotting — spec-web §12
-    // states Rotate is "Fully undoable" in explicit contrast). It can't be made undoable here
-    // regardless: PageIndexMap lives outside DocumentState, so a restored applied/rotation map
-    // could reference original page indices the map no longer has — the same class of desync bug
-    // as the set_keep_ratio fix elsewhere, just for a field History can't reach.
-    this._history.clear()
-
-    // Reindex per-page maps (spec-web §12)
+    this._history.push(this._ctx.document())
     const doc = this._ctx.document()
-    doc.applied   = reindex_map(doc.applied,   sorted)
-    doc.rotation  = reindex_map(doc.rotation,  sorted)
-    doc.processed = reindex_map(doc.processed, sorted)
+    const prev = doc.pages
+    const removed = new Set(pages)
+    const next = prev.filter((_, i) => !removed.has(i))
+    doc.applied   = remap_pages(doc.applied,   prev, next)
+    doc.rotation  = remap_pages(doc.rotation,  prev, next)
+    doc.processed = remap_pages(doc.processed, prev, next)
     const det = this._ctx.detection()
-    const cache = reindex_map(det.cache, sorted)
-
-    // Rebuild the logical->original page index map (pdf.js has no in-place page-deletion
-    // primitive, so this is a filter + reindex instead).
-    // MUST precede the union rebuild below: recompute_union reads each surviving page's
-    // dimensions through PageIndexMap, so it has to be reindexed first (bug 2a — the union was
-    // judged against a stale page map).
-    this._page_index.remove(removed)
+    const cache = remap_pages(det.cache, prev, next)
+    // MUST precede the union rebuild below: recompute_union reads each surviving page's dimensions
+    // through PageIndexMap (bug 2a — the union was judged against a stale page map).
+    doc.pages = next
+    this._page_index.set(next)
 
     if (det.auto_active && cache.size > 0) {
       // Same FULL_PAGE_FRAC exclusion the initial detect applies (bug 2a): the old raw
@@ -119,8 +109,8 @@ export class PageOpsService {
       this._ctx.set_detection({ cache, union: null, auto_active: false })
     }
 
-    this._raster.clear_ram()
-    this._ctx.set_current_page(Math.min(this._ctx.current_page(), this._ctx.page_count() - 1))
+    this._raster.invalidate_current()
+    this._ctx.set_current_page(follow_page(prev, next, this._ctx.current_page()))
     this._ctx.sync_view_pos()
   }
 }

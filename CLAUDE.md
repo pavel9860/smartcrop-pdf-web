@@ -41,7 +41,7 @@ passes. See "Verify, don't trust" under Process — it governs every claim of ga
   8-bit RGB single strip). Image exports (JPG/PNG/TIFF) deliver ONE .zip (fflate, in
   export.worker.ts), not N loose files — never reintroduce per-page loose downloads or a
   "TIFF excluded" claim.
-- DocumentState's undoable field set is exactly 8 fields (document_state.ts) — applied, crop_rects,
+- DocumentState's undoable field set is exactly 9 fields (document_state.ts) — pages, applied, crop_rects,
   rotation, processed, offsets, dewarp_on, filter_mode, filter_strength. detect_cache/union/
   auto_active/drawn are non-undoable AppModel fields, not DocumentState fields — do not add them
   back to DocumentState, and do not assume Undo reverts them.
