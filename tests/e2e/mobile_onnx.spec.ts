@@ -33,6 +33,7 @@ for (const [name, init] of Object.entries(GPU_SETUPS)) {
     test.setTimeout(240_000)
     await page.addInitScript(init)
     await page.goto('/')
+    await page.click('.drawer-toggle')                   // phone layout: controls live in the drawer
     await page.setInputFiles('#pp-file', SCAN_JPG)
     await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
     const canvas = page.locator('canvas.page-canvas')

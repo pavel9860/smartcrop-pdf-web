@@ -142,6 +142,12 @@ page), updated on `pointermove`, empty when the pointer leaves. Nothing else is 
 outside the page bitmap and the crop/split overlay boxes — no page-number/size status text is
 painted on or near the canvas.
 
+**Phone layout** — below 700 px width (CSS breakpoint) the canvas takes the whole screen and the
+sidebar becomes a slide-out drawer: a ☰ button over the canvas's top-left opens it over the page,
+tapping the dimmed backdrop (or ☰ again) closes it. Settings/Help open full-width over everything.
+The canvas's ◀/▶ page arrows stay visible (no hover on touch) and, with the page strip, keep
+navigation available while the drawer is closed.
+
 **Page strip** — a horizontal, scrollable row of page thumbnails under the canvas, one per source
 page, numbered. The current page is highlighted, pages in the Pages-to-process selection are
 outlined in the accent colour, and a click shows that page. Thumbnails are low-resolution

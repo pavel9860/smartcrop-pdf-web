@@ -96,6 +96,7 @@ export class AppController {
     stage.appendChild(this._canvas_view.el)
     this._canvas_col.appendChild(stage)
     this._page_strip = new PageStrip(this._canvas_col, this._model, this)
+    this._wire_drawer(root, stage)
     this._overlay = new ProgressOverlay(this._canvas_col)
     this._off_module_status = on_module_status(s => { this._on_module_status(s) })
 
@@ -275,6 +276,21 @@ export class AppController {
   // ---------------------------------------------------------------------------
   // Drag-and-drop file load
   // ---------------------------------------------------------------------------
+
+  // Phone layout (spec-web §3): the sidebar is a slide-out drawer, toggled by a button over the
+  // canvas and closed by tapping the backdrop. Only visible below the CSS phone breakpoint.
+  private _wire_drawer(root: HTMLElement, stage: HTMLElement): void {
+    const toggle = document.createElement('button')
+    toggle.className = 'drawer-toggle btn-icon'
+    toggle.title = 'Controls'
+    toggle.setAttribute('aria-label', 'Controls')
+    toggle.textContent = '☰'
+    const backdrop = document.createElement('div')
+    backdrop.className = 'drawer-backdrop'
+    stage.append(toggle, backdrop)
+    toggle.addEventListener('click', () => { root.classList.toggle('drawer-open') })
+    backdrop.addEventListener('click', () => { root.classList.remove('drawer-open') })
+  }
 
   // Files dropped anywhere on the window open like the Open button; the overlay shows while a file
   // drag is over the window. Counting enter/leave pairs keeps it steady across child elements.

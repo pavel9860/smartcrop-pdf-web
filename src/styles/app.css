@@ -677,3 +677,26 @@ input, select { font: inherit; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ── Phone layout (spec-web §3): sidebar as a slide-out drawer ── */
+.drawer-toggle, .drawer-backdrop { display: none; }
+@media (max-width: 700px) {
+  .canvas-area { min-width: 0; }
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; z-index: 20;
+    width: min(85vw, var(--sidebar-w)); min-width: 0;
+    transform: translateX(-100%); transition: transform 180ms ease;
+  }
+  .drawer-open .sidebar { transform: none; box-shadow: 4px 0 16px rgb(0 0 0 / 0.4); }
+  .drawer-toggle {
+    display: block; position: absolute; top: 8px; left: 8px; z-index: 6;
+    width: 40px; height: 40px; font-size: 1.25rem;
+    background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text-primary);
+  }
+  .drawer-open .drawer-backdrop { display: block; position: fixed; inset: 0; z-index: 15; background: rgb(0 0 0 / 0.45); }
+  .detail-panel.open, .detail-panel.open.help-active {
+    position: fixed; inset: 0; z-index: 30; width: 100%; min-width: 0;
+  }
+  .canvas-nav:not(:disabled) { opacity: 0.85; }
+}
