@@ -154,6 +154,12 @@ function pdf_rect(
   return { x: cb.x + n.x0, y: cb.y + cb.height - n.y1, width: n.x1 - n.x0, height: n.y1 - n.y0, rotation }
 }
 
+async function destroy_all(pdfs: readonly pdfjs.PDFDocumentProxy[]): Promise<void> {
+  for (const pdf of pdfs) {
+    try { await pdf.destroy() } catch { /* proxy already torn down — nothing to free */ }
+  }
+}
+
 // Re-encode an image blob as PNG bytes — used by export_pdf_vector for an image-sourced page in
 // any format pdf-lib can't embed directly (only JPEG/PNG). createImageBitmap already succeeded on
 // this same blob at load time (is_native_page/page_sizes), so it is known-decodable here too.
@@ -261,9 +267,10 @@ export class PdfRendererAdapter implements RendererAdapter {
       return synth
     }
 
-    this._files = files
-    await this._release_sources()
-
+    // Built aside and swapped in only on success: a file that fails to open must leave the open
+    // document (its sources, and Reset's file list) untouched.
+    const pdfs: pdfjs.PDFDocumentProxy[] = []
+    const pages: PageSource[] = []
     const page_sizes: PageSize[] = []
     const file_names: string[]   = []
     let any_native = false
@@ -282,12 +289,12 @@ export class PdfRendererAdapter implements RendererAdapter {
             standardFontDataUrl: `${import.meta.env.BASE_URL}standard_fonts/`,
             useWorkerFetch: true,
           }).promise
-          this._pdfs.push(pdf)
+          pdfs.push(pdf)
           for (let i = 1; i <= pdf.numPages; i++) {
             const p  = await pdf.getPage(i)
             const vp = p.getViewport({ scale: 1 })
             page_sizes.push({ width: vp.width, height: vp.height })
-            this._pages.push({ kind: 'pdf', pdf, page_num: i })
+            pages.push({ kind: 'pdf', pdf, page_num: i })
             // Classify per §4: NORMAL as soon as any page carries vector data. Stop probing
             // once found — the rest of the pages still register their size + source above.
             if (!any_native) any_native = await is_native_page(p)
@@ -301,18 +308,19 @@ export class PdfRendererAdapter implements RendererAdapter {
           const bitmap = await createImageBitmap(f)
           page_sizes.push({ width: bitmap.width, height: bitmap.height })
           bitmap.close()
-          this._pages.push({ kind: 'image', blob: f })
+          pages.push({ kind: 'image', blob: f })
           file_names.push(f.name)
         }
       }
+      if (page_sizes.length === 0) throw new Error('No pages to load')
     } catch (e) {
-      await this._release_sources()
+      await destroy_all(pdfs)
       throw new DocumentLoadError('Failed to load the selected files', e)
     }
-
-    if (page_sizes.length === 0) {
-      throw new DocumentLoadError('No pages to load')
-    }
+    await this._release_sources()
+    this._pdfs = pdfs
+    this._pages = pages
+    this._files = files
 
     // Classification (spec §4): any native page → NORMAL, else SCANNED
     const mode = any_native ? Mode.NORMAL : Mode.SCANNED
@@ -653,9 +661,7 @@ export class PdfRendererAdapter implements RendererAdapter {
     const pdfs = this._pdfs
     this._pdfs = []
     this._pages = []
-    for (const pdf of pdfs) {
-      try { await pdf.destroy() } catch { /* proxy already torn down — nothing to free */ }
-    }
+    await destroy_all(pdfs)
   }
 
   private _export_worker(): Promise<RpcWorker> {

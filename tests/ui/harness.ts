@@ -6,7 +6,9 @@ import { vi } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
 import type { AppController } from '@ui/app'
 import { Mode } from '@core/enums'
-import { recording_sink } from '../core/harness'
+import { make_adapter, make_bitmap } from '../core/harness'
+
+export { make_adapter, make_bitmap }
 
 /** jsdom has no canvas backend (no getContext('2d')) and no ResizeObserver — CanvasView (and
  * anything that constructs one, e.g. AppController) only needs permissive stand-ins for both, not
@@ -26,31 +28,7 @@ export function stub_canvas_apis(): void {
   Element.prototype.scrollIntoView = vi.fn()
 }
 
-export function make_bitmap(w = 200, h = 300): ImageBitmap {
-  return { width: w, height: h, close: (): void => { /* no-op */ } } as unknown as ImageBitmap
-}
 
-export function make_adapter(page_count = 3, mode: Mode = Mode.NORMAL): RendererAdapter {
-  const pw = 200, ph = 300
-  return {
-    load_files: (files: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count,
-      page_sizes: Array.from({ length: page_count }, () => ({ width: pw, height: ph })),
-      file_names: files.map(f => f.name),
-      mode,
-    }),
-    get_source_image: () => Promise.resolve(make_bitmap(pw, ph)),
-    get_work_image: () => Promise.resolve(make_bitmap(pw, ph)),
-    rotate_bitmap: (b, degrees) => Promise.resolve(
-      degrees % 180 === 90 ? make_bitmap(b.height, b.width) : make_bitmap(b.width, b.height)),
-    render_output_image: (_s, box) => Promise.resolve(
-      make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
-    detect_content_box: (_i, w, h) => Promise.resolve({ x0: 20, y0: 20, x1: w - 20, y1: h - 20 }),
-    begin_export: () => recording_sink(),
-    make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
-    close: (): void => { /* no-op */ },
-  }
-}
 
 /** Build an AppModel with a mock adapter, optionally pre-loaded with a document. */
 export async function make_model(

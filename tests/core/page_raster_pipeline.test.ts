@@ -7,7 +7,7 @@ import { PageIndexMap } from '@core/page_index_map'
 import { Mode, FilterMode } from '@core/enums'
 import type { RendererAdapter, DocInfo, PageSize } from '@core/model'
 import type { PageProcessIntent } from '@core/document_state'
-import { recording_sink } from './harness'
+import { make_adapter } from './harness'
 
 function bmp(w = 100, h = 100): ImageBitmap {
   return { width: w, height: h, close: (): void => {} }
@@ -28,19 +28,13 @@ function ctx(overrides: Partial<RasterContext> = {}): RasterContext {
 
 function adapter(overrides: Partial<RendererAdapter> = {}): RendererAdapter {
   return {
-    load_files: (f: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count: 1, page_sizes: [{ width: 200, height: 300 }],
-      file_names: f.map(x => x.name), mode: Mode.NORMAL,
-    }),
+    ...make_adapter(1),
     get_source_image: () => Promise.resolve(bmp()),
     get_work_image: () => Promise.resolve(bmp()),
     rotate_bitmap: (b, degrees) => Promise.resolve(
       degrees % 180 === 90 ? bmp(b.height, b.width) : bmp(b.width, b.height)),
     render_output_image: (_s, b) => Promise.resolve(bmp(b.x1 - b.x0, b.y1 - b.y0)),
-    detect_content_box: (_i, w, h) => Promise.resolve({ x0: 0, y0: 0, x1: w, y1: h }),
-    begin_export: () => recording_sink(),
     make_synth_page: (_i, w, h) => Promise.resolve(bmp(w, h)),
-    close: (): void => {},
     ...overrides,
   }
 }

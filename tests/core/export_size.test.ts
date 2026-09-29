@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
 import { Mode } from '@core/enums'
 import { PAPER_SIZES, DEFAULT_PAPER } from '@core/constants'
-import { recording_sink } from './harness'
+import { make_adapter as base_adapter } from './harness'
 
 function make_bitmap(w = 100, h = 100): ImageBitmap {
   return { width: w, height: h, close: (): void => { /* no-op */ } }
@@ -16,23 +16,13 @@ const FILE = (): File => new File(['x'], 'a.pdf', { type: 'application/pdf' })
 function make_adapter(): { adapter: RendererAdapter; long_px: (number | null)[] } {
   const long_px: (number | null)[] = []
   const adapter: RendererAdapter = {
-    load_files: (files: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count: 2,
-      page_sizes: [{ width: 200, height: 300 }, { width: 200, height: 300 }],
-      file_names: files.map(f => f.name),
-      mode: Mode.NORMAL,
-    }),
-    get_source_image: () => Promise.resolve(make_bitmap()),
-    get_work_image:   () => Promise.resolve(make_bitmap()),
+    ...base_adapter(2),
     rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: (_s, _b, _pw, _ph, target_long_px): Promise<ImageBitmap> => {
       long_px.push(target_long_px)
       return Promise.resolve(make_bitmap())
     },
     detect_content_box: () => Promise.resolve({ x0: 20, y0: 20, x1: 120, y1: 280 }),
-    begin_export: () => recording_sink(),
-    make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
-    close: (): void => { /* no-op */ },
   }
   return { adapter, long_px }
 }

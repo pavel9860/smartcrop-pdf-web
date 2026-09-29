@@ -551,14 +551,12 @@ export class AppModel {
     this._raster.is_loading = true
     const ticket = ++this._view_ticket
     const p = this._current_page
-    const rotation = this.document.rotation.get(p) ?? 0   // captured pre-fetch; work reflects it
 
     try {
       const work = await this._raster.get_work(p)
-      // Only the latest request commits, and only if page and rotation still match: a late fetch
-      // can outrun nav, a re-rotate, or a Delete that re-points the same logical page index.
-      if (ticket === this._view_ticket && p === this._current_page
-          && rotation === (this.document.rotation.get(p) ?? 0)) {
+      // Only the latest request commits: every nav/rotate/delete/undo is followed by a new one, so a
+      // late fetch for a page or rotation no longer on screen can never replace the current view.
+      if (ticket === this._view_ticket) {
         this._raster.current = work
         const committed = this.document.applied.get(p)
         if (committed) await this._raster.prerender_output_views(p, committed, this._page_dims(p), work)

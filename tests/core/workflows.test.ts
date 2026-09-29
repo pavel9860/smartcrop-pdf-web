@@ -45,7 +45,8 @@ describe('NORMAL workflow — detect / crop / rotate with undo-redo round trips'
     // Unwind everything, then replay everything: state must match at both ends.
     for (let i = 0; i < 8 && m.can_undo; i++) m.undo()
     expect(m.can_undo).toBe(false)
-    expect(sig(m)).toEqual({ ...start, can_redo: true })
+    // Auto-detect itself is not undoable (spec-web §12): its live crop frame stays on screen.
+    expect(sig(m)).toEqual({ ...start, can_redo: true, overlay: 1 })
 
     for (let i = 0; i < 8 && m.can_redo; i++) m.redo()
     expect(sig(m)).toEqual(end)

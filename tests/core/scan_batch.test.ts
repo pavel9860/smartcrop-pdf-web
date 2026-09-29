@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
 import { Mode, FilterMode } from '@core/enums'
 import { Ok, Cancelled, Failed } from '@core/batch'
-import { recording_sink } from './harness'
+import { make_adapter as base_adapter } from './harness'
 
 function make_bitmap(w = 100, h = 100): ImageBitmap {
   return { width: w, height: h, close: (): void => { /* no-op */ } }
@@ -17,20 +17,11 @@ function make_adapter(): { adapter: RendererAdapter; calls: Record<string, numbe
   const calls: Record<string, number> = {}
   const bump = (k: string): void => { calls[k] = (calls[k] ?? 0) + 1 }
   const adapter: RendererAdapter = {
-    load_files: (files: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count: 3,
-      page_sizes: Array.from({ length: 3 }, () => ({ width: 200, height: 300 })),
-      file_names: files.map(f => f.name),
-      mode: Mode.SCANNED,
-    }),
+    ...base_adapter(3, Mode.SCANNED),
     get_source_image: () => { bump('get_source_image'); return Promise.resolve(make_bitmap()) },
     get_work_image:   () => { bump('get_work_image');   return Promise.resolve(make_bitmap()) },
     rotate_bitmap: (b) => Promise.resolve(b),
-    render_output_image: () => Promise.resolve(make_bitmap()),
     detect_content_box: () => Promise.resolve({ x0: 20, y0: 20, x1: 120, y1: 280 }),
-    begin_export: () => recording_sink(),
-    make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
-    close: (): void => { /* no-op */ },
   }
   return { adapter, calls }
 }

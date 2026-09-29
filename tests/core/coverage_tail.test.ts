@@ -7,22 +7,14 @@ import { AppModel, type RendererAdapter, type DocInfo, type VectorExportPage } f
 import { Mode, PagesMode } from '@core/enums'
 import { Failed, Cancelled, Ok } from '@core/batch'
 import { detection_union } from '@core/geometry'
-import { recording_sink } from './harness'
+import { make_adapter } from './harness'
 
 function bmp(w = 100, h = 100): ImageBitmap { return { width: w, height: h, close: (): void => {} } }
 function adapter(): RendererAdapter {
   return {
-    load_files: (f: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count: 2, page_sizes: [{ width: 200, height: 300 }, { width: 200, height: 300 }],
-      file_names: f.map(x => x.name), mode: Mode.NORMAL }),
-    get_source_image: () => Promise.resolve(bmp()),
-    get_work_image: () => Promise.resolve(bmp()),
+    ...make_adapter(2),
     rotate_bitmap: (b) => Promise.resolve(b),
     render_output_image: () => Promise.reject(new Error('render boom')),
-    detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
-    begin_export: () => recording_sink(),
-    make_synth_page: (_i, w, h) => Promise.resolve(bmp(w, h)),
-    close: (): void => {},
   }
 }
 
@@ -57,20 +49,8 @@ function vector_adapter(opts: {
 } = {}): RendererAdapter {
   const { page_count = 2, export_pdf_vector } = opts
   return {
-    load_files: (f: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count,
-      page_sizes: Array.from({ length: page_count }, () => ({ width: 200, height: 300 })),
-      file_names: f.map(x => x.name), mode: Mode.NORMAL,
-    }),
-    get_source_image: () => Promise.resolve(bmp()),
-    get_work_image: () => Promise.resolve(bmp()),
+    ...make_adapter(page_count),
     rotate_bitmap: (b) => Promise.resolve(b),
-    render_output_image: () => Promise.resolve(bmp()),
-    detect_content_box: (_i, pw, ph) => Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 }),
-    detect_text_box: (_i) => Promise.resolve({ x0: 20, y0: 20, x1: 180, y1: 280 }),
-    begin_export: () => recording_sink(),
-    make_synth_page: (_i, w, h) => Promise.resolve(bmp(w, h)),
-    close: (): void => {},
     ...(export_pdf_vector ? { export_pdf_vector } : {}),
   }
 }

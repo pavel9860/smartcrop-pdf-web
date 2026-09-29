@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest'
 import { AppModel, type RendererAdapter, type DocInfo, type PageSize, type OutputPage } from '@core/model'
 import { Mode, PagesMode } from '@core/enums'
 import type { Box } from '@core/geometry'
-import { recording_sink } from './harness'
+import { recording_sink, make_adapter as base_adapter } from './harness'
 
 function make_bitmap(w = 100, h = 100): ImageBitmap {
   return { width: w, height: h, close: (): void => { /* no-op */ } }
@@ -24,36 +24,21 @@ function make_adapter(page_sizes: PageSize[], detect_boxes: Box[]): {
   const calls: Record<string, number> = {}
   const bump = (k: string): void => { calls[k] = (calls[k] ?? 0) + 1 }
   const queue = [...detect_boxes]
+  const next_box = (k: string): Promise<Box> => {
+    bump(k)
+    const b = queue.shift()
+    if (!b) throw new Error('detect queue exhausted')
+    return Promise.resolve(b)
+  }
   const adapter: RendererAdapter = {
+    ...base_adapter(page_sizes.length),
     load_files: (files: File[]): Promise<DocInfo> => Promise.resolve({
-      page_count: page_sizes.length,
-      page_sizes,
-      file_names: files.map(f => f.name),
-      mode: Mode.NORMAL,
+      page_count: page_sizes.length, page_sizes, file_names: files.map(f => f.name), mode: Mode.NORMAL,
     }),
     get_source_image: () => Promise.resolve(make_bitmap()),
-    get_work_image:   () => Promise.resolve(make_bitmap()),
     rotate_bitmap: (b) => Promise.resolve(b),
-    render_output_image: (_s, box) => Promise.resolve(
-      make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0)))),
-    detect_content_box: () => {
-      bump('detect_content_box')
-      const b = queue.shift()
-      if (!b) throw new Error('detect queue exhausted')
-      return Promise.resolve(b)
-    },
-    // mode is always NORMAL here (below), so this is the path actually exercised by default —
-    // detect_content_box above stays reachable only via explicit overrides for the ink-path-not-
-    // called assertions.
-    detect_text_box: () => {
-      bump('detect_text_box')
-      const b = queue.shift()
-      if (!b) throw new Error('detect queue exhausted')
-      return Promise.resolve(b)
-    },
-    begin_export: () => recording_sink(),
-    make_synth_page: (_i, w, h) => Promise.resolve(make_bitmap(w, h)),
-    close: (): void => { /* no-op */ },
+    detect_content_box: () => next_box('detect_content_box'),
+    detect_text_box: () => next_box('detect_text_box'),   // mode is NORMAL: the path exercised by default
   }
   return { adapter, calls }
 }

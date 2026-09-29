@@ -308,3 +308,18 @@ describe('overlapping renders of one page (e.g. a display-DPI re-render)', () =>
     expect(cleanup).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('a failed load keeps the open document', () => {
+  it('pages still render and Reset reopens the old files after a new file fails to open', async () => {
+    const good = fake_pdf(2, true, 100, 200)
+    shared.pdfQueue = [good]
+    const a = new PdfRendererAdapter()
+    await a.load_files([pdf_file('good.pdf')])
+    shared.pdfQueue = []                                   // the next getDocument rejects
+    await expect(a.load_files([pdf_file('bad.pdf')])).rejects.toBeInstanceOf(DocumentLoadError)
+    expect(good.destroy).not.toHaveBeenCalled()
+    expect((await a.get_source_image(1, 72, 0)).width).toBe(100)
+    shared.pdfQueue = [fake_pdf(2, true, 100, 200)]
+    expect((await a.load_files([])).file_names).toEqual(['good.pdf'])
+  })
+})
