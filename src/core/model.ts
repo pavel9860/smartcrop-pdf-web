@@ -24,7 +24,7 @@ import {
   NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DPI_PRESETS, EXPORT_FORMATS,
   DEFAULT_UNDO_DEPTH,
   UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
-  SYNTH_W, SYNTH_H, PT_PER_INCH, type ExportFormat,
+  SYNTH_W, SYNTH_H, PT_PER_INCH, THUMB_MAX_PX, type ExportFormat,
   CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
   PAPER_SIZES, CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
   DEWARP_SUPERSAMPLE_MIN, DEWARP_SUPERSAMPLE_MAX,
@@ -120,7 +120,7 @@ export class AppModel {
     this._raster = new PageRasterPipeline(_adapter, this._page_index, {
       mode: (): Mode => this._mode,
       display_dpi: (): number => this._display_dpi,
-      is_synthetic: (): boolean => this._doc === null || !!this._doc.synthetic,
+      is_synthetic: (): boolean => this.is_placeholder,
       rotation: (p): number => this.document.rotation.get(p) ?? 0,
       process_intent: (p): PageProcessIntent => this._page_process_intent(p),
       dewarp_supersample: (): number => this.settings.dewarp_supersample,
@@ -277,6 +277,20 @@ export class AppModel {
   next_page(): void { this._go_to(this._view_pos + 1) }
   prev_page(): void { this._go_to(this._view_pos - 1) }
   jump_to_output_page(n: number): void { this._go_to(n) }
+  go_to_page(p: number): void { this._go_to(source_to_first_view(p, this.document.applied)) }
+  get current_page(): number { return this._current_page }
+
+  // True while no real file is open (the placeholder page, spec-web §1).
+  get is_placeholder(): boolean { return this._doc === null || !!this._doc.synthetic }
+
+  // What a page's thumbnail shows: original page + rotation (it changes on Delete/Undo/Rotate).
+  thumbnail_key(p: number): string { return `${this._page_index.orig(p)}:${this.document.rotation.get(p) ?? 0}` }
+
+  // Page-strip thumbnail (spec-web §3): low-resolution, never touches the page raster caches.
+  thumbnail(p: number): Promise<ImageBitmap> | null {
+    if (!this._adapter.render_thumbnail || this.is_placeholder) return null
+    return this._adapter.render_thumbnail(this._page_index.orig(p), THUMB_MAX_PX, this.document.rotation.get(p) ?? 0)
+  }
 
   private _go_to(pos: number): void {
     if (!this._doc) return

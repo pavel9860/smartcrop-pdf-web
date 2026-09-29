@@ -142,6 +142,13 @@ page), updated on `pointermove`, empty when the pointer leaves. Nothing else is 
 outside the page bitmap and the crop/split overlay boxes — no page-number/size status text is
 painted on or near the canvas.
 
+**Page strip** — a horizontal, scrollable row of page thumbnails under the canvas, one per source
+page, numbered. The current page is highlighted, pages in the Pages-to-process selection are
+outlined in the accent colour, and a click shows that page. Thumbnails are low-resolution
+(`THUMB_MAX_PX` long side), rendered lazily only when scrolled into view, one at a time, and never
+share or evict the full-size page rasters; they show the page's rotation but not scan processing.
+Hidden when only one page is open.
+
 Exact icon set, control widths, switch/field styling and per-control coloring must match
 `docs/app_design_screenshots/`, which supersedes this section's prose wherever more specific.
 

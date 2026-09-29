@@ -14,6 +14,7 @@ import { CropPanel } from './panels/crop_panel'
 import { ScanPanel } from './panels/scan_panel'
 import { OutputPanel } from './panels/output_panel'
 import { NavBar } from './nav_bar'
+import { PageStrip } from './page_strip'
 import { DetailPanel } from './detail_panel'
 import { apply_theme } from './theme'
 import type { DetailPanel as DetailPanelType } from './constants'
@@ -55,6 +56,7 @@ export class AppController {
   private readonly _canvas_view: CanvasView
   private readonly _overlay: ProgressOverlay
   private readonly _drop_zone: HTMLElement
+  private readonly _page_strip: PageStrip
   private readonly _pages_panel: PagesPanel
   private readonly _crop_panel: CropPanel
   private readonly _scan_panel: ScanPanel
@@ -89,7 +91,11 @@ export class AppController {
 
     // Canvas + overlay
     this._canvas_view = new CanvasView(this._model)
-    this._canvas_col.appendChild(this._canvas_view.el)
+    const stage = document.createElement('div')
+    stage.className = 'canvas-stage'
+    stage.appendChild(this._canvas_view.el)
+    this._canvas_col.appendChild(stage)
+    this._page_strip = new PageStrip(this._canvas_col, this._model, this)
     this._overlay = new ProgressOverlay(this._canvas_col)
     this._off_module_status = on_module_status(s => { this._on_module_status(s) })
 
@@ -262,6 +268,7 @@ export class AppController {
     this._crop_panel.refresh(this._model, busy)
     this._output_panel.refresh(this._model, busy)
     this._nav_bar.refresh(this._model, busy)
+    this._page_strip.refresh(this._model)
     this._detail_panel.refresh(this._model, this._ui_config)
   }
 
@@ -481,6 +488,7 @@ export class AppController {
 
   destroy(): void {
     this._off_module_status()
+    this._page_strip.destroy()
     this._canvas_view.destroy()
     this._adapter.close()
     window.removeEventListener('keydown', this._on_shortcut)

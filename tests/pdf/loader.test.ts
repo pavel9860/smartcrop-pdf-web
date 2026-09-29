@@ -279,3 +279,32 @@ describe('detect_text_box whitespace trim (ghost-width fix, spec-web §5)', () =
     expect(box!.x1).toBeLessThan(left + full_width)               // must not include the fill run
   })
 })
+
+describe('overlapping renders of one page (page strip + main view)', () => {
+  it('page.cleanup() runs once, only after the last render finishes', async () => {
+    const pdf = fake_pdf(1, true)
+    const finish: Array<() => void> = []
+    const cleanup = vi.fn()
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({ width: 100 * scale, height: 200 * scale }),
+      getTextContent: () => Promise.resolve({ items: [{ str: 'x'.repeat(20) }] }),
+      getOperatorList: () => Promise.resolve({ fnArray: [2] }),
+      render: () => ({ promise: new Promise<void>(r => { finish.push(r) }) }),
+      cleanup,
+    }
+    pdf.getPage = vi.fn(() => Promise.resolve(page))
+    shared.pdfQueue = [pdf]
+    const a = new PdfRendererAdapter()
+    await a.load_files([pdf_file('a.pdf')])
+    cleanup.mockClear()                 // load-time classification cleans up on its own
+    const main = a.get_source_image(0, 150, 0)
+    const thumb = a.render_thumbnail(0, 160, 0)
+    await new Promise(r => setTimeout(r, 0))
+    finish[1]?.()                       // the thumbnail finishes first
+    await thumb
+    expect(cleanup).not.toHaveBeenCalled()
+    finish[0]?.()
+    await main
+    expect(cleanup).toHaveBeenCalledTimes(1)
+  })
+})

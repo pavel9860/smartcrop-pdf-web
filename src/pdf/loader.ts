@@ -238,6 +238,7 @@ export class PdfRendererAdapter implements RendererAdapter {
   private _pages: PageSource[] = []
   private _export:  RpcWorker | null = null
   private _next_export_session = 0
+  private readonly _renders = new WeakMap<pdfjs.PDFPageProxy, number>()
   private _doc_info: DocInfo | null  = null
   private _files: File[] = []
 
@@ -290,7 +291,7 @@ export class PdfRendererAdapter implements RendererAdapter {
             // Classify per §4: NORMAL as soon as any page carries vector data. Stop probing
             // once found — the rest of the pages still register their size + source above.
             if (!any_native) any_native = await is_native_page(p)
-            p.cleanup()
+            this._release(p)
           }
           file_names.push(f.name)
         } else {
@@ -328,25 +329,56 @@ export class PdfRendererAdapter implements RendererAdapter {
   }
 
   async get_source_image(page_idx: number, dpi: number, rotation = 0): Promise<ImageBitmap> {
+    const source = this._source(page_idx)
+    // Image pages are native-resolution rasters; dpi does not add real pixels (they are treated as
+    // SCANNED source @ their own pixel size, spec §4), so it is not applied.
+    const bitmap = source.kind === 'image'
+      ? await createImageBitmap(source.blob)
+      : await this._render_pdf(source, dpi / PT_PER_INCH)
+    return rotate_bitmap_cw(bitmap, rotation)
+  }
+
+  // Page-strip thumbnail: decoded/rendered straight at thumbnail size, never at full resolution.
+  async render_thumbnail(page_idx: number, max_px: number, rotation: number): Promise<ImageBitmap> {
+    const source = this._source(page_idx)
+    const size = this._doc_info?.page_sizes[page_idx] ?? { width: max_px, height: max_px }
+    const k = max_px / Math.max(size.width, size.height)
+    const bitmap = source.kind === 'image'
+      ? await createImageBitmap(source.blob, {
+        resizeWidth: Math.max(1, Math.round(size.width * k)),
+        resizeHeight: Math.max(1, Math.round(size.height * k)),
+        resizeQuality: 'medium',
+      })
+      : await this._render_pdf(source, k)
+    return rotate_bitmap_cw(bitmap, rotation)
+  }
+
+  private _source(page_idx: number): PageSource {
     const source = this._pages[page_idx]
     if (!source) throw new Error(`No source for page index ${page_idx}`)
+    return source
+  }
 
-    if (source.kind === 'image') {
-      // Image pages are native-resolution rasters; dpi does not add real pixels (they are
-      // treated as SCANNED source @ their own pixel size, spec §4), so it is not applied.
-      return rotate_bitmap_cw(await createImageBitmap(source.blob), rotation)
-    }
+  // page.cleanup() frees the page's resources but also cancels any render of that page still in
+  // flight (e.g. the main view while a thumbnail or Auto-detect finishes) — only clean up when idle.
+  private _release(page: pdfjs.PDFPageProxy): void {
+    if (!this._renders.get(page)) page.cleanup()
+  }
 
-    const page  = await source.pdf.getPage(source.page_num)
-    const scale = dpi / PT_PER_INCH
+  private async _render_pdf(source: Extract<PageSource, { kind: 'pdf' }>, scale: number): Promise<ImageBitmap> {
+    const page   = await source.pdf.getPage(source.page_num)
     const vp     = page.getViewport({ scale })
-    const canvas = new OffscreenCanvas(Math.round(vp.width), Math.round(vp.height))
+    const canvas = new OffscreenCanvas(Math.max(1, Math.round(vp.width)), Math.max(1, Math.round(vp.height)))
     const ctx    = canvas.getContext('2d')
     if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)
-
-    await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport: vp }).promise
-    page.cleanup()
-    return rotate_bitmap_cw(canvas.transferToImageBitmap(), rotation)
+    this._renders.set(page, (this._renders.get(page) ?? 0) + 1)
+    try {
+      await page.render({ canvasContext: ctx as unknown as CanvasRenderingContext2D, viewport: vp }).promise
+    } finally {
+      this._renders.set(page, (this._renders.get(page) ?? 1) - 1)
+      this._release(page)
+    }
+    return canvas.transferToImageBitmap()
   }
 
   async get_work_image(
@@ -443,7 +475,7 @@ export class PdfRendererAdapter implements RendererAdapter {
       }
       items.push({ x0: left, y0: top, x1: left + width, y1: top + font_h })
     }
-    if (items.length === 0) { page.cleanup(); return null }
+    if (items.length === 0) { this._release(page); return null }
 
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity
     for (const b of items) {
@@ -464,7 +496,7 @@ export class PdfRendererAdapter implements RendererAdapter {
         x1 = Math.min(x1, clip.x1); y1 = Math.min(y1, clip.y1)
       }
     }
-    page.cleanup()
+    this._release(page)
 
     const bounds = region ?? { x0: 0, y0: 0, x1: vp.width, y1: vp.height }
     const box: Box = {

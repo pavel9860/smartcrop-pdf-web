@@ -437,6 +437,7 @@ class AppModel {
   async reset(): Promise<void>
   page_count(): number
   get has_document(): boolean
+  get is_placeholder(): boolean       // no real file open (placeholder page, spec-web §1)
   get document_name(): string         // sidebar doc-name card, spec-web §3
 
   // navigation
@@ -517,7 +518,12 @@ class AppModel {
 
   // export
   suggested_export_name(): string
-  estimate_export_bytes(): number        // rough Save size shown next to the button (spec-web §4)
+  estimate_export_bytes(): number
+  // page strip (spec-web §3)
+  get current_page(): number              // logical source page on screen
+  go_to_page(p: number): void             // first output view of source page p
+  thumbnail_key(p: number): string        // original page + rotation the thumbnail shows
+  thumbnail(p: number): Promise<ImageBitmap> | null   // null: adapter has no thumbnails / placeholder        // rough Save size shown next to the button (spec-web §4)
   set_download_handlers(pdf: (bytes: Uint8Array, name: string) => void,
                         zip: (bytes: Uint8Array, base: string) => void): void
   export(filename: string): BatchJob     // drives export.worker (raster path) or
