@@ -226,6 +226,8 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               PROSAC/MSAC/IRLS, via cv.eigen (no SVDecomp binding in cv.js).
       vp_correct.ts          Rotation (skew) correction remap (§7.1b), derived from the
                               vanishing point.
+      module_status.ts       First-use loading status (OpenCV init, model download MB, ONNX
+                              session build) -> AppController's progress card (spec-web §11).
       idb.ts                 Generic IndexedDB open/request/transaction-wait helpers, used by
                               dewarp.ts's and dbnet.ts's ONNX-model-weight caches (the only
                               disk-cached assets — per-page rasters are RAM-only, see §7).

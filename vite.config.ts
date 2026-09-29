@@ -1,8 +1,12 @@
 import { defineConfig } from 'vite'
+import { readFileSync } from 'fs'
 import { resolve } from 'path'
 import { viteStaticCopy } from 'vite-plugin-static-copy'
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify((JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }).version),
+  },
   // Served at the domain ROOT on Cloudflare Pages / a custom domain (default '/'). All runtime
   // asset fetches (cmaps, standard_fonts, models) go through import.meta.env.BASE_URL, so for a
   // GitHub Pages *project page* set VITE_BASE=/<repo>/ (the deploy.yml does this).

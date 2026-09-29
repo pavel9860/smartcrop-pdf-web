@@ -40,7 +40,7 @@ async function _load_session(): Promise<void> {
   try {
     const ort = await import('onnxruntime-web/webgpu')
     const base = import.meta.env.BASE_URL
-    const bytes = await fetch_with_idb_cache(DBNET_MODEL_CACHE_KEY, base + DBNET_MODEL_URL)
+    const bytes = await fetch_with_idb_cache(DBNET_MODEL_CACHE_KEY, base + DBNET_MODEL_URL, 'text-line model')
     _session = await create_onnx_session(ort, bytes)
   } catch (e) {
     throw new MissingDependencyError(`Failed to load the text-line detection model: ${String(e)}`)

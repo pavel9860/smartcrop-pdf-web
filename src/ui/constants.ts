@@ -9,6 +9,7 @@ export const SCALE_THROTTLE_MS  = 80     // ms — canvas resize debounce (canva
 // fires at 60-120+ Hz; this caps how often the full app refresh (6 panel .refresh() calls) runs
 // during a drag, while the trailing edge still guarantees the final drag position gets painted.
 export const DRAG_THROTTLE_MS   = 32
+export const OVERLAY_SHOW_DELAY_MS = 300   // a job shows the progress card only after running this long
 export const FONT_SIZE_MIN      = 8
 export const FONT_SIZE_MAX      = 25
 export const FONT_SIZE_DEFAULT  = 15

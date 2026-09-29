@@ -125,7 +125,7 @@ describe('fetch_with_idb_cache (M3)', () => {
     const { fetch_with_idb_cache } = await import('@pdf/dewarp')
     const fetch_mock = vi.fn()
       .mockResolvedValueOnce({ ok: false, status: 404, statusText: 'Not Found', arrayBuffer: () => { throw new Error('must not be called') } })
-      .mockResolvedValueOnce({ ok: true, arrayBuffer: () => Promise.resolve(new Uint8Array([1, 2, 3]).buffer) })
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3])))
     vi.stubGlobal('fetch', fetch_mock)
 
     await expect(fetch_with_idb_cache('k', 'u')).rejects.toThrow()
@@ -135,6 +135,22 @@ describe('fetch_with_idb_cache (M3)', () => {
     expect(new Uint8Array(bytes)).toEqual(new Uint8Array([1, 2, 3]))
     expect(fetch_mock).toHaveBeenCalledTimes(2)
     expect(stores.get('models')?.has('k')).toBe(true)
+  })
+
+  it('reports download progress in MB while fetching, then goes idle', async () => {
+    const { fetch_with_idb_cache } = await import('@pdf/dewarp')
+    const { on_module_status } = await import('@pdf/module_status')
+    const half = new Uint8Array(1_500_000)
+    const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(half); c.enqueue(half); c.close() } })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { headers: { 'content-length': '3000000' } })))
+    const seen: (string | null)[] = []
+    const off = on_module_status(s => seen.push(s))
+    const bytes = await fetch_with_idb_cache('big', 'u', 'dewarp model')
+    off()
+    expect(bytes.byteLength).toBe(3_000_000)
+    expect(seen).toContain('Downloading dewarp model 1.5 / 3.0 MB')
+    expect(seen).toContain('Downloading dewarp model 3.0 / 3.0 MB')
+    expect(seen.at(-1)).toBeNull()
   })
 })
 

@@ -11,6 +11,7 @@ import {
 } from '@core/constants'
 import { cv, type Mat } from './cv'
 import { open_idb, idb_req, idb_tx } from './idb'
+import { with_module_status } from './module_status'
 
 // ONNX sessions for dewarp (pstwh/docuwarp, two-stage) — loaded once on first dewarp call.
 let _uvdoc_session: InferenceSession | null = null
@@ -67,7 +68,7 @@ let _session_queue: Promise<unknown> = Promise.resolve()
 // inference session is being created" on concurrent builds, so builds are serialized; a failed
 // WebGPU build is retried on the CPU (wasm) EP.
 export function create_onnx_session(ort: Pick<OrtModule, 'env' | 'InferenceSession'>, bytes: ArrayBuffer): Promise<InferenceSession> {
-  const build = async (): Promise<InferenceSession> => {
+  const build = (): Promise<InferenceSession> => with_module_status('Preparing AI model…', async () => {
     const eps = resolve_onnx_execution_providers(ort)
     try {
       return await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: eps })
@@ -76,7 +77,7 @@ export function create_onnx_session(ort: Pick<OrtModule, 'env' | 'InferenceSessi
       console.warn('[smartcrop] WebGPU session failed, falling back to wasm:', e)
       return ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ['wasm'] })
     }
-  }
+  })
   const next = _session_queue.then(build, build)
   _session_queue = next.catch(() => undefined)
   return next
@@ -87,8 +88,8 @@ async function _load_onnx_sessions(): Promise<void> {
     const ort = await import('onnxruntime-web/webgpu')
     const base = import.meta.env.BASE_URL
     const [uvdoc_bytes, bilinear_bytes] = await Promise.all([
-      fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL),
-      fetch_with_idb_cache(DEWARP_BILINEAR_CACHE_KEY, base + DEWARP_BILINEAR_URL),
+      fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL, 'dewarp model'),
+      fetch_with_idb_cache(DEWARP_BILINEAR_CACHE_KEY, base + DEWARP_BILINEAR_URL, 'unwarp model'),
     ])
     _uvdoc_session = await create_onnx_session(ort, uvdoc_bytes)
     _bilinear_session = await create_onnx_session(ort, bilinear_bytes)
@@ -314,21 +315,49 @@ function clamp_u8(v: number): number {
 // ---------------------------------------------------------------------------
 
 // Exported for tests/pdf/dewarp.test.ts only (see ./cv's ensure_cv note).
-export async function fetch_with_idb_cache(key: string, url: string): Promise<ArrayBuffer> {
+export async function fetch_with_idb_cache(key: string, url: string, label = 'model'): Promise<ArrayBuffer> {
   const db  = await open_idb('smartcrop-models', 'models')
   const tx  = db.transaction('models', 'readonly')
   const req = tx.objectStore('models').get(key) as IDBRequest<ArrayBuffer | undefined>
   const cached = await idb_req(req)
   if (cached) return cached
 
-  const resp = await fetch(url)
-  // M3: a failed fetch (404/500) must not be cached — caching it would permanently poison the
-  // IDB entry for `key`, since a truthy `cached` short-circuits every future call above.
-  if (!resp.ok) throw new Error(`Fetch failed for ${url}: ${resp.status} ${resp.statusText}`)
-  const bytes = await resp.arrayBuffer()
+  const bytes = await with_module_status(`Downloading ${label}…`, async update => {
+    const resp = await fetch(url)
+    // M3: a failed fetch (404/500) must not be cached — caching it would permanently poison the
+    // IDB entry for `key`, since a truthy `cached` short-circuits every future call above.
+    if (!resp.ok) throw new Error(`Fetch failed for ${url}: ${resp.status} ${resp.statusText}`)
+    return read_with_progress(resp, (got, total) => {
+      update(`Downloading ${label} ${mb(got)}${total ? ` / ${mb(total)}` : ''} MB`)
+    })
+  })
 
   const tx2   = db.transaction('models', 'readwrite')
   tx2.objectStore('models').put(bytes, key)
   await idb_tx(tx2)
   return bytes
+}
+
+const mb = (n: number): string => (n / 1e6).toFixed(1)
+
+// Reads a response body into one buffer, reporting bytes received (and the total when known).
+async function read_with_progress(
+  resp: Response, on_progress: (got: number, total: number) => void,
+): Promise<ArrayBuffer> {
+  const total = Number(resp.headers.get('content-length')) || 0
+  if (!resp.body) return resp.arrayBuffer()
+  const reader = resp.body.getReader()
+  const chunks: Uint8Array[] = []
+  let got = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    got += value.length
+    on_progress(got, total)
+  }
+  const out = new Uint8Array(got)
+  let at = 0
+  for (const c of chunks) { out.set(c, at); at += c.length }
+  return out.buffer
 }

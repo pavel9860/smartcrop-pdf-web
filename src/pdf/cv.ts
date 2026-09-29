@@ -31,6 +31,8 @@
 // correctness one — tracked as follow-up work, not silently accepted as fine.
 
 import * as cvModule from '@techstark/opencv-js'
+import { CV_INIT_TIMEOUT_MS } from '@core/constants'
+import { with_module_status } from './module_status'
 
 export const cv = (cvModule as unknown as { default: typeof cvModule }).default
 
@@ -54,7 +56,7 @@ export function ensure_cv(): Promise<void> {
     // (cv.Mat is typed as an always-present constructor but is genuinely undefined pre-init —
     // read through an optional view so the runtime guard isn't type-narrowed away.)
     const cv_ready = (cv as { Mat?: unknown }).Mat != null
-    _cv_init = cv_ready ? Promise.resolve() : new Promise<void>((resolve, reject): void => {
+    _cv_init = cv_ready ? Promise.resolve() : with_module_status('Loading image engine…', () => new Promise<void>((resolve, reject): void => {
       cv.onRuntimeInitialized = (): void => { resolve() }
       // Fallback timeout in case the callback doesn't fire (matches prior behaviour) — but only
       // resolve if init actually completed by then; otherwise reject with a diagnosable error
@@ -64,9 +66,9 @@ export function ensure_cv(): Promise<void> {
       setTimeout(() => {
         if ((cv as { Mat?: unknown }).Mat != null) { resolve(); return }
         _cv_init = null
-        reject(new Error('OpenCV.js failed to initialize within 10s'))
-      }, 10_000)
-    })
+        reject(new Error(`OpenCV.js failed to initialize within ${CV_INIT_TIMEOUT_MS / 1000}s`))
+      }, CV_INIT_TIMEOUT_MS)
+    }))
   }
   return _cv_init
 }

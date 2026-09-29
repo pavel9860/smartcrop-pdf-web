@@ -1,7 +1,11 @@
 import { defineConfig } from 'vitest/config'
+import { readFileSync } from 'fs'
 import { resolve } from 'path'
 
 export default defineConfig({
+  define: {
+    __APP_VERSION__: JSON.stringify((JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }).version),
+  },
   resolve: {
     alias: {
       '@core':    resolve(__dirname, 'src/core'),

@@ -252,6 +252,9 @@ page count — a committed split expands one source page into N views (§7.6), s
 every split in order and the counter always matches what will be exported. Prev disables on the
 first output page, Next on the last.
 
+Help's **About** section names the app version — `package.json` `version` (currently 1.0.4), the one
+source, injected at build time as `__APP_VERSION__`.
+
 ---
 
 ## 5. Auto-detect algorithm
@@ -871,7 +874,14 @@ already did: nothing is exported that Crop didn't actually commit.
 Long operations (detect on scans, dewarp, filter, export) show a centred card on the canvas —
 message, determinate bar, page counter, Cancel — not a separate window. A worker or the main-thread
 event loop drives the batch page-by-page, yielding between pages so the overlay repaints and Cancel
-is honored. A single-page job (`display_total === 1`) skips the overlay and runs synchronously.
+is honored. Every job — single-page ones included — shows the overlay once it has run for
+`OVERLAY_SHOW_DELAY_MS` (300 ms), so instant actions never flash it; a single-page job shows an
+indeterminate bar and no counter.
+
+First use of a heavy module (OpenCV, the dewarp and text-line ONNX models) is reported too: a
+detail line under the message reads e.g. "Downloading dewarp model 3.1 / 8.4 MB" or "Loading image
+engine…". If no job is running at that moment (e.g. while a scan is being opened), the same card
+shows on its own, without Cancel, until loading finishes.
 Cancel sets a flag checked before each page and stops promptly with no partial file. While a batch
 is busy, controls are disabled and further clicks are ignored (no command queueing). A per-page
 exception surfaces as an error dialog (§19) and ends the batch cleanly.

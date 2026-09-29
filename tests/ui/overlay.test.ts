@@ -59,3 +59,24 @@ describe('ProgressOverlay', () => {
     expect(root.querySelector('.overlay')!.classList.contains('hidden')).toBe(true)
   })
 })
+
+describe('ProgressOverlay single-page and module-status modes (spec-web §11)', () => {
+  it('a single-page job is indeterminate (no counter)', () => {
+    const root = mount()
+    const overlay = new ProgressOverlay(root)
+    overlay.show(fake_job('Dewarping', 1), () => { /* noop */ })
+    expect(root.querySelector('.overlay')!.classList.contains('overlay--indeterminate')).toBe(true)
+  })
+
+  it('show_status has no Cancel; set_detail writes the detail line', () => {
+    const root = mount()
+    const overlay = new ProgressOverlay(root)
+    overlay.show_status('Loading image engine…')
+    expect(root.querySelector('.overlay__title')!.textContent).toBe('Loading image engine…')
+    expect(root.querySelector('.overlay__cancel')!.classList.contains('hidden')).toBe(true)
+    overlay.set_detail('Downloading dewarp model 1.0 / 8.0 MB')
+    expect(root.querySelector('.overlay__detail')!.textContent).toContain('1.0 / 8.0 MB')
+    overlay.show(fake_job('Exporting', 4), () => { /* noop */ })
+    expect(root.querySelector('.overlay__cancel')!.classList.contains('hidden')).toBe(false)
+  })
+})

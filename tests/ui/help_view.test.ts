@@ -19,6 +19,11 @@ describe('HelpView', () => {
     expect(root.textContent).toContain('Open files')
   })
 
+  it('About shows the package.json version', () => {
+    new HelpView(root)
+    expect(root.textContent).toContain('version 1.0.4')
+  })
+
   it('clicking a contents entry scrolls to its section', () => {
     new HelpView(root)
     const first = root.querySelector<HTMLButtonElement>('.help-toc__item')!

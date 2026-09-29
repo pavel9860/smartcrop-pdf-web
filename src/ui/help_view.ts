@@ -161,7 +161,7 @@ const SECTIONS: readonly HelpSection[] = [
   },
   {
     id: 'about', title: 'About',
-    body: 'SmartCrop PDF — Web Edition. All processing runs in your browser; no files are uploaded. '
+    body: `SmartCrop PDF — Web Edition, version ${__APP_VERSION__}. All processing runs in your browser; no files are uploaded. `
       + 'No install needed — the app works offline after being loaded once, for whichever features '
       + 'you\'ve already used (see Settings, below, for making every feature available offline '
       + 'right away).',

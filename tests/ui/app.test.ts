@@ -8,6 +8,8 @@ import { Failed } from '@core/batch'
 import { ImagingError } from '@core/errors'
 import { PagesMode } from '@core/enums'
 import { mount, make_adapter, stub_canvas_apis } from './harness'
+import { OVERLAY_SHOW_DELAY_MS } from '@ui/constants'
+import { with_module_status } from '@pdf/module_status'
 
 function failing_job(message: string): BatchJob {
   return {
@@ -91,6 +93,50 @@ describe('AppController file drop', () => {
     const load = vi.spyOn(ctrl.model, 'load_files')
     drag('drop', root, [new File(['%PDF'], 'a.pdf')])
     expect(load).not.toHaveBeenCalled()
+    ctrl.destroy()
+  })
+})
+
+describe('AppController progress for single-page jobs and module loading (spec-web §11)', () => {
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+  it('a single-page job shows the overlay once it outlasts the delay', async () => {
+    stub_canvas_apis()
+    const root = mount()
+    const ctrl = new AppController(root, make_adapter())
+    await ctrl.refresh_all()
+    vi.useFakeTimers()
+    let finish: () => void = () => undefined
+    const job: BatchJob = {
+      title: 'Dewarping…', total: 1, display_total: 1, done: 0,
+      cancel: () => undefined, onProgress: () => undefined,
+      result: () => new Promise(r => { finish = () => { r(new Failed(new ImagingError('x'))) } }),
+    }
+    ctrl.dispatch_job(() => job)
+    const overlay = root.querySelector('.overlay')!
+    expect(overlay.classList.contains('hidden')).toBe(true)
+    vi.advanceTimersByTime(OVERLAY_SHOW_DELAY_MS)
+    expect(overlay.classList.contains('hidden')).toBe(false)
+    expect(root.querySelector('.overlay__title')!.textContent).toBe('Dewarping…')
+    finish()
+    vi.useRealTimers()
+    await new Promise(r => setTimeout(r, 0))
+    expect(overlay.classList.contains('hidden')).toBe(true)
+    ctrl.destroy()
+  })
+
+  it('module loading with no job running shows a status card until it finishes', async () => {
+    stub_canvas_apis()
+    const root = mount()
+    const ctrl = new AppController(root, make_adapter())
+    let done: () => void = () => undefined
+    const loading = with_module_status('Loading image engine…', () => new Promise<void>(r => { done = r }))
+    const overlay = root.querySelector('.overlay')!
+    expect(overlay.classList.contains('hidden')).toBe(false)
+    expect(root.querySelector('.overlay__title')!.textContent).toBe('Loading image engine…')
+    done()
+    await loading
+    expect(overlay.classList.contains('hidden')).toBe(true)
     ctrl.destroy()
   })
 })

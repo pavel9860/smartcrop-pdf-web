@@ -224,3 +224,4 @@ export const DEWARP_BILINEAR_CACHE_KEY = 'docuwarp-bilinear-v1'
 // using the full navigator.hardwareConcurrency: ORT's own thread pool has diminishing/negative
 // returns well before typical core counts (thread-spawn + sync overhead on these model sizes).
 export const WASM_MAX_THREADS = 4
+export const CV_INIT_TIMEOUT_MS = 10_000   // OpenCV.js runtime init fallback (pdf/cv.ts ensure_cv)

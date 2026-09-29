@@ -5,6 +5,7 @@ import { AppModel, type RendererAdapter } from '@core/model'
 import type { BatchJob } from '@core/batch'
 import { Failed } from '@core/batch'
 import { PdfRendererAdapter } from '@pdf/loader'
+import { on_module_status } from '@pdf/module_status'
 import { CanvasView } from './canvas_view'
 import { ProgressOverlay } from './overlay'
 import { confirm_dialog, alert_dialog } from './confirm'
@@ -16,7 +17,9 @@ import { NavBar } from './nav_bar'
 import { DetailPanel } from './detail_panel'
 import { apply_theme } from './theme'
 import type { DetailPanel as DetailPanelType } from './constants'
-import { FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX, ZOOM_PRESETS } from './constants'
+import {
+  FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX, ZOOM_PRESETS, OVERLAY_SHOW_DELAY_MS,
+} from './constants'
 import { requireEl } from './dom'
 import { load_output_prefs, save_output_prefs } from './persist'
 import { warm_offline_cache } from './sw_register'
@@ -40,6 +43,8 @@ export class AppController {
   private readonly _model: AppModel
   private readonly _adapter: RendererAdapter
   private _current_job: BatchJob | null = null
+  private _module_status: string | null = null
+  private readonly _off_module_status: () => void
 
   // Layout elements
   private readonly _sidebar: HTMLElement
@@ -86,6 +91,7 @@ export class AppController {
     this._canvas_view = new CanvasView(this._model)
     this._canvas_col.appendChild(this._canvas_view.el)
     this._overlay = new ProgressOverlay(this._canvas_col)
+    this._off_module_status = on_module_status(s => { this._on_module_status(s) })
 
     // Drop zone (empty-state hint + drag-and-drop file load)
     this._drop_zone = document.createElement('div')
@@ -156,28 +162,40 @@ export class AppController {
     }
 
     this._current_job = job
-
-    if (job.display_total > 1) {
-      this._overlay.show(job, () => { job.cancel() })
-    }
+    const shown = setTimeout(() => { this._overlay.show(job, () => { job.cancel() }) }, OVERLAY_SHOW_DELAY_MS)
     void this._refresh_async()
 
     job.onProgress((done, total) => { this._overlay.update(done, total) })
 
     job.result().then(result => {
-      this._overlay.hide()
-      this._current_job = null
+      clearTimeout(shown)
+      this._end_job()
       if (result instanceof Failed) this._show_error(result.error)
       void this._refresh_async()
     }).catch((e: unknown) => {
-      this._overlay.hide()
-      this._current_job = null
+      clearTimeout(shown)
+      this._end_job()
       this._show_error(e)
       void this._refresh_async()
     })
   }
 
   get busy(): boolean { return this._current_job !== null }
+
+  private _end_job(): void {
+    this._current_job = null
+    if (this._module_status) this._overlay.show_status(this._module_status)
+    else this._overlay.hide()
+  }
+
+  // First-use module loading (spec-web §11): a detail line under a running job, or its own card.
+  private _on_module_status(status: string | null): void {
+    this._module_status = status
+    this._overlay.set_detail(this._current_job ? status : null)
+    if (this._current_job) return
+    if (status) this._overlay.show_status(status)
+    else this._overlay.hide()
+  }
 
   // Themed yes/no confirmation over the canvas (L1) — replaces window.confirm(), which can't be
   // themed and doesn't play well with headless/e2e drivers. Panels call this instead of the
@@ -462,6 +480,7 @@ export class AppController {
   }
 
   destroy(): void {
+    this._off_module_status()
     this._canvas_view.destroy()
     this._adapter.close()
     window.removeEventListener('keydown', this._on_shortcut)

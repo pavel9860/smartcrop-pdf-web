@@ -613,6 +613,10 @@ input, select { font: inherit; }
   transition: width 0.1s linear;
 }
 .overlay__counter { font-size: 0.8125rem; color: var(--text-dim); }
+.overlay__detail { font-size: 0.8125rem; color: var(--text-dim); min-height: 1em; }
+.overlay--indeterminate .overlay__counter { display: none; }
+.overlay--indeterminate .overlay__bar { width: 35% !important; animation: overlay-slide 1.2s ease-in-out infinite; }
+@keyframes overlay-slide { from { transform: translateX(-100%); } to { transform: translateX(285%); } }
 
 /* ── Confirm dialog (confirm.ts) — same .overlay/.overlay__card shell as the progress overlay ── */
 .confirm-actions { display: flex; gap: 8px; }

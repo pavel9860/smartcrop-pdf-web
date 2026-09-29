@@ -1,5 +1,5 @@
-// Progress overlay — centred card over the canvas (spec §14).
-// Shown only when batch total > 1; never a separate window.
+// Progress overlay — centred card over the canvas (spec-web §11): a job's progress (indeterminate
+// for a single page) and/or a first-use module-loading detail line; never a separate window.
 
 import type { BatchJob } from '@core/batch'
 import { requireEl } from './dom'
@@ -9,6 +9,7 @@ export class ProgressOverlay {
   private readonly _title_el: HTMLElement
   private readonly _bar_el: HTMLElement
   private readonly _counter_el: HTMLElement
+  private readonly _detail_el: HTMLElement
   private readonly _cancel_btn: HTMLButtonElement
   private _on_cancel: (() => void) | null = null
 
@@ -20,12 +21,14 @@ export class ProgressOverlay {
         <div class="overlay__title"></div>
         <div class="overlay__bar-track"><div class="overlay__bar"></div></div>
         <div class="overlay__counter"></div>
+        <div class="overlay__detail"></div>
         <button class="overlay__cancel btn btn-secondary">Cancel</button>
       </div>`
 
     this._title_el   = requireEl(this._el, '.overlay__title')
     this._bar_el     = requireEl(this._el, '.overlay__bar')
     this._counter_el = requireEl(this._el, '.overlay__counter')
+    this._detail_el  = requireEl(this._el, '.overlay__detail')
     this._cancel_btn = requireEl(this._el, '.overlay__cancel')
 
     this._cancel_btn.addEventListener('click', () => this._on_cancel?.())
@@ -36,9 +39,22 @@ export class ProgressOverlay {
     this._on_cancel = on_cancel
     this._title_el.textContent = job.title
     this._display_total = job.display_total
+    this._el.classList.toggle('overlay--indeterminate', job.display_total <= 1)
+    this._cancel_btn.classList.remove('hidden')
     this._update(0, job.total)
     this._el.classList.remove('hidden')
   }
+
+  // Module loading with no job running: message only, indeterminate, no Cancel.
+  show_status(text: string): void {
+    this._title_el.textContent = text
+    this._display_total = 0
+    this._el.classList.add('overlay--indeterminate')
+    this._cancel_btn.classList.add('hidden')
+    this._el.classList.remove('hidden')
+  }
+
+  set_detail(text: string | null): void { this._detail_el.textContent = text ?? '' }
 
   update(done: number, total: number): void {
     this._update(done, total)
