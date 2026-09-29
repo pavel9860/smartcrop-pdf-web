@@ -56,6 +56,45 @@ describe('AppController refresh', () => {
   })
 })
 
+describe('AppController file drop', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+  function drag(type: string, target: Element, files: File[]): Event {
+    const ev = new Event(type, { bubbles: true, cancelable: true })
+    Object.defineProperty(ev, 'dataTransfer', { value: { types: ['Files'], files } })
+    target.dispatchEvent(ev)
+    return ev
+  }
+
+  it('files dropped anywhere on the window (e.g. the sidebar) open, with an overlay while dragging', async () => {
+    stub_canvas_apis()
+    const root = mount()
+    const ctrl = new AppController(root, make_adapter())
+    const load = vi.spyOn(ctrl.model, 'load_files')
+    const sidebar = root.querySelector('.sidebar-scroll')!
+    const zone = root.querySelector('.drop-zone')!
+    drag('dragenter', sidebar, [])
+    expect(zone.classList.contains('drag-over')).toBe(true)
+    expect(drag('dragover', sidebar, []).defaultPrevented).toBe(true)
+    const file = new File(['%PDF'], 'a.pdf')
+    expect(drag('drop', sidebar, [file]).defaultPrevented).toBe(true)
+    expect(zone.classList.contains('drag-over')).toBe(false)
+    expect(load).toHaveBeenCalledWith([file])
+    ctrl.destroy()
+  })
+
+  it('a drop while a batch runs is ignored', () => {
+    stub_canvas_apis()
+    const root = mount()
+    const ctrl = new AppController(root, make_adapter())
+    vi.spyOn(ctrl, 'busy', 'get').mockReturnValue(true)
+    const load = vi.spyOn(ctrl.model, 'load_files')
+    drag('drop', root, [new File(['%PDF'], 'a.pdf')])
+    expect(load).not.toHaveBeenCalled()
+    ctrl.destroy()
+  })
+})
+
 describe('AppController keyboard shortcuts', () => {
   let ctrl: AppController | null = null
   afterEach(() => {

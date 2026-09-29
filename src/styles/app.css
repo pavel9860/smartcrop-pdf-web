@@ -634,7 +634,13 @@ input, select { font: inherit; }
   transition: border-color 0.15s, color 0.15s;
   pointer-events: none;
 }
-.drop-zone.drag-over { border-color: var(--accent); color: var(--accent); }
+.drop-zone.drag-over {
+  display: flex !important;
+  z-index: 5;
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--bg-canvas) 85%, transparent);
+}
 .drop-zone__icon { font-size: 3rem; }
 
 /* ── Utilities ── */

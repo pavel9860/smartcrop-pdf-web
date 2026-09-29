@@ -157,7 +157,7 @@ app's tooltip primitive — coverage of this is tracked as ongoing work, not yet
 | Control | Action |
 |---|---|
 | Mode badge | Non-interactive `NORMAL`/`SCANNED` marker (§1). |
-| Open PDF/Image Files | Opens a multi-select file picker (`Ctrl+O`) filtered to PDFs and images (`.pdf/.jpg/.jpeg/.png/.tif/.tiff`). Selected files combine into one working document (§9) → resets all per-document state (crops, rotation, detection, processing, history) → classifies → sets mode. |
+| Open PDF/Image Files | Opens a multi-select file picker (`Ctrl+O`) filtered to PDFs and images (`.pdf/.jpg/.jpeg/.png/.tif/.tiff`). Selected files combine into one working document (§9) → resets all per-document state (crops, rotation, detection, processing, history) → classifies → sets mode. Dropping files anywhere on the app window does the same (a drop overlay shows while dragging; ignored while a batch runs). |
 
 Undo/Redo/Reset live in the pinned bottom bar (§4.9), not this card.
 

@@ -94,7 +94,7 @@ export class AppController {
       <div class="drop-zone__icon">⊞</div>
       <div>Drop PDF or image files here</div>`
     this._canvas_col.appendChild(this._drop_zone)
-    this._wire_drop_zone()
+    this._wire_drop_zone(root)
 
     // Panels inside sidebar scroll area
     const scroll = document.createElement('div')
@@ -251,18 +251,21 @@ export class AppController {
   // Drag-and-drop file load
   // ---------------------------------------------------------------------------
 
-  private _wire_drop_zone(): void {
-    const col = this._canvas_col
-    col.addEventListener('dragover', ev => {
+  // Files dropped anywhere on the window open like the Open button; the overlay shows while a file
+  // drag is over the window. Counting enter/leave pairs keeps it steady across child elements.
+  private _wire_drop_zone(root: HTMLElement): void {
+    let depth = 0
+    const has_files = (ev: DragEvent): boolean => ev.dataTransfer?.types.includes('Files') ?? false
+    const show = (on: boolean): void => { this._drop_zone.classList.toggle('drag-over', on) }
+    root.addEventListener('dragenter', ev => { if (has_files(ev)) { depth++; show(true) } })
+    root.addEventListener('dragleave', ev => { if (has_files(ev) && --depth <= 0) { depth = 0; show(false) } })
+    root.addEventListener('dragover', ev => { if (has_files(ev)) ev.preventDefault() })
+    root.addEventListener('drop', ev => {
+      if (!has_files(ev)) return
       ev.preventDefault()
-      this._drop_zone.classList.add('drag-over')
-    })
-    col.addEventListener('dragleave', () => { this._drop_zone.classList.remove('drag-over') })
-    col.addEventListener('drop', ev => {
-      ev.preventDefault()
-      this._drop_zone.classList.remove('drag-over')
-      // Same guard as the sidebar Load button (pages_panel.ts disables it while busy): a batch
-      // job in flight must not have its document/history replaced out from under it.
+      depth = 0
+      show(false)
+      // A batch job in flight must not have its document/history replaced out from under it.
       if (this.busy) return
       const files = Array.from(ev.dataTransfer?.files ?? [])
       if (files.length) this.dispatch_async(() => this._model.load_files(files))
