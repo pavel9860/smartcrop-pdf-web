@@ -1,10 +1,10 @@
 // ScanProcessingService (§18 AppModel decomposition, step 6/7) — dewarp/filter toggles (spec-web
-// §7, §10). Scan toggles flip SYNCHRONOUSLY (undoable — history pushed first), then the returned
-// BatchJob pre-computes the selection's work rasters under the progress overlay (spec-web §11),
-// yielding to the event loop so the overlay repaints and Cancel works. A cancel keeps the intent:
-// unprocessed pages fall back to on-view lazy compute in the raster pipeline's get_work.
-import type { DocumentState } from './document_state'
-import type { PageProcessIntent } from './document_state'
+// §7, §10). Scan toggles flip SYNCHRONOUSLY, then the returned BatchJob pre-computes the
+// selection's work rasters under the progress overlay (spec-web §11), yielding to the event loop
+// so the overlay repaints and Cancel works. A changed toggle is one undo step, pushed up front so
+// undo order matches press order; a cancel keeps the intent (unprocessed pages compute lazily on
+// view), and a failure restores the pre-action document (spec-web §21 #26).
+import { snapshot, type DocumentState, type PageProcessIntent } from './document_state'
 import type { History } from './history'
 import { FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX } from './constants'
 import { FilterMode } from './enums'
@@ -31,38 +31,40 @@ export class ScanProcessingService {
   // newly-widened Pages selection catches up.
   run_dewarp(pages: readonly number[]): BatchJob {
     const doc = this._ctx.document()
-    if (!doc.dewarp_on) {
-      this._history.push(doc)   // snapshot BEFORE the flip so undo reverts it
-      doc.dewarp_on = true
-    }
-    this._apply_scan_intents(pages)
-    return this._warm_work_cache(pages, 'Dewarping…')
+    const before = snapshot(doc)
+    const changed = !doc.dewarp_on
+    doc.dewarp_on = true
+    return this._apply_and_warm(pages, 'Dewarping…', before, changed)
   }
 
   // Persists until Undo — pressing the already-active filter is a no-op on the toggle itself (no
   // reverse-by-repress, spec §4.3/§7); switching to the other filter replaces it in one step.
   set_filter_mode(pages: readonly number[], mode: FilterMode): BatchJob {
     const doc = this._ctx.document()
-    if (doc.filter_mode !== mode) {
-      this._history.push(doc)
-      doc.filter_mode = mode
-    }
-    this._apply_scan_intents(pages)
-    return this._warm_work_cache(pages, 'Applying filter…')
+    const before = snapshot(doc)
+    const changed = doc.filter_mode !== mode
+    doc.filter_mode = mode
+    return this._apply_and_warm(pages, 'Applying filter…', before, changed)
   }
 
   set_filter_strength(pages: readonly number[], n: number): BatchJob {
-    this._history.push(this._ctx.document())
-    this._ctx.document().filter_strength = Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n))
+    const doc = this._ctx.document()
+    const before = snapshot(doc)
+    doc.filter_strength = Math.max(FILTER_STRENGTH_MIN, Math.min(FILTER_STRENGTH_MAX, n))
+    return this._apply_and_warm(pages, 'Applying filter…', before, true)
+  }
+
+  private _apply_and_warm(
+    pages: readonly number[], title: string, before: DocumentState, changed: boolean,
+  ): BatchJob {
+    if (changed) this._history.push(before)
     this._apply_scan_intents(pages)
-    return this._warm_work_cache(pages, 'Applying filter…')
+    return start_batch(title, pages.length, job => this._run_warm(job, pages, before))
   }
 
-  private _warm_work_cache(pages: readonly number[], title: string): BatchJob {
-    return start_batch(title, pages.length, job => this._run_warm(job, pages))
-  }
-
-  private async _run_warm(job: PageBatchJob, pages: readonly number[]): Promise<void> {
+  private async _run_warm(
+    job: PageBatchJob, pages: readonly number[], before: DocumentState,
+  ): Promise<void> {
     const ctrl = job.controller
     const yield_to_paint = make_paint_yielder()
     for (const p of pages) {
@@ -70,6 +72,9 @@ export class ScanProcessingService {
       try {
         await this._raster.get_work(p)
       } catch (e) {
+        Object.assign(this._ctx.document(), before)
+        for (const q of pages) this._ctx.invalidate_output(q)
+        this._ctx.invalidate_current()
         fail_batch(ctrl, e)
         return
       }

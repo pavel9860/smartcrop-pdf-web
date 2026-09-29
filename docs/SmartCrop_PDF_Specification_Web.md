@@ -798,9 +798,12 @@ many output pages, including in navigation (§4.9).
 For a NORMAL document exporting to PDF, crop/rotate/split apply as vector operations against the
 **original** page content via pdf-lib — no `render_output_image` call, no rasterization at all. This
 is the **only** case that bypasses §10.1's one-raster-path rule — a NORMAL document exporting to
-JPG/PNG/TIFF still uses `render_output_image` like everything else. Box coordinates convert from the
-app's current (rotation-adjusted) display frame to the source page's own native frame first, since
-the clip/embed operations below operate in that frame.
+JPG/PNG/TIFF still uses `render_output_image` like everything else. Crop boxes live in the frame the
+preview shows — pdf.js's view of the page: its CropBox, offset to (0,0), turned by the page's own
+`/Rotate` plus the app rotation. Export maps each box back through that total rotation and the
+CropBox origin into the source page's PDF user space, and gives the output page the total rotation,
+so the saved region is exactly the previewed one on pages with an offset CropBox/MediaBox or a
+source `/Rotate`.
 
 Two paths, chosen for output size, both batched per SOURCE DOCUMENT rather than
 called once per page:

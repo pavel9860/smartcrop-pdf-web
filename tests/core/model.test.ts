@@ -1124,3 +1124,16 @@ describe('view position follows the current page when committed crops change the
     expect(model.view_position).toBe(2)
   })
 })
+
+describe('a failed scan batch commits nothing (spec-web §21 #26)', () => {
+  it('failed Dewarp leaves dewarp off and the page still renders', async () => {
+    const { adapter } = make_mock_adapter({ page_count: 2, mode: Mode.SCANNED })
+    const model = new AppModel({ ...adapter, get_work_image: () => Promise.reject(new Error('model load failed')) })
+    await model.load_files([FILE()])
+    const result = await model.run_dewarp().result()
+    expect(result).toBeInstanceOf(Failed)
+    expect(model.dewarp_on).toBe(false)
+    await model.prepare_current_view()
+    expect(model.view_snapshot().image).not.toBeNull()
+  })
+})

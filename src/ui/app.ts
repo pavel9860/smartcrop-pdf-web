@@ -231,9 +231,8 @@ export class AppController {
   }
 
   private async _refresh_async(): Promise<void> {
-    // Ensure current page bitmap is ready (async)
     if (this._model.has_document) {
-      await this._model.prepare_current_view()
+      try { await this._model.prepare_current_view() } catch (e) { this._show_error(e) }
     }
     const snap = this._model.view_snapshot()
     const busy = this.busy

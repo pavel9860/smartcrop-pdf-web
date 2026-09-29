@@ -41,6 +41,21 @@ describe('AppController.dispatch_job', () => {
   })
 })
 
+describe('AppController refresh', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+  it('a page that fails to render shows an error dialog instead of an unhandled rejection', async () => {
+    stub_canvas_apis()
+    const root = mount()
+    const ctrl = new AppController(root, { ...make_adapter(), get_source_image: () => Promise.reject(new ImagingError('render failed')) })
+    await ctrl.model.load_files([new File(['%PDF'], 'a.pdf')])
+    await expect(ctrl.refresh_all()).resolves.toBeUndefined()
+    const titles = Array.from(root.querySelectorAll('.overlay__title')).map(el => el.textContent)
+    expect(titles.some(t => t?.includes('render failed'))).toBe(true)
+    ctrl.destroy()
+  })
+})
+
 describe('AppController keyboard shortcuts', () => {
   let ctrl: AppController | null = null
   afterEach(() => {

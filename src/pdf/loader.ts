@@ -142,6 +142,18 @@ function rotate_bitmap_cw(bitmap: ImageBitmap, angle: number): ImageBitmap {
   return rotated
 }
 
+// A crop box in the frame pdf.js displays (the source CropBox, offset to (0,0), turned by the page's
+// own /Rotate plus the app rotation) -> a rectangle in the source page's PDF user space, and the
+// output page's total rotation. Shared by the copyPages (CropBox) and embedPage (drawPage) paths.
+function pdf_rect(
+  src: PDFPage, box: Box, entry: VectorExportPage,
+): { x: number; y: number; width: number; height: number; rotation: number } {
+  const rotation = (src.getRotation().angle + entry.rotation) % 360
+  const cb = src.getCropBox()
+  const n = to_native_frame(box, entry.page_w, entry.page_h, rotation)
+  return { x: cb.x + n.x0, y: cb.y + cb.height - n.y1, width: n.x1 - n.x0, height: n.y1 - n.y0, rotation }
+}
+
 // Re-encode an image blob as PNG bytes — used by export_pdf_vector for an image-sourced page in
 // any format pdf-lib can't embed directly (only JPEG/PNG). createImageBitmap already succeeded on
 // this same blob at load time (is_native_page/page_sizes), so it is known-decodable here too.
@@ -519,14 +531,10 @@ export class PdfRendererAdapter implements RendererAdapter {
       const copied = copied_unsplit.get(entry)
       const only_box = entry.boxes.length === 1 ? entry.boxes[0] : undefined
       if (copied && only_box) {
-        const native = to_native_frame(only_box, entry.page_w, entry.page_h, entry.rotation)
         const outPage = outDoc.addPage(copied)
-        const src_h = outPage.getHeight()
-        outPage.setCropBox(native.x0, src_h - native.y1, native.x1 - native.x0, native.y1 - native.y0)
-        // Always set explicitly, even for 0: a copied page carries the SOURCE's own native
-        // /Rotate, which embedPage's Form-XObject path never did (Form XObjects carry no
-        // rotation) — entry.rotation is the single source of truth for output rotation.
-        outPage.setRotation(degrees(entry.rotation))
+        const r = pdf_rect(outPage, only_box, entry)
+        outPage.setCropBox(r.x, r.y, r.width, r.height)
+        outPage.setRotation(degrees(r.rotation))
         continue
       }
 
@@ -539,48 +547,40 @@ export class PdfRendererAdapter implements RendererAdapter {
       // image branch below), instead of once per box: embedPage(srcPage, boundingBox) previously
       // ran inside the box loop, re-embedding the SAME page's fonts/images once per split box
       // (measured ~3.6× for a 4-way split) for no reason a cropped Form XObject needs a fresh embed.
+      let src_page: PDFPage | null = null
       let full_page: Awaited<ReturnType<typeof outDoc.embedPage>> | null = null
-      let src_h = 0
+      let img: Awaited<ReturnType<typeof outDoc.embedPng>> | null = null
       if (source.kind === 'pdf') {
-        const srcDoc  = await get_pdflib_doc(source.pdf)
-        const srcPage = srcDoc.getPage(source.page_num - 1)
-        src_h = srcPage.getHeight()
-        full_page = await outDoc.embedPage(srcPage)
+        src_page  = (await get_pdflib_doc(source.pdf)).getPage(source.page_num - 1)
+        const mb = src_page.getMediaBox()
+        full_page = await outDoc.embedPage(src_page,
+          { left: mb.x, bottom: mb.y, right: mb.x + mb.width, top: mb.y + mb.height })
+      } else {
+        const bytes  = new Uint8Array(await source.blob.arrayBuffer())
+        const is_png  = bytes[0] === 0x89 && bytes[1] === 0x50
+        const is_jpeg = bytes[0] === 0xff && bytes[1] === 0xd8
+        img = is_png  ? await outDoc.embedPng(bytes)
+            : is_jpeg ? await outDoc.embedJpg(bytes)
+            : await outDoc.embedPng(await reencode_as_png(source.blob))
       }
 
       for (const box of entry.boxes) {
-        // native frame: the source page's OWN (rotation=0) coordinates — embedPage/drawImage below
-        // clip in that frame, with no notion of this app's rotation state (geometry.ts §W9.3).
-        const native = to_native_frame(box, entry.page_w, entry.page_h, entry.rotation)
-        const out_w = native.x1 - native.x0
-        const out_h = native.y1 - native.y0
-        const outPage = outDoc.addPage([out_w, out_h])
-
-        if (full_page) {
-          // pdf-lib boundingBox/drawPage is bottom-left-origin PDF space; native is top-left-origin
-          // (this app's convention) — same offset derivation as the image branch below, applied to
-          // the FULL embedded page instead of a per-box cropped embed: place it so only
-          // [native.x0,x1]×[native.y0,y1] falls within this box's (crop-sized) output page — PDF
-          // pages clip to their own bounds, so nothing else renders.
-          outPage.drawPage(full_page, {
-            x: -native.x0, y: native.y1 - src_h, width: full_page.width, height: full_page.height,
-          })
-        } else if (source.kind === 'image') {
-          const bytes  = new Uint8Array(await source.blob.arrayBuffer())
-          const is_png  = bytes[0] === 0x89 && bytes[1] === 0x50
-          const is_jpeg = bytes[0] === 0xff && bytes[1] === 0xd8
-          const img = is_png  ? await outDoc.embedPng(bytes)
-                    : is_jpeg ? await outDoc.embedJpg(bytes)
-                    : await outDoc.embedPng(await reencode_as_png(source.blob))
-          // Same native-frame crop as the PDF branch, expressed as a draw offset: place the FULL
-          // image so only [native.x0,x1]×[native.y0,y1] falls within the (crop-sized) output page
-          // — PDF pages clip to their own bounds, so nothing else renders. Derivation: a pixel at
-          // image-relative (tx,ty) lands at drawn (x+tx, y+imgH-ty); solving x+tx = tx-native.x0
-          // and y+imgH-ty = native.y1-ty gives x=-native.x0, y=native.y1-imgH.
-          outPage.drawImage(img, {
-            x: -native.x0, y: native.y1 - img.height, width: img.width, height: img.height,
-          })
+        if (src_page && full_page) {
+          // Draw the whole embedded page offset so only the crop falls on the crop-sized page (PDF
+          // pages clip to their own bounds).
+          const r = pdf_rect(src_page, box, entry)
+          const mb = src_page.getMediaBox()
+          const outPage = outDoc.addPage([r.width, r.height])
+          outPage.drawPage(full_page, { x: mb.x - r.x, y: mb.y - r.y, width: full_page.width, height: full_page.height })
+          outPage.setRotation(degrees(r.rotation))
+          continue
         }
+        if (!img) continue
+        const native = to_native_frame(box, entry.page_w, entry.page_h, entry.rotation)
+        const outPage = outDoc.addPage([native.x1 - native.x0, native.y1 - native.y0])
+        // Place the full image so only [native.x0,x1]×[native.y0,y1] falls on the crop-sized page:
+        // image-relative (tx,ty) lands at (x+tx, y+imgH-ty), so x=-native.x0, y=native.y1-imgH.
+        outPage.drawImage(img, { x: -native.x0, y: native.y1 - img.height, width: img.width, height: img.height })
         if (entry.rotation !== 0) outPage.setRotation(degrees(entry.rotation))
       }
     }
