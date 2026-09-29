@@ -1,6 +1,7 @@
 // AppController — owns AppModel, drives BatchJobs, single error-catch site (ARCHITECTURE §6).
 // Wires the three-column layout (sidebar | detail panel | canvas).
 
+import { StartGuide } from './start_guide'
 import { AppModel, type RendererAdapter } from '@core/model'
 import type { BatchJob } from '@core/batch'
 import { Failed } from '@core/batch'
@@ -50,6 +51,7 @@ export class AppController {
   private readonly _canvas_view: CanvasView
   private readonly _overlay: ProgressOverlay
   private readonly _drop_zone: HTMLElement
+  private readonly _guide: StartGuide
   private readonly _pages_panel: PagesPanel
   private readonly _crop_panel: CropPanel
   private readonly _scan_panel: ScanPanel
@@ -94,6 +96,7 @@ export class AppController {
       <div class="drop-zone__icon">⊞</div>
       <div>Drop PDF or image files here</div>`
     this._canvas_col.appendChild(this._drop_zone)
+    this._guide = new StartGuide(this._canvas_col)
     this._wire_drop_zone(root)
 
     // Panels inside sidebar scroll area
@@ -239,6 +242,7 @@ export class AppController {
 
     this._canvas_view.paint(snap)
     this._drop_zone.classList.toggle('hidden', this._model.has_document)
+    this._guide.set_visible(this._model.is_placeholder)
     this._pages_panel.refresh(this._model, busy)
     this._scan_panel.refresh(this._model, busy)
     this._crop_panel.refresh(this._model, busy)

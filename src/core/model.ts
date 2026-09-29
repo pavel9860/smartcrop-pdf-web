@@ -120,7 +120,7 @@ export class AppModel {
     this._raster = new PageRasterPipeline(_adapter, this._page_index, {
       mode: (): Mode => this._mode,
       display_dpi: (): number => this._display_dpi,
-      is_synthetic: (): boolean => this._doc === null || !!this._doc.synthetic,
+      is_synthetic: (): boolean => this.is_placeholder,
       rotation: (p): number => this.document.rotation.get(p) ?? 0,
       process_intent: (p): PageProcessIntent => this._page_process_intent(p),
       dewarp_supersample: (): number => this.settings.dewarp_supersample,
@@ -253,6 +253,9 @@ export class AppModel {
 
   // Loaded document name for the sidebar's Document & State card. One file → its name; several →
   // "first.pdf +N more". Empty when nothing is loaded.
+  // True while no real file is open (the synthetic placeholder page, spec-web §1).
+  get is_placeholder(): boolean { return this._doc === null || !!this._doc.synthetic }
+
   get document_name(): string {
     const names = this._doc?.file_names ?? []
     const first = names[0] ?? ''
