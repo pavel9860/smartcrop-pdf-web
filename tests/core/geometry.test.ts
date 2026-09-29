@@ -1,10 +1,10 @@
 // Pure geometry tests (spec-web §6, §12, §17).
 import { describe, it, expect } from 'vitest'
 import {
-  hit_handle, point_in_box, clamp_box_shift, clamp_box_drag, apply_handle_drag,
+  hit_handle, clamp_box_shift, clamp_box_drag, apply_handle_drag,
   auto_crop_rect, offsets_from_rect, detection_union, union_box, keep_ratio_normalise,
   keep_ratio_anchored, rotate_box_cw, rotate_box_ccw, to_native_frame, split_rects_grid, reindex_map,
-  box_width, box_height, box_area,
+  box_width, box_height,
   MIN_RECT, type Box,
 } from '@core/geometry'
 import type { Offsets } from '@core/document_state'
@@ -17,7 +17,6 @@ describe('box dimensions', () => {
     const b = box(10, 20, 110, 70)
     expect(box_width(b)).toBe(100)
     expect(box_height(b)).toBe(50)
-    expect(box_area(b)).toBe(5000)
   })
 })
 
@@ -44,18 +43,6 @@ describe('hit_handle', () => {
   })
   it('returns null outside the box', () => {
     expect(hit_handle(b, 500, 500, 5)).toBeNull()
-  })
-})
-
-describe('point_in_box', () => {
-  const b = box(0, 0, 100, 100)
-  it('inside and on the border are true', () => {
-    expect(point_in_box(b, 50, 50)).toBe(true)
-    expect(point_in_box(b, 0, 0)).toBe(true)
-    expect(point_in_box(b, 100, 100)).toBe(true)
-  })
-  it('outside is false', () => {
-    expect(point_in_box(b, 101, 50)).toBe(false)
   })
 })
 

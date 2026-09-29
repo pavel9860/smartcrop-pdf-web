@@ -42,22 +42,6 @@ export function hit_handle(box: Box, px: number, py: number, tol: number): Handl
   return null
 }
 
-export function point_in_box(box: Box, px: number, py: number): boolean {
-  return px >= box.x0 && px <= box.x1 && py >= box.y0 && py <= box.y1
-}
-
-// Clamp each edge independently to [0, page_w] × [0, page_h] — no MIN_RECT, no size-preserving
-// shift (unlike clamp_box_shift/clamp_box_drag below): used for the hand-drawn window overlay,
-// which only needs to stay on the page, not obey a minimum size or a single-handle-drag contract.
-export function clamp_box_to_page(box: Box, page_w: number, page_h: number): Box {
-  return {
-    x0: Math.max(0, Math.min(box.x0, page_w)),
-    y0: Math.max(0, Math.min(box.y0, page_h)),
-    x1: Math.max(0, Math.min(box.x1, page_w)),
-    y1: Math.max(0, Math.min(box.y1, page_h)),
-  }
-}
-
 // Shift a box so it lies within [0, page_w] × [0, page_h], preserving W×H.
 // Only shrinks a dimension when W or H itself exceeds the page (spec §9.2).
 export function clamp_box_shift(box: Box, page_w: number, page_h: number): Box {
@@ -506,7 +490,6 @@ export function reindex_map<V>(map: Map<number, V>, deleted: readonly number[]):
 
 export function box_width(b: Box): number { return b.x1 - b.x0 }
 export function box_height(b: Box): number { return b.y1 - b.y0 }
-export function box_area(b: Box): number { return box_width(b) * box_height(b) }
 
 // Shift a box by (dx, dy) — used to move a box between a split region's local frame (origin at
 // the region's own top-left) and the page's global frame, e.g. split-region auto-detect (spec §5a).

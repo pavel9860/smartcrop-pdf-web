@@ -40,25 +40,15 @@ export function apply_vp_correction(mat: Mat, v: Vp, xc?: number, yc?: number): 
   const theta = theta_coarse - theta_raw
   const c = Math.cos(theta), s = Math.sin(theta)
 
-  const map_x = new cv.Mat(h, w, Number(cv.CV_32FC1))
-  const map_y = new cv.Mat(h, w, Number(cv.CV_32FC1))
-  const mx = map_x.data32F
-  const my = map_y.data32F
-
-  for (let y = 0; y < h; y++) {
-    const base = y * w
-    const Yp = y - cy
-    for (let x = 0; x < w; x++) {
-      const Xp = x - cx
-      mx[base + x] = c * Xp - s * Yp + cx
-      my[base + x] = s * Xp + c * Yp + cy
-    }
-  }
-
+  // Inverse map dst -> src: src = R(theta)·(dst - c) + c, applied natively (no per-pixel JS maps).
+  const m = cv.matFromArray(2, 3, Number(cv.CV_64FC1), [
+    c, -s, cx - c * cx + s * cy,
+    s, c, cy - s * cx - c * cy,
+  ])
   const out = new cv.Mat()
-  cv.remap(mat, out, map_x, map_y, Number(cv.INTER_LINEAR), Number(cv.BORDER_CONSTANT),
-    new cv.Scalar(255, 255, 255, 255))
-  map_x.delete(); map_y.delete()
+  cv.warpAffine(mat, out, m, new cv.Size(w, h), Number(cv.INTER_LINEAR) | Number(cv.WARP_INVERSE_MAP),
+    Number(cv.BORDER_CONSTANT), new cv.Scalar(255, 255, 255, 255))
+  m.delete()
   mat.delete()
   return out
 }

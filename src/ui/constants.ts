@@ -28,10 +28,6 @@ export const SPLIT_BADGE_FONT_SCALE   = 0.9   // split index ~30% smaller (bug 1
 export const SPLIT_BADGE_RADIUS_SCALE = 0.8   // contour circle ~30% smaller around the number
 export const RUBBER_BAND_DASH: readonly [number, number] = [4, 3]
 export const RUBBER_BAND_LINE_WIDTH   = 1
-export const STATUS_FONT_SIZE         = 13
-export const STATUS_SHADOW_BLUR       = 4
-export const STATUS_TEXT_OFFSET_X     = 8
-export const STATUS_TEXT_OFFSET_Y     = 18
 export const LOADING_FONT_SIZE        = 16
 
 // Detail panel content types

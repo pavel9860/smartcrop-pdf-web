@@ -3,6 +3,7 @@
 import type { AppModel } from '@core/model'
 import type { AppController } from '../app'
 import { PagesMode } from '@core/enums'
+import { IMAGE_LOAD_EXT } from '@core/constants'
 import { requireEl, syncInputValue } from '../dom'
 
 export class PagesPanel {
@@ -34,7 +35,7 @@ export class PagesPanel {
         <span class="mode-badge" id="pp-badge" title="Set automatically from the loaded document — Normal has real text/vector content, Scanned is image-only">NORMAL</span>
       </div>
       <button class="btn btn-secondary w-full" id="pp-load" title="Open PDF and/or image files (Ctrl+O)">📂︎  Open PDF/Image Files</button>
-      <input type="file" id="pp-file" multiple accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff" hidden />`
+      <input type="file" id="pp-file" multiple accept="${IMAGE_LOAD_EXT.join(',')}" hidden />`
     container.appendChild(doc_card)
 
     const pages_card = document.createElement('div')

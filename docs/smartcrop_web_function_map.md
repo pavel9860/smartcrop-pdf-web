@@ -86,7 +86,6 @@ main.ts
 | Function | Line | Purpose |
 |---|---|---|
 | `hit_handle(box,px,py,tol)` | 27 | corner→midpoint→interior→null hit test, returns `HandleId\|null` |
-| `point_in_box` | 45 | inclusive bounds check |
 | `clamp_box_shift(box,pw,ph)` | 51 | shift box into page, preserving W×H (used for `move`) |
 | `clamp_box_drag(box,pw,ph)` | 66 | clamp each edge independently, enforces `MIN_RECT` (used for resize) |
 | `apply_handle_drag(handle,rect0,start,cur,pw,ph)` | 76 | core drag math: moves only the dragged edges, dispatches to shift-clamp (move) or drag-clamp (resize) |
@@ -108,7 +107,7 @@ main.ts
 | `clamp_edge_deltas(d,rects0,mirror_cols,mirror_rows,pw,ph)` | 410 | cap same-size resize deltas so every window's own headroom is respected before applying |
 | `split_rects_grid(n,pw,ph)` | 422 | initial 1/2/4 grid; order TL,BL,TR,BR for n=4 |
 | `reindex_map(map,deleted)` | 444 | shift per-page `Map` keys after page deletion |
-| `box_width/box_height/box_area` | 458–460 | trivial |
+| `box_width/box_height` | 458–460 | trivial |
 | `translate_box(b,dx,dy)` | 464 | shift a box by `(dx,dy)`, dimensions unchanged |
 
 **Callers:** almost all of these are called from `model.ts` (drag helpers, `apply_crop`, `_rotate_page`, `delete_pages`, `set_split`, `_compute_detection_union`). `keep_ratio_anchored` is also invoked directly for `DrawnDrag`/`SplitDrag` live-ratio updates.
@@ -374,7 +373,7 @@ specifically touches ONNX tensor packing.
 | `core/history.ts` | `History` class | bounded undo/redo `DocumentState[]` stacks; `push` snapshots+clears redo; `undo`/`redo` swap between stacks; `set_depth` trims both on shrink |
 | `core/lru.ts` | `LRUCache<K,V>` | `Map`-based, re-insert-on-get for LRU order; `onEvict` vs `onCapacityEvict` distinction is what makes the work-cache write-back tier possible (§6.13) |
 | `core/parsing.ts` | `resolve_pages` | ALL/ODD/EVEN trivial; SELECT → `parse_pattern` → per-comma-part dispatch to `parse_range` (`a-b`) or `parse_slice` (`start:stop:step`, all optional) or bare int; 1-indexed input, 0-indexed output, deduped+sorted `Set` |
-| `core/viewmodel.ts` | `output_page_count, view_to_source, source_to_first_view, source_to_view_range` | pure math converting between source-page index and 1-based output-view position, accounting for committed splits expanding one page into N views |
+| `core/viewmodel.ts` | `output_page_count, view_to_source, source_to_first_view` | pure math converting between source-page index and 1-based output-view position, accounting for committed splits expanding one page into N views |
 | `pdf/cv.ts` | `ensure_cv` | module-cached OpenCV.js init promise; 10s `onRuntimeInitialized` fallback resolves unconditionally without re-checking `cv.Mat` exists |
 | `pdf/dewarp.ts` | `ensure_onnx, apply_dewarp, fetch_with_idb_cache`, f16↔f32 helpers | ONNX session init/inference for Dewarp&Deskew (two-stage uvdoc/bilinear_unwarping models, §9a); `ensure_onnx` has no in-flight-promise cache, unlike `ensure_cv` |
 | `pdf/idb.ts` | `open_idb, idb_req, idb_tx` | thin IndexedDB promise wrappers — used only by `dewarp.ts::fetch_with_idb_cache` to cache the two `.onnx` model downloads, not for page rasters |

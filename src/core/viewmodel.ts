@@ -45,13 +45,3 @@ export function source_to_first_view(
   }
   return pos
 }
-
-// All 1-based view indices for a given source page.
-export function source_to_view_range(
-  src_page: number,
-  applied: Map<number, Box[]>,
-): readonly number[] {
-  const first = source_to_first_view(src_page, applied)
-  const n = applied.get(src_page)?.length ?? 1
-  return Array.from({ length: n }, (_, k) => first + k)
-}

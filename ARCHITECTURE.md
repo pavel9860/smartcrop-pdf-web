@@ -58,7 +58,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               CC_CONNECTIVITY, SAUVOLA_R, SAUVOLA_WINDOW, BG_KERNEL_SIZE,
                               BG_DOWNSCALE, BW_STRENGTH (k + min-despeckle-area per level 1-3),
                               SHARPEN_STRENGTH (bilateral d/sigmaColor/sigmaSpace + unsharp blur
-                              sigma per level), SAUVOLA_DPI_REFERENCE/SCALE_MIN/MAX — real
+                              sigma per level) — real
                               box-filter Sauvola parameters (§9), not adaptiveThreshold tuning
 
       enums.ts              Mode (NORMAL|SCANNED), FilterMode (NONE|BW|SHARPEN),
@@ -68,7 +68,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               InvalidSplitError, DeleteAllPagesError, DocumentLoadError,
                               ImagingError, MissingDependencyError
 
-      geometry.ts           Box type, HandleId; hit_handle(), point_in_box(), clamp_box_shift(),
+      geometry.ts           Box type, HandleId; hit_handle(), clamp_box_shift(),
                               clamp_box_drag(), apply_handle_drag(), auto_crop_rect(),
                               offsets_from_rect(), detection_union(), union_box(),
                               keep_ratio_normalise(), keep_ratio_anchored() (ratio-preserving at
@@ -78,7 +78,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
                               vector export, spec-web §10.3), edge_deltas() / apply_edge_deltas() /
                               clamp_edge_deltas() (same-size RESIZE propagation, gated to exclude
                               `move`, spec-web §6.6), split_rects_grid(), reindex_map(),
-                              box_width()/box_height()/box_area() — pure math, no I/O.
+                              box_width()/box_height() — pure math, no I/O.
 
       parsing.ts            resolve_pages(pattern, total, mode) → number[]
                               All/Odd/Even + pattern: ranges, slices (1:4, ::2, 10:), mixed
@@ -86,7 +86,7 @@ C:/DOCS/Code/SmartCroPDF-Web/
       lru.ts                LRUCache<K, V> — same eviction algorithm; stores ImageBitmap refs in scanned
                             mode and metadata of processing in normal mode.
 
-      viewmodel.ts          output_page_count(), view_index_to_source(), source_to_view_range()
+      viewmodel.ts          output_page_count(), view_to_source(), source_to_first_view()
                               — committed-split pages expand to N views
 
       document_state.ts     Offsets (frozen), PageProcessIntent (frozen), DocumentState

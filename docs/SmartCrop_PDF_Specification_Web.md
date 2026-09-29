@@ -1064,7 +1064,6 @@ DBNET_MIN_AREA_PX = 20    DBNET_MIN_WIDTH_PX = 30    DBNET_MIN_ASPECT_RATIO = 3.
 VP_INLIER_THRESH = 0.02    VP_HUBER_DELTA = 0.02    VP_IRLS_ITERS = 8    VP_MAX_PAIRS = 400
 # Sauvola / illumination-flatten (real box-filter Sauvola, not an adaptiveThreshold approximation)
 SAUVOLA_R = 127.5    SAUVOLA_WINDOW = 51    BG_KERNEL_SIZE = 51    BG_DOWNSCALE = 4
-SAUVOLA_DPI_REFERENCE = 150.0    SAUVOLA_DPI_SCALE_MIN/MAX = 0.5 / 4.0
 # filter strengths
 BW_STRENGTH[1..3]      = { k, minArea } per level
 SHARPEN_STRENGTH[1..3] = { d, sigmaColor, sigmaSpace, blurSigma } per level

@@ -131,9 +131,6 @@ export const SHARPEN_STRENGTH: Record<1 | 2 | 3, {
 // DPI scale for pixel-defined kernels, clamped (imaging.py:81-86 _dpi_scale). Reference DPI
 // for detect_content is NORMAL_DPI-independent (detect always downscales to DETECT_MAX_PX
 // first, so DPI scale there is 1.0); the B/W filter runs at SRC_DPI and scales from 150.
-export const SAUVOLA_DPI_REFERENCE = 150.0
-export const SAUVOLA_DPI_SCALE_MIN = 0.5
-export const SAUVOLA_DPI_SCALE_MAX = 4.0
 
 // Split count ceiling (set_split accepts 1 | 2 | 4)
 export const MAX_SPLIT = 4
