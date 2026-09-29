@@ -7,7 +7,7 @@ import type { DocumentState } from './document_state'
 import { Mode } from './enums'
 import {
   type ExportFormat,
-  DPI_PRESETS, CUSTOM_DPI_PRESET, PAPER_SIZES, DEFAULT_PAPER, CUSTOM_PAPER_PRESET,
+  DPI_PRESETS, CUSTOM_DPI_PRESET, EXPORT_BYTES_PER_PX, PAPER_SIZES, DEFAULT_PAPER, CUSTOM_PAPER_PRESET,
 } from './constants'
 import {
   type BatchJob, type PageBatchJob, Ok, Cancelled,
@@ -31,6 +31,9 @@ export interface ExportContext {
   custom_dpi(): number
   paper_size(): string
   custom_paper_in(): number
+  source_pages(): number
+  source_bytes(): number
+  source_px_per_unit(): number
 }
 
 export class ExportService {
@@ -61,14 +64,35 @@ export class ExportService {
     return name + ext
   }
 
+  // Rough byte size of the file export() would write (spec-web §4, Save card).
+  estimate_bytes(): number {
+    const format = this._ctx.export_format()
+    if (this._uses_vector()) {
+      return this._ctx.source_bytes() * this._ctx.page_count() / Math.max(1, this._ctx.source_pages())
+    }
+    const target = this._resolved_target_long_px()
+    let px = 0
+    for (let p = 0; p < this._ctx.page_count(); p++) {
+      for (const b of this._export_boxes_for_page(p, this._ctx.page_dims(p))) {
+        const w = b.x1 - b.x0, h = b.y1 - b.y0
+        const k = target !== null ? target / Math.max(w, h) : this._ctx.source_px_per_unit()
+        px += w * h * k * k
+      }
+    }
+    return px * EXPORT_BYTES_PER_PX[format === 'PDF' ? 'JPG' : format]
+  }
+
+  private _uses_vector(): boolean {
+    return this._ctx.mode() === Mode.NORMAL && this._ctx.export_format() === 'PDF'
+      && this._adapter.export_pdf_vector !== undefined
+  }
+
   export(filename: string): BatchJob {
     // Vector export (§W9.3): NORMAL document, PDF output, adapter supports it. No rasterization —
     // crop/rotate/split go straight through pdf-lib embedPage/copyPages against the original page
     // content.
-    const use_vector = this._ctx.mode() === Mode.NORMAL && this._ctx.export_format() === 'PDF'
-      && this._adapter.export_pdf_vector !== undefined
     return start_batch(`Saving ${this._ctx.export_format()}…`, this._ctx.view_total(), job =>
-      use_vector ? this._run_export_vector(job, filename) : this._run_export(job, filename))
+      this._uses_vector() ? this._run_export_vector(job, filename) : this._run_export(job, filename))
   }
 
   // Streams pages through the adapter's export sink (spec-web §21 #9): each page is rendered, then

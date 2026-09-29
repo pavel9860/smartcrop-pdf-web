@@ -27,6 +27,7 @@ describe('OutputPanel', () => {
     panel.refresh(model, false)
     expect(root.querySelector<HTMLSelectElement>('#op-format')!.value).toBe(model.export_format)
     expect(root.querySelector('#op-export')!.textContent).toContain(`Save ${model.export_format}`)
+    expect(root.querySelector('#op-size')!.textContent).toMatch(/^≈ \d+(\.\d)? (KB|MB)$/)
   })
 
   it('changing colours / format dispatches through the model', () => {

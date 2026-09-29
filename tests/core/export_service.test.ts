@@ -6,6 +6,7 @@ import { PageIndexMap } from '@core/page_index_map'
 import { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { default_document_state, type DocumentState } from '@core/document_state'
 import { Mode } from '@core/enums'
+import { EXPORT_BYTES_PER_PX } from '@core/constants'
 import { Failed, Cancelled } from '@core/batch'
 import type { RendererAdapter, PageSize, VectorExportPage, OutputPage } from '@core/model'
 import type { Box } from '@core/geometry'
@@ -48,6 +49,9 @@ function setup(opts: {
     custom_dpi: () => 300,
     paper_size: () => 'A4',
     custom_paper_in: () => 11.69,
+    source_pages: () => 10,
+    source_bytes: () => 1_000_000,
+    source_px_per_unit: () => 2,
   }
   const svc = new ExportService(adapter, raster, idx, ctx)
   const pdf_bytes: Uint8Array[] = []
@@ -193,5 +197,24 @@ describe('ExportService.export — vector path', () => {
     expect(seen).toHaveLength(2)
     expect(seen[0]?.boxes).toEqual([{ x0: 5, y0: 5, x1: 100, y1: 100 }])
     expect(seen[1]?.boxes).toEqual([{ x0: 0, y0: 0, x1: 200, y1: 300 }])   // full page fallback
+  })
+})
+
+describe('ExportService.estimate_bytes (Save size estimate)', () => {
+  it('vector PDF: source size scaled by the kept page fraction', () => {
+    const { svc } = setup({ mode: Mode.NORMAL, export_format: 'PDF', page_count: 5, adapter: { export_pdf_vector: () => Promise.resolve(new Uint8Array()) } })
+    expect(svc.estimate_bytes()).toBe(500_000)
+  })
+
+  it('raster: output pixels x bytes-per-pixel for the format', () => {
+    const { svc } = setup({ mode: Mode.SCANNED, export_format: 'JPG', page_count: 2 })
+    // 2 full pages of 200x300 units at 2 px/unit = 2 x 400x600 px
+    expect(svc.estimate_bytes()).toBeCloseTo(2 * 400 * 600 * EXPORT_BYTES_PER_PX.JPG)
+  })
+
+  it('counts committed crops, not full pages', () => {
+    const { svc, doc } = setup({ mode: Mode.SCANNED, export_format: 'TIFF', page_count: 1 })
+    doc.applied.set(0, [{ x0: 0, y0: 0, x1: 100, y1: 100 }, { x0: 100, y0: 0, x1: 200, y1: 100 }])
+    expect(svc.estimate_bytes()).toBeCloseTo(2 * 200 * 200 * EXPORT_BYTES_PER_PX.TIFF)
   })
 })

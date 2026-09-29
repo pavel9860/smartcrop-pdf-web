@@ -1166,3 +1166,18 @@ describe('Delete is undoable (spec-web §12)', () => {
     expect(model.page_count()).toBe(2)
   })
 })
+
+describe('estimate_export_bytes', () => {
+  it('is 0 with no document and grows with the page count and output resolution', async () => {
+    const { adapter } = make_mock_adapter({ page_count: 4 })
+    const model = new AppModel(adapter)
+    expect(model.estimate_export_bytes()).toBe(0)
+    await model.load_files([FILE()])
+    model.set_export_format('PNG')
+    const four = model.estimate_export_bytes()
+    expect(four).toBeGreaterThan(0)
+    model.set_select_pattern('1'); model.set_pages_mode(PagesMode.SELECT)
+    model.delete_pages()
+    expect(model.estimate_export_bytes()).toBeCloseTo(four * 3 / 4)
+  })
+})

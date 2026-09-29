@@ -24,7 +24,7 @@ import {
   NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DPI_PRESETS, EXPORT_FORMATS,
   DEFAULT_UNDO_DEPTH,
   UNDO_DEPTH_MIN, UNDO_DEPTH_MAX,
-  SYNTH_W, SYNTH_H, type ExportFormat,
+  SYNTH_W, SYNTH_H, PT_PER_INCH, type ExportFormat,
   CUSTOM_DPI_PRESET, CUSTOM_DPI_MIN, CUSTOM_DPI_MAX,
   PAPER_SIZES, CUSTOM_PAPER_PRESET, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX,
   DEWARP_SUPERSAMPLE_MIN, DEWARP_SUPERSAMPLE_MAX,
@@ -199,6 +199,9 @@ export class AppModel {
       custom_dpi: (): number => this.settings.custom_dpi,
       paper_size: (): string => this.settings.paper_size,
       custom_paper_in: (): number => this.settings.custom_paper_in,
+      source_pages: (): number => this._doc?.page_count ?? 0,
+      source_bytes: (): number => this._doc?.source_bytes ?? 0,
+      source_px_per_unit: (): number => this._mode === Mode.SCANNED ? 1 : this._display_dpi / PT_PER_INCH,
     })
     this._view = new ViewSnapshotBuilder(this._raster, this._crop, {
       ...page_ctx,
@@ -499,6 +502,9 @@ export class AppModel {
     return this._export.suggested_export_name()
   }
 
+  // Rough size of the file export() would write (0 with no document).
+  estimate_export_bytes(): number { return this.has_document ? this._export.estimate_bytes() : 0 }
+
   export(filename: string): BatchJob {
     if (!this.has_document) throw new NoDocumentError('No document loaded')
     return this._export.export(filename)
@@ -532,7 +538,7 @@ export class AppModel {
   // once bumped up in this session.
   set_display_scale(px_per_page_unit: number): void {
     if (this._mode !== Mode.NORMAL || !(px_per_page_unit > 0)) return
-    const needed = px_per_page_unit * 72   // page unit = PDF point = 1/72 inch; DPI = px/inch
+    const needed = px_per_page_unit * PT_PER_INCH   // DPI = px/inch
     const resolved = Math.max(NORMAL_DPI, Math.min(NORMAL_DISPLAY_DPI_MAX, needed))
     if (resolved > this._display_dpi * 1.1) {
       this._display_dpi = resolved

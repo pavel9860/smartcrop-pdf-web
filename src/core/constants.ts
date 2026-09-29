@@ -190,7 +190,11 @@ export type ExportFormat = typeof EXPORT_FORMATS[number]
 export const IMAGE_LOAD_EXT = ['.pdf', '.jpg', '.jpeg', '.png', '.tif', '.tiff'] as const
 
 // JPEG quality for embedding in PDF output (0–1)
+export const PT_PER_INCH = 72   // PDF page unit = 1 point = 1/72 inch
 export const JPEG_QUALITY = 0.92
+// Typical encoded bytes per output pixel for the Save size estimate — measured on the test scans at
+// JPEG_QUALITY: JPG 0.10–0.29, PNG 0.10–1.42 (content-dependent); TIFF is uncompressed RGB.
+export const EXPORT_BYTES_PER_PX = { JPG: 0.2, PNG: 0.5, TIFF: 3 } as const
 
 // Default settings
 export const DEFAULT_COMPRESS_PRESET  = 'Original resolution'

@@ -517,6 +517,7 @@ class AppModel {
 
   // export
   suggested_export_name(): string
+  estimate_export_bytes(): number        // rough Save size shown next to the button (spec-web §4)
   set_download_handlers(pdf: (bytes: Uint8Array, name: string) => void,
                         zip: (bytes: Uint8Array, base: string) => void): void
   export(filename: string): BatchJob     // drives export.worker (raster path) or

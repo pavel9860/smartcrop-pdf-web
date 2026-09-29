@@ -8,7 +8,7 @@ import type { PageProcessIntent } from '@core/document_state'
 import { Mode } from '@core/enums'
 import { DocumentLoadError, CONTEXT_2D_UNAVAILABLE } from '@core/errors'
 import {
-  JPEG_QUALITY, type ExportFormat, SYNTH_PAGES, SYNTH_W, SYNTH_H,
+  JPEG_QUALITY, PT_PER_INCH, type ExportFormat, SYNTH_PAGES, SYNTH_W, SYNTH_H,
   SYNTH_BG_COLOR, SYNTH_BORDER_COLOR, SYNTH_TEXT_COLOR, SYNTH_FONT, SYNTH_PADDING,
   MODE_TEXT_MIN,
 } from '@core/constants'
@@ -321,6 +321,7 @@ export class PdfRendererAdapter implements RendererAdapter {
       page_sizes,
       file_names,
       mode,
+      source_bytes: files.reduce((n, f) => n + f.size, 0),
     }
     this._doc_info = info
     return info
@@ -337,7 +338,7 @@ export class PdfRendererAdapter implements RendererAdapter {
     }
 
     const page  = await source.pdf.getPage(source.page_num)
-    const scale = dpi / 72
+    const scale = dpi / PT_PER_INCH
     const vp     = page.getViewport({ scale })
     const canvas = new OffscreenCanvas(Math.round(vp.width), Math.round(vp.height))
     const ctx    = canvas.getContext('2d')

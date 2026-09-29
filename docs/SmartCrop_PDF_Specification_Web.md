@@ -238,7 +238,10 @@ PDF, since that combination exports as a genuine vector PDF with no rasterizatio
 settings to configure (§10.3). It reappears the moment the export format switches to JPG/PNG/TIFF,
 and is always shown for a SCANNED document. **Save** (card title and button; saving is the
 export operation described in §10): a button (label tracks the chosen format, e.g. "Save PDF") plus an adjacent format `<select>` (PDF/JPG/PNG/TIFF); never gated by the rule
-above. `Ctrl+S` triggers Save.
+above. `Ctrl+S` triggers Save. Next to it, a rough size estimate of the file Save would write
+(`≈ 12 MB`), updated live with the format, compress DPI, crops and page count: a vector PDF is
+estimated as the source files' size scaled by the kept page fraction; raster output as its total
+output pixels × a typical bytes-per-pixel for the format (`EXPORT_BYTES_PER_PX`).
 
 Output-quality settings (compress preset, custom DPI, colours, export format) persist across
 document loads and browser sessions via `localStorage`.

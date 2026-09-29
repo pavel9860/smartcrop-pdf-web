@@ -612,6 +612,7 @@ input, select { font: inherit; }
   border-radius: 99px;
   transition: width 0.1s linear;
 }
+.export-size { margin-top: 6px; font-size: 0.8125rem; color: var(--text-dim); text-align: right; min-height: 1em; }
 .overlay__counter { font-size: 0.8125rem; color: var(--text-dim); }
 .overlay__detail { font-size: 0.8125rem; color: var(--text-dim); min-height: 1em; }
 .overlay--indeterminate .overlay__counter { display: none; }

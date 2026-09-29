@@ -16,6 +16,7 @@ export class OutputPanel {
   private readonly _colours_sel:    HTMLSelectElement
   private readonly _export_btn:     HTMLButtonElement
   private readonly _format_sel:     HTMLSelectElement
+  private readonly _size_el:        HTMLElement
 
   constructor(container: HTMLElement, model: AppModel, ctrl: AppController) {
     const compress_opts = Object.keys(DPI_PRESETS)
@@ -45,7 +46,8 @@ export class OutputPanel {
       <div class="export-row">
         <button class="btn btn-secondary flex-1" id="op-export" title="Save the document (Ctrl+S)">💾︎  Save PDF</button>
         <select class="select export-fmt" id="op-format" title="Output file format">${format_opts}</select>
-      </div>`
+      </div>
+      <div class="export-size" id="op-size" title="Rough estimate — actual size depends on page content"></div>`
     container.appendChild(export_el)
 
     this._quality_card   = compress_el
@@ -54,6 +56,7 @@ export class OutputPanel {
     this._colours_sel    = requireEl(compress_el, '#op-colours')
     this._export_btn     = requireEl(export_el, '#op-export')
     this._format_sel     = requireEl(export_el, '#op-format')
+    this._size_el        = requireEl(export_el, '#op-size')
 
     this._compress_sel.addEventListener('change', () =>
       { ctrl.dispatch(() => { model.set_compress_preset(this._compress_sel.value) }) })
@@ -82,10 +85,18 @@ export class OutputPanel {
     this._colours_sel.value  = model.output_colours
     this._format_sel.value   = model.export_format
     this._export_btn.textContent = `💾︎  Save ${model.export_format}`
+    const bytes = model.estimate_export_bytes()
+    this._size_el.textContent = bytes > 0 ? `≈ ${format_bytes(bytes)}` : ''
     this._compress_sel.disabled   = busy || !show_quality
     this._custom_dpi_inp.disabled = busy || !show_quality
     this._colours_sel.disabled    = busy || !show_quality
     this._format_sel.disabled     = busy
     this._export_btn.disabled     = busy || !model.has_document
   }
+}
+
+// Two significant figures in KB or MB, e.g. "840 KB", "12 MB", "1.3 MB".
+function format_bytes(n: number): string {
+  const mb = n / 1e6
+  return mb < 1 ? `${Math.max(1, Math.round(n / 1e3))} KB` : `${Number(mb.toPrecision(2))} MB`
 }

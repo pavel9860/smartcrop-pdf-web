@@ -22,6 +22,7 @@ export interface DocInfo {
   // synthetic doc have no PageSource; they must render via make_synth_page, not
   // get_source_image. Omitted (falsy) for every real load.
   synthetic?: boolean
+  source_bytes?: number   // total size of the opened files (vector-PDF size estimate)
 }
 
 export interface ExportSink {
