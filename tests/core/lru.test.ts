@@ -61,3 +61,22 @@ describe('LRUCache', () => {
     expect(c.get(99)).toBeUndefined()
   })
 })
+
+describe('LRUCache capacity and replacement', () => {
+  it('a capacity function is read live (undo depth changed after the cache was made)', () => {
+    let cap = 1
+    const c = new LRUCache<string, number>(() => cap)
+    c.set('a', 1); c.set('b', 2)
+    expect(c.size).toBe(1)
+    cap = 3
+    c.set('c', 3); c.set('d', 4)
+    expect(c.size).toBe(3)
+  })
+
+  it('replacing a key with a different value evicts the old one', () => {
+    const evicted: number[] = []
+    const c = new LRUCache<string, number>(4, (_, v) => { evicted.push(v) })
+    c.set('a', 1); c.set('a', 1); c.set('a', 2)
+    expect(evicted).toEqual([1])
+  })
+})

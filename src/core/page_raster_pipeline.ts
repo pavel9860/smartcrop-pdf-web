@@ -109,7 +109,7 @@ export class PageRasterPipeline {
   private _version_cache(map: Map<number, LRUCache<string, ImageBitmap>>, o: number): LRUCache<string, ImageBitmap> {
     let cache = map.get(o)
     if (!cache) {
-      cache = new LRUCache<string, ImageBitmap>(this._ctx.undo_depth() + 1,
+      cache = new LRUCache<string, ImageBitmap>(() => this._ctx.undo_depth() + 1,
         (_, b) => { if (b !== this._current) b.close() })
       map.set(o, cache)
     }

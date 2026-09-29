@@ -6,10 +6,10 @@
 
 export class LRUCache<K, V> {
   private readonly _map = new Map<K, V>()
-  private readonly _capacity: number
+  private readonly _capacity: number | (() => number)   // a function is read on every set (live setting)
   private readonly _onEvict: ((key: K, value: V) => void) | undefined
 
-  constructor(capacity: number, onEvict?: (key: K, value: V) => void) {
+  constructor(capacity: number | (() => number), onEvict?: (key: K, value: V) => void) {
     this._capacity = capacity
     this._onEvict  = onEvict
   }
@@ -24,9 +24,14 @@ export class LRUCache<K, V> {
   }
 
   set(key: K, value: V): void {
-    if (this._map.has(key)) this._map.delete(key)
+    const old = this._map.get(key)
+    if (old !== undefined) {
+      this._map.delete(key)
+      if (old !== value) this._onEvict?.(key, old)
+    }
     this._map.set(key, value)
-    if (this._map.size > this._capacity) this._evict_lru()
+    const cap = typeof this._capacity === 'function' ? this._capacity() : this._capacity
+    while (this._map.size > cap) this._evict_lru()
   }
 
   delete(key: K): void {
