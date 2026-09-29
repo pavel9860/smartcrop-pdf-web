@@ -1181,3 +1181,16 @@ describe('estimate_export_bytes', () => {
     expect(model.estimate_export_bytes()).toBeCloseTo(four * 3 / 4)
   })
 })
+
+describe('Auto-detect resets offsets (spec-web §21 #27)', () => {
+  it('a fresh detect clears offsets left by an earlier drag', async () => {
+    const { adapter } = make_mock_adapter({ page_count: 2 })
+    const model = new AppModel(adapter)
+    await model.load_files([FILE()])
+    await model.detect_content().result()
+    model.begin_drag(20, 20, 8); model.update_drag(60, 70); model.end_drag()   // TL handle of the auto crop
+    expect(model.offsets).not.toEqual({ left: 0, top: 0, right: 0, bottom: 0 })
+    await model.detect_content().result()
+    expect(model.offsets).toEqual({ left: 0, top: 0, right: 0, bottom: 0 })
+  })
+})

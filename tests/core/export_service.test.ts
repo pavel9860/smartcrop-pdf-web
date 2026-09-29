@@ -96,11 +96,9 @@ describe('ExportService.export — raster path (streamed, spec-web §21 #9)', ()
     expect(zip_bytes).toHaveLength(1)
   })
 
-  it('progress counts real pages (total === display_total)', () => {
+  it('progress counts real pages', () => {
     const { svc } = setup({ page_count: 3, export_format: 'PNG' })
-    const job = svc.export('out.png')
-    expect(job.total).toBe(3)
-    expect(job.display_total).toBe(3)
+    expect(svc.export('out.png').total).toBe(3)
   })
 
   it('never holds more than two rendered, un-encoded pages (slow encoder)', async () => {
@@ -126,6 +124,20 @@ describe('ExportService.export — raster path (streamed, spec-web §21 #9)', ()
     const { svc } = setup({ adapter: { render_output_image, begin_export: () => sink } })
     expect(await svc.export('out.pdf').result()).toBeInstanceOf(Failed)
     expect(sink.abort).toHaveBeenCalled()
+  })
+
+  it('a cancel during the last page still writes nothing', async () => {
+    let job: ReturnType<ExportService['export']> | null = null
+    const sink = {
+      ...recording_sink(), abort: vi.fn(), finish: vi.fn(() => Promise.resolve(new Uint8Array())),
+      add: vi.fn(() => { job?.cancel(); return Promise.resolve() }),
+    }
+    const { svc, pdf_bytes } = setup({ page_count: 1, adapter: { begin_export: () => sink } })
+    job = svc.export('out.pdf')
+    expect(await job.result()).toBeInstanceOf(Cancelled)
+    await new Promise(r => setTimeout(r, 10))       // nothing keeps running after the result
+    expect(sink.finish).not.toHaveBeenCalled()
+    expect(pdf_bytes).toHaveLength(0)
   })
 
   it('cancels cleanly with no partial file', async () => {

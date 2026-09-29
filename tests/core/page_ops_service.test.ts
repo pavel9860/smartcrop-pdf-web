@@ -35,7 +35,6 @@ function setup(page_count = 3): {
   doc: DocumentState
   detection: DetectionState
   current_page: { v: number }
-  synced: { v: number }
   split_count: { v: 1 | 2 | 4 }
   history: History
   raster: PageRasterPipeline
@@ -52,7 +51,6 @@ function setup(page_count = 3): {
   doc.pages = Array.from({ length: page_count }, (_, i) => i)
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
   const current_page = { v: 0 }
-  const synced = { v: 0 }
   const split_count: { v: 1 | 2 | 4 } = { v: 1 }
   const ctx: PageOpsContext = {
     document: () => doc,
@@ -69,13 +67,12 @@ function setup(page_count = 3): {
     },
     current_page: () => current_page.v,
     set_current_page: (p) => { current_page.v = p },
-    sync_view_pos: () => { synced.v++ },
     page_count: () => idx.length,
     split_count: () => split_count.v,
   }
   const history = new History(20)
   const svc = new PageOpsService(history, idx, raster, ctx)
-  return { svc, doc, detection, current_page, synced, split_count, history, raster }
+  return { svc, doc, detection, current_page, split_count, history, raster }
 }
 
 describe('PageOpsService.rotate', () => {
@@ -179,12 +176,11 @@ describe('PageOpsService.delete', () => {
     expect(detection.union).not.toBeNull()
   })
 
-  it('clamps current_page into the shrunk range and re-syncs the view position', () => {
-    const { svc, current_page, synced } = setup(3)
+  it('moves current_page to a surviving page when its own page is deleted', () => {
+    const { svc, current_page } = setup(3)
     current_page.v = 2
     svc.delete([1, 2])   // only page 0 survives
     expect(current_page.v).toBe(0)
-    expect(synced.v).toBe(1)
   })
 
   it('is undoable — pushes a checkpoint holding the pre-delete page order', () => {

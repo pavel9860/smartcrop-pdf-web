@@ -67,7 +67,7 @@ export class ExportService {
   // Rough byte size of the file export() would write (spec-web §4, Save card).
   estimate_bytes(): number {
     const format = this._ctx.export_format()
-    if (this._uses_vector()) {
+    if (this._vector_export()) {
       return this._ctx.source_bytes() * this._ctx.page_count() / Math.max(1, this._ctx.source_pages())
     }
     const target = this._resolved_target_long_px()
@@ -82,17 +82,19 @@ export class ExportService {
     return px * EXPORT_BYTES_PER_PX[format === 'PDF' ? 'JPG' : format]
   }
 
-  private _uses_vector(): boolean {
-    return this._ctx.mode() === Mode.NORMAL && this._ctx.export_format() === 'PDF'
-      && this._adapter.export_pdf_vector !== undefined
+  // The adapter's vector export when this document/format uses it (NORMAL + PDF), else null.
+  private _vector_export(): RendererAdapter['export_pdf_vector'] | null {
+    const fn = this._adapter.export_pdf_vector?.bind(this._adapter)
+    return fn && this._ctx.mode() === Mode.NORMAL && this._ctx.export_format() === 'PDF' ? fn : null
   }
 
   export(filename: string): BatchJob {
     // Vector export (§W9.3): NORMAL document, PDF output, adapter supports it. No rasterization —
     // crop/rotate/split go straight through pdf-lib embedPage/copyPages against the original page
     // content.
+    const vector = this._vector_export()
     return start_batch(`Saving ${this._ctx.export_format()}…`, this._ctx.view_total(), job =>
-      this._uses_vector() ? this._run_export_vector(job, filename) : this._run_export(job, filename))
+      vector ? this._run_export_vector(job, filename, vector) : this._run_export(job, filename))
   }
 
   // Streams pages through the adapter's export sink (spec-web §21 #9): each page is rendered, then
@@ -120,6 +122,7 @@ export class ExportService {
         await yield_to_paint()
       }
       await in_flight
+      if (ctrl.is_cancelled) { sink.abort(); ctrl.complete(new Cancelled()); return }
       const bytes = await sink.finish()
       if (format === 'PDF') this._download_pdf(bytes, filename)
       else this._download_zip(bytes, base)
@@ -131,32 +134,26 @@ export class ExportService {
     ctrl.complete(new Ok())
   }
 
-  // Vector counterpart to _run_export: builds VectorExportPage entries (current-frame box +
-  // rotation per source page — the adapter converts to the source's native frame itself) and
-  // hands off to the adapter in one call. No render_output_image, no OffscreenCanvas here — box
-  // resolution is the only work done on this thread; the adapter defensively falls back to
-  // _run_export if export_pdf_vector is somehow missing (export() already checks this ­— belt and
-  // braces, since this method could in principle be called directly by a future caller).
-  private async _run_export_vector(job: PageBatchJob, filename: string): Promise<void> {
+  // Vector counterpart to _run_export: one VectorExportPage (current-frame boxes + rotation) per
+  // source page, handed to the adapter in one call — no rasterization on this path.
+  private async _run_export_vector(
+    job: PageBatchJob, filename: string, export_pdf_vector: NonNullable<RendererAdapter['export_pdf_vector']>,
+  ): Promise<void> {
     const ctrl = job.controller
-    if (!this._adapter.export_pdf_vector) { await this._run_export(job, filename); return }
-
     const pages: VectorExportPage[] = []
     for (let p = 0; p < this._ctx.page_count(); p++) {
-      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return }
       const sz = this._ctx.page_dims(p)
       const boxes = this._export_boxes_for_page(p, sz)
       pages.push({
-        orig_page: this._page_index.orig(p),
-        boxes,
+        orig_page: this._page_index.orig(p), boxes,
         page_w: sz.width, page_h: sz.height,
         rotation: this._ctx.document().rotation.get(p) ?? 0,
       })
-      for (let i = 0; i < boxes.length; i++) ctrl.advance()
+      ctrl.advance(boxes.length)
     }
-
     try {
-      const bytes = await this._adapter.export_pdf_vector(pages)
+      const bytes = await export_pdf_vector(pages)
+      if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return }
       this._download_pdf(bytes, filename)
     } catch (e) {
       fail_batch(ctrl, e)

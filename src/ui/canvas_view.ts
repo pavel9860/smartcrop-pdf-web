@@ -66,7 +66,8 @@ export class CanvasView {
   private _drag_notify_timer: ReturnType<typeof setTimeout> | null = null
   private _drag_notify_pending = false
 
-  constructor(model: AppModel) {
+  // `busy`: a job is running — crop gestures would change the document under it (spec-web §11).
+  constructor(model: AppModel, private readonly _busy: () => boolean) {
     this._model = model
     this.el = document.createElement('canvas')
     this.el.className = 'page-canvas'
@@ -329,6 +330,7 @@ export class CanvasView {
   }
 
   private _on_down = (ev: PointerEvent): void => {
+    if (this._busy()) return
     if (ev.button === 2) { this._cancel(); return }
     this._overlay_el.setPointerCapture(ev.pointerId)
     this._dragging = true

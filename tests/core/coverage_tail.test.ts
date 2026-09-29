@@ -101,20 +101,18 @@ describe('vector export (_run_export_vector, spec-web §10.3)', () => {
     expect(result).toBeInstanceOf(Ok)   // went through export_pdf (raster) instead, no throw
   })
 
-  it('cancelling before export_pdf_vector settles still resolves the job Cancelled', async () => {
-    // The page-building loop itself has no per-page await (unlike the raster path), so it always
-    // runs to completion synchronously in one turn before the first real await
-    // (adapter.export_pdf_vector); cancel() can only take externally-visible effect on the job's
-    // settled result at that point, not abort an in-flight export_pdf_vector call. This still
-    // covers the real, user-facing contract: cancelling mid-export must never resolve Ok/Failed.
+  it('cancelling while export_pdf_vector runs resolves Cancelled once it settles, with no download', async () => {
     const adapter = vector_adapter({
-      export_pdf_vector: () => new Promise(() => { /* never settles within this test */ }),
+      export_pdf_vector: () => new Promise(r => setTimeout(() => { r(new Uint8Array([1])) }, 5)),
     })
     const m = new AppModel(adapter)
     await m.load_files([new File(['x'], 'a.pdf')])
+    const downloads: Uint8Array[] = []
+    m.set_download_handlers(b => { downloads.push(b) }, b => { downloads.push(b) })
     const job = m.export('a.pdf')
     job.cancel()
     expect(await job.result()).toBeInstanceOf(Cancelled)
+    expect(downloads).toHaveLength(0)
   })
 
   it('resolves Failed when export_pdf_vector itself rejects', async () => {

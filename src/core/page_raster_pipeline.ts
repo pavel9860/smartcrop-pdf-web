@@ -30,71 +30,28 @@ export interface RasterContext {
 }
 
 export class PageRasterPipeline {
-  // Per-page version history: each page gets its OWN small LRU (capacity = undo_depth + 1 — the
-  // current combination plus as many prior ones as Undo can still reach), created lazily on first
-  // use. This is deliberately NOT one shared cache across pages — a shared capacity would evict
-  // OTHER pages' bitmaps just from paging through a long document, forcing a recompute on return
-  // that undoes the point of eager processing. Keyed by rotation (source) / the full processing
-  // intent (work) — content-addressed, so Undo/Redo re-hit an already-computed bitmap when it is
-  // still within reach instead of recomputing, and never serve stale content for a different
-  // combination. Eviction closes the bitmap to free memory — EXCEPT the one currently on screen
-  // (_current): closing a displayed/in-flight bitmap detaches it and the next drawImage throws
-  // InvalidStateError ("image source is detached").
-  private _source_versions = new Map<number, LRUCache<string, ImageBitmap>>()
-  private _work_versions   = new Map<number, LRUCache<string, ImageBitmap>>()
+  // One small LRU per page and step (capacity = undo depth + 1, so Undo/Redo re-hit what they can
+  // still reach), never one shared cache: paging through a long document must not evict other pages.
+  // Entries are content-addressed (rotation, dewarp, filter, strength, supersample in the key), so a
+  // changed setting resolves to a new entry instead of needing invalidation. Eviction closes the
+  // bitmap — except the one on screen (_current), which drawImage would otherwise find detached.
+  private _source_versions   = new Map<number, LRUCache<string, ImageBitmap>>()   // raw page, per rotation
+  private _dewarp_canonical  = new Map<number, LRUCache<string, ImageBitmap>>()   // ONNX result, rotation 0
+  private _dewarped_versions = new Map<number, LRUCache<string, ImageBitmap>>()   // it, rotated 90/180/270
+  private _work_versions     = new Map<number, LRUCache<string, ImageBitmap>>()   // filtered result
 
-  // The Dewarp&Deskew ONNX result at the page's UNROTATED (rotation=0) orientation — keyed by
-  // supersample only, never rotation. Computed exactly once per (page, supersample) no matter how
-  // many times the page is later rotated: rotate must never re-trigger the ONNX pass, only the
-  // Dewarp&Deskew button itself does (spec-web §7). `_dewarped_versions` below derives each
-  // rotation's view of this from a cheap bitmap rotation instead of re-running the model.
-  private _dewarp_canonical  = new Map<number, LRUCache<string, ImageBitmap>>()
-
-  // Dewarp-only intermediate AT THE PAGE'S CURRENT ROTATION (post-Dewarp&Deskew, pre-filter),
-  // keyed by rotation+supersample only (no filter component) — switching the filter while dewarp
-  // stays on reuses this instead of re-deriving it. Holds only the non-zero-rotation views: a
-  // rotation=0 request is served directly from `_dewarp_canonical` (see _get_dewarped) rather than
-  // duplicated in here too, avoiding two caches closing the same bitmap on eviction. Same
-  // version-bounded-per-page shape as _work_versions; an Undo/Redo that actually flips dewarp_on
-  // just resolves _work_key's `d0`/`d1` component to a different entry, no separate invalidation
-  // needed here either.
-  private _dewarped_versions = new Map<number, LRUCache<string, ImageBitmap>>()
-
-  // Pre-rendered output bitmaps for committed pages (keyed "page:split_idx"). Cheap to rebuild from
-  // the (separately cached) work bitmap — a crop/split is processing in the same sense as
-  // dewarp/filter (the cached entry is the actual cropped pixels, never a full page + remembered
-  // rectangle) — but unlike source/work it is not content-addressed or version-bounded: it is
-  // small (≤ MAX_SPLIT entries per page) and invalidate_output(p)/clear_output() are called at
-  // every site that can change what it should show (spec-web §7), so nothing here ever goes stale.
+  // Cropped/split preview bitmaps per committed page ("orig:split_idx"); invalidated explicitly
+  // wherever a crop changes (invalidate_output / clear_output).
   private _output_cache = new LRUCache<string, ImageBitmap>(Infinity,
     (_, b) => { if (b !== this._current) b.close() })
 
   // Currently displayed bitmap (synchronously available for view_snapshot)
   private _current: ImageBitmap | null = null
   private _loading = false
-  private readonly _prefetching = new Set<number>()
 
-  // In-flight-promise de-dup for the two expensive compute points below (source render, ONNX
-  // dewarp). Keyed identically to the resolved-value cache it guards (map identity + page + key),
-  // so a correct key match here is always a correct cache-key match too. Needed because get_work(p)
-  // has more than one real caller for the same page around the same time — ScanProcessingService's
-  // own batch warm AND AppModel's view-refresh both call it — and without this, both see a
-  // resolved-cache miss and both redundantly kick off the full (multi-second) pipeline before
-  // either finishes, roughly doubling observed cost for no benefit (the second result just
-  // overwrites the first's cache entry).
+  // In-flight computes by the same key as the cache: the view refresh, prefetch and a scan batch
+  // often ask for one page at once, and must share one (possibly multi-second) compute.
   private readonly _inflight = new Map<string, Promise<ImageBitmap>>()
-
-  private async _dedup(
-    inflight_key: string, compute: () => Promise<ImageBitmap>,
-  ): Promise<ImageBitmap> {
-    const pending = this._inflight.get(inflight_key)
-    if (pending) return pending
-    const promise = compute().finally(() => {
-      if (this._inflight.get(inflight_key) === promise) this._inflight.delete(inflight_key)
-    })
-    this._inflight.set(inflight_key, promise)
-    return promise
-  }
 
   constructor(
     private readonly _adapter: RendererAdapter,
@@ -146,12 +103,10 @@ export class PageRasterPipeline {
 
   invalidate_current(): void { this._current = null }
 
-  // Every cache is keyed by the ORIGINAL page index (PageIndexMap), not the logical position, so a
-  // Delete or its Undo never re-points a cached or in-flight raster at a different page.
-  private _version_cache(
-    map: Map<number, LRUCache<string, ImageBitmap>>, p: number,
-  ): LRUCache<string, ImageBitmap> {
-    const o = this._page_index.orig(p)
+  // Every cache and in-flight job is keyed by the ORIGINAL page index: the public entry points
+  // translate the logical page once, up front, so a Delete or its Undo landing mid-await can never
+  // re-point a result at a different page.
+  private _version_cache(map: Map<number, LRUCache<string, ImageBitmap>>, o: number): LRUCache<string, ImageBitmap> {
     let cache = map.get(o)
     if (!cache) {
       cache = new LRUCache<string, ImageBitmap>(this._ctx.undo_depth() + 1,
@@ -161,121 +116,62 @@ export class PageRasterPipeline {
     return cache
   }
 
+  // Cached-or-computed raster: one entry per (original page, key), one compute in flight at a time.
+  // Keys carry a per-step prefix (s/c/r/d), so they are unique across the four maps.
+  private _cached(
+    map: Map<number, LRUCache<string, ImageBitmap>>, o: number, key: string, compute: () => Promise<ImageBitmap>,
+  ): Promise<ImageBitmap> {
+    const cache = this._version_cache(map, o)
+    const hit = cache.get(key)
+    if (hit) return Promise.resolve(hit)
+    const id = `${o}|${key}`
+    const pending = this._inflight.get(id)
+    if (pending) return pending
+    const promise = compute().then(b => { cache.set(key, b); return b }).finally(() => {
+      if (this._inflight.get(id) === promise) this._inflight.delete(id)
+    })
+    this._inflight.set(id, promise)
+    return promise
+  }
+
   // Raw page raster (before scan processing), rendered once per (page, rotation) and cached.
-  async get_source(p: number): Promise<ImageBitmap> {
-    return this._get_source_at(p, this._ctx.rotation(p))
+  get_source(p: number): Promise<ImageBitmap> {
+    return this._source(this._page_index.orig(p), this._ctx.rotation(p))
   }
 
-  // Same as get_source, but at an EXPLICIT rotation rather than the page's current one — used to
-  // fetch the canonical (rotation=0) source Dewarp&Deskew's ONNX pass runs against, regardless of
-  // whatever rotation the page is currently displayed at (see _get_dewarped).
-  private async _get_source_at(p: number, rotation: number): Promise<ImageBitmap> {
-    const cache = this._version_cache(this._source_versions, p)
-    const key = String(rotation)
-    const cached = cache.get(key)
-    if (cached) return cached
-    return this._dedup(`src:${this._page_index.orig(p)}:${key}`, async () => {
+  private _source(o: number, rotation: number): Promise<ImageBitmap> {
+    return this._cached(this._source_versions, o, `s${rotation}`, () => {
       const dpi = this._ctx.mode() === Mode.SCANNED ? SRC_DPI : this._ctx.display_dpi()
-      // p is logical (post-delete); the adapter only knows original pdf.js page indices.
-      const orig = this._page_index.orig(p)
-      const b = !this._ctx.is_synthetic()
-        ? await this._adapter.get_source_image(orig, dpi, rotation)
-        : await this._adapter.make_synth_page(orig, SYNTH_W, SYNTH_H)
-      cache.set(key, b)
-      return b
+      return !this._ctx.is_synthetic()
+        ? this._adapter.get_source_image(o, dpi, rotation)
+        : this._adapter.make_synth_page(o, SYNTH_W, SYNTH_H)
     })
   }
 
+  // The page as shown: source, then (SCANNED) Dewarp&Deskew, then the filter — each step cached on
+  // its own, so a filter change reuses the dewarped raster and a rotate never re-runs the dewarp.
   async get_work(p: number): Promise<ImageBitmap> {
-    const slot = this._work_slot(p)
-    if (slot === 'source') {
-      // NORMAL, or a no-op intent: the work raster IS the source raster. Do NOT also store it in
-      // the work cache — the same bitmap in two close-on-evict caches gets double-closed,
-      // detaching a bitmap the other cache still serves (root of the "image source is detached"
-      // crash). It stays in the source cache.
-      return this.get_source(p)
-    }
-
-    const intent = this._ctx.process_intent(p)
+    const o = this._page_index.orig(p)
     const rotation = this._ctx.rotation(p)
-    const supersample = this._ctx.dewarp_supersample()
-
-    // Dewarp&Deskew dominates cost (multi-second CPU ONNX inference vs. the filter's ~200ms OpenCV
-    // pass) — resolve it through its own cache, keyed only by rotation+supersample (no filter
-    // component), so switching the filter while dewarp stays on reuses the dewarped raster instead
-    // of re-running the dewarp pass on every filter change.
-    // Resolve the target cache BEFORE any await (here and in every helper below): a wipe during the
-    // await (Delete, new file) must leave this result in the discarded cache, never the new one.
-    const cache = intent.filter ? this._version_cache(slot.map, p) : null
-    const base = intent.dewarp ? await this._get_dewarped(p, rotation, supersample) : await this.get_source(p)
-    // Dewarp-only (no filter): the dewarped raster IS the work result — same double-close hazard as
-    // the source-aliasing case above, don't also store it in _work_versions.
-    if (!intent.filter || !cache) return base
-
-    const cached = cache.get(slot.key)
-    if (cached) return cached
-
-    // dewarp:false — `base` already carries the dewarp step (or never needed one); this call does
-    // filter-only work.
-    const work = await this._adapter.get_work_image(base, { dewarp: false, filter: intent.filter }, supersample)
-    cache.set(slot.key, work)
-    return work
+    const intent = this._ctx.process_intent(p)
+    if (this._ctx.mode() !== Mode.SCANNED || (!intent.dewarp && !intent.filter)) return this._source(o, rotation)
+    const ss = this._ctx.dewarp_supersample()
+    const filter = intent.filter
+    const base = intent.dewarp ? await this._dewarped(o, rotation, ss) : await this._source(o, rotation)
+    if (!filter) return base
+    const key = `d${intent.dewarp ? 1 : 0}|f${filter[0]}-${filter[1]}|r${rotation}|s${ss}`
+    return this._cached(this._work_versions, o, key,
+      () => this._adapter.get_work_image(base, { dewarp: false, filter }, ss))
   }
 
-  // Which cache map + key get_work(p) resolves to for its CURRENT process_intent/rotation — the
-  // single source of truth for cache routing, used by get_work itself (the final work_versions
-  // step) and by prefetch's warmth check below, so the two can never independently drift on what
-  // counts as "already cached." Read-only: never creates a cache entry (unlike _version_cache).
-  private _work_slot(p: number): { map: Map<number, LRUCache<string, ImageBitmap>>; key: string } | 'source' {
-    if (this._ctx.mode() !== Mode.SCANNED) return 'source'
-    const intent = this._ctx.process_intent(p)
-    if (!intent.dewarp && !intent.filter) return 'source'
-    const rotation = this._ctx.rotation(p)
-    const supersample = this._ctx.dewarp_supersample()
-    if (!intent.filter) {
-      return rotation === 0
-        ? { map: this._dewarp_canonical, key: String(supersample) }
-        : { map: this._dewarped_versions, key: this._dewarped_key(rotation, supersample) }
-    }
-    return { map: this._work_versions, key: this._work_key(intent, rotation) }
-  }
-
-  // Resolves the page's Dewarp&Deskew result at its CURRENT rotation, deriving it from the
-  // canonical (rotation=0) ONNX result via a cheap bitmap rotation rather than re-running the
-  // model — rotate must never re-trigger Dewarp&Deskew's ONNX pass (spec-web §7).
-  private async _get_dewarped(p: number, rotation: number, supersample: number): Promise<ImageBitmap> {
-    const cache = this._version_cache(this._dewarped_versions, p)
-    const canonical = await this._get_dewarp_canonical(p, supersample)
+  // Dewarp&Deskew at the page's rotation: the ONNX pass runs once per (page, supersample) on the
+  // unrotated source; other rotations are a cheap bitmap rotation of that result (spec-web §7).
+  private async _dewarped(o: number, rotation: number, ss: number): Promise<ImageBitmap> {
+    const canonical = await this._cached(this._dewarp_canonical, o, `c${ss}`, async () =>
+      this._adapter.get_work_image(await this._source(o, 0), { dewarp: true, filter: null }, ss))
     if (rotation === 0) return canonical
-
-    const key = this._dewarped_key(rotation, supersample)
-    const cached = cache.get(key)
-    if (cached) return cached
-    const rotated = await this._adapter.rotate_bitmap(canonical, rotation)
-    cache.set(key, rotated)
-    return rotated
-  }
-
-  // The ONNX-processed Dewarp&Deskew result at rotation 0 — computed once per (page, supersample)
-  // no matter how many times the page is rotated afterward. `_dedup` covers the real case where
-  // two different callers (e.g. ScanProcessingService's warm and AppModel's view-refresh) both
-  // reach this for the same page around the same time — the second one awaits the first's
-  // in-flight compute instead of redundantly re-running the ONNX pass.
-  private async _get_dewarp_canonical(p: number, supersample: number): Promise<ImageBitmap> {
-    const cache = this._version_cache(this._dewarp_canonical, p)
-    const key = String(supersample)
-    const cached = cache.get(key)
-    if (cached) return cached
-    return this._dedup(`dwc:${this._page_index.orig(p)}:${key}`, async () => {
-      const src0 = await this._get_source_at(p, 0)
-      const dewarped = await this._adapter.get_work_image(src0, { dewarp: true, filter: null }, supersample)
-      cache.set(key, dewarped)
-      return dewarped
-    })
-  }
-
-  private _dewarped_key(rotation: number, supersample: number): string {
-    return `r${rotation}|s${supersample}`
+    return this._cached(this._dewarped_versions, o, `r${rotation}|s${ss}`,
+      () => this._adapter.rotate_bitmap(canonical, rotation))
   }
 
   // Fetches the page's work raster AND marks it as the on-screen bitmap in one step, so the
@@ -287,29 +183,11 @@ export class PageRasterPipeline {
     return work
   }
 
-  // Version key within a page's own cache = full intent (dewarp, filter mode/strength) + rotation +
-  // supersample: any change yields a different key, so a settings/rotation change never returns a
-  // stale raster (it re-processes into a new key instead) rather than needing an explicit
-  // invalidation call.
-  private _work_key(intent: PageProcessIntent, rotation: number): string {
-    const filt = intent.filter ? `${intent.filter[0]}-${intent.filter[1]}` : 'none'
-    return `d${intent.dewarp ? 1 : 0}|f${filt}|r${rotation}|s${this._ctx.dewarp_supersample()}`
-  }
-
   // Background-warms an adjacent page so next/prev is a cache hit instead of a blank "Loading…"
   // flash while the (potentially heavy, scanned-mode) work raster renders on demand.
   prefetch(p: number): void {
     if (p < 0 || p >= this._page_index.length) return
-    const o = this._page_index.orig(p)
-    if (this._prefetching.has(o)) return
-    const slot = this._work_slot(p)
-    const warm = slot === 'source'
-      ? (this._source_versions.get(o)?.has(String(this._ctx.rotation(p))) ?? false)
-      : (slot.map.get(o)?.has(slot.key) ?? false)
-    if (warm) return
-    this._prefetching.add(o)
     void this.get_work(p).catch(() => { /* best-effort warm */ })
-      .finally(() => { this._prefetching.delete(o) })
   }
 
   // Pre-render every split view's output bitmap for a committed page (so jumping between split

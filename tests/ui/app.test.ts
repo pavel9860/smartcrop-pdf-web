@@ -15,7 +15,6 @@ function failing_job(message: string): BatchJob {
   return {
     title: 'test job',
     total: 1,
-    display_total: 1,
     done: 0,
     cancel: (): void => { /* no-op */ },
     onProgress: (): void => { /* no-op */ },
@@ -108,7 +107,7 @@ describe('AppController progress for single-page jobs and module loading (spec-w
     vi.useFakeTimers()
     let finish: () => void = () => undefined
     const job: BatchJob = {
-      title: 'Dewarping…', total: 1, display_total: 1, done: 0,
+      title: 'Dewarping…', total: 1, done: 0,
       cancel: () => undefined, onProgress: () => undefined,
       result: () => new Promise(r => { finish = () => { r(new Failed(new ImagingError('x'))) } }),
     }
@@ -137,6 +136,32 @@ describe('AppController progress for single-page jobs and module loading (spec-w
     done()
     await loading
     expect(overlay.classList.contains('hidden')).toBe(true)
+    ctrl.destroy()
+  })
+})
+
+describe('AppController ignores commands while a job runs (spec-web §11)', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+  it('Ctrl+Z, Ctrl+S and Delete do nothing until the job ends', async () => {
+    stub_canvas_apis()
+    const root = mount()
+    const ctrl = new AppController(root, make_adapter())
+    await ctrl.model.load_files([new File(['%PDF'], 'a.pdf')])
+    await ctrl.refresh_all()
+    const undo = vi.spyOn(ctrl.model, 'undo')
+    const exp = vi.spyOn(ctrl.model, 'export')
+    let finish: () => void = () => undefined
+    ctrl.dispatch_job(() => ({
+      title: 'Dewarping…', total: 2, done: 0, cancel: () => undefined, onProgress: () => undefined,
+      result: () => new Promise(r => { finish = () => { r(new Failed(new ImagingError('x'))) } }),
+    }))
+    for (const key of ['z', 's']) window.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: true }))
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }))
+    expect(undo).not.toHaveBeenCalled()
+    expect(exp).not.toHaveBeenCalled()
+    expect(root.querySelector('[data-act="confirm"]')).toBeNull()
+    finish()
     ctrl.destroy()
   })
 })

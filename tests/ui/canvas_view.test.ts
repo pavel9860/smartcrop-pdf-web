@@ -11,7 +11,7 @@ describe('CanvasView wheel handling', () => {
     const root = mount()
     stub_canvas_apis()
     const model = await make_model({ page_count: 3 })
-    const cv = new CanvasView(model)
+    const cv = new CanvasView(model, () => false)
     root.appendChild(cv.el)
     cv.paint(model.view_snapshot())
     const overlay = root.querySelector<HTMLElement>('.overlay-canvas')!
@@ -26,7 +26,7 @@ describe('CanvasView wheel handling', () => {
     stub_canvas_apis()
     const model = await make_model({ page_count: 3 })
     model.next_page()
-    const cv = new CanvasView(model)
+    const cv = new CanvasView(model, () => false)
     root.appendChild(cv.el)
     cv.paint(model.view_snapshot())
     const overlay = root.querySelector<HTMLElement>('.overlay-canvas')!
@@ -40,7 +40,7 @@ describe('CanvasView wheel handling', () => {
     const root = mount()
     stub_canvas_apis()
     const model = await make_model({ page_count: 3 })
-    const cv = new CanvasView(model)
+    const cv = new CanvasView(model, () => false)
     root.appendChild(cv.el)
     cv.paint(model.view_snapshot())
     const overlay = root.querySelector<HTMLElement>('.overlay-canvas')!
@@ -49,5 +49,20 @@ describe('CanvasView wheel handling', () => {
     expect(model.view_position).toBe(1)
     overlay.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, metaKey: true }))
     expect(model.view_position).toBe(1)
+  })
+})
+
+describe('CanvasView while a job runs', () => {
+  it('starts no crop gesture', async () => {
+    stub_canvas_apis()
+    const model = await make_model()
+    const begin = vi.spyOn(model, 'begin_drag')
+    const cv = new CanvasView(model, () => true)
+    const root = mount()
+    root.appendChild(cv.el)
+    cv.paint(model.view_snapshot())
+    root.querySelector('.overlay-canvas')!.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }))
+    expect(begin).not.toHaveBeenCalled()
+    cv.destroy()
   })
 })

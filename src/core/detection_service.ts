@@ -4,6 +4,7 @@
 // same "shared state stays on AppModel, exposed live" pattern those already established. This
 // service owns the ALGORITHM (run detect over a page set, aggregate the union, refresh committed
 // crops), not the data.
+import { DEFAULT_OFFSETS } from './document_state'
 import type { Box } from './geometry'
 import {
   auto_crop_rect, centered_crop_rect, box_width, box_height, detection_union,
@@ -94,6 +95,7 @@ export class DetectionService {
     // still runs here — it protects _refresh_committed_crops_after_detect's `applied` writes
     // below, which remain undoable.
     this._history.push(this._ctx.document())
+    this._ctx.document().offsets = DEFAULT_OFFSETS   // a new live crop starts from zero offsets (§21 #27)
     const det = this._ctx.detection()
     for (const [p, box] of per_page_boxes) det.cache.set(p, box)
     this._ctx.set_detection({ cache: det.cache, union, auto_active: true })
@@ -149,6 +151,7 @@ export class DetectionService {
       // loops) — gated on elapsed time (PAINT_YIELD_INTERVAL_MS), not once per page.
       await yield_to_paint()
     }
+    if (ctrl.is_cancelled) { ctrl.complete(new Cancelled()); return null }   // cancelled during the last page
     return per_page_boxes
   }
 

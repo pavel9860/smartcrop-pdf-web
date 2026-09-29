@@ -90,7 +90,7 @@ export class AppController {
     this._canvas_col = requireEl(root, '.canvas-area')
 
     // Canvas + overlay
-    this._canvas_view = new CanvasView(this._model)
+    this._canvas_view = new CanvasView(this._model, () => this.busy)
     const stage = document.createElement('div')
     stage.className = 'canvas-stage'
     stage.appendChild(this._canvas_view.el)
@@ -142,7 +142,10 @@ export class AppController {
   // Command dispatch — the ONLY error catch sites (ARCHITECTURE §6)
   // ---------------------------------------------------------------------------
 
+  // While a job runs every command is ignored — buttons are disabled, and this also covers the
+  // keyboard shortcuts and file drops that reach here (spec-web §11: no command queueing).
   dispatch(command: () => void): void {
+    if (this.busy) return
     try {
       command()
     } catch (e) {
@@ -153,12 +156,14 @@ export class AppController {
   }
 
   dispatch_async(command: () => Promise<void>): void {
+    if (this.busy) return
     command()
       .then(() => void this._refresh_async())
       .catch((e: unknown) => { this._show_error(e); void this._refresh_async() })
   }
 
   dispatch_job(make_job: () => BatchJob): void {
+    if (this.busy) return
     let job: BatchJob
     try {
       job = make_job()
@@ -306,8 +311,6 @@ export class AppController {
       ev.preventDefault()
       depth = 0
       show(false)
-      // A batch job in flight must not have its document/history replaced out from under it.
-      if (this.busy) return
       const files = Array.from(ev.dataTransfer?.files ?? [])
       if (files.length) this.dispatch_async(() => this._model.load_files(files))
     })
@@ -491,6 +494,7 @@ export class AppController {
 
   // Public: shared by the Delete/Backspace keyboard shortcut and crop_panel.ts's Delete button.
   delete_selected_pages(): void {
+    if (this.busy) return
     // Deleting every page always fails (DeleteAllPagesError) — check first so that case gets a
     // plain info notice, not a confirm dialog for an action that was never going to happen.
     if (this._model.resolve_pages().length >= this._model.page_count()) {

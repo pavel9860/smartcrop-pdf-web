@@ -30,7 +30,6 @@ export interface PageOpsContext {
   recompute_union(cache: Map<number, Box>): Box | null
   current_page(): number
   set_current_page(p: number): void
-  sync_view_pos(): void
   page_count(): number
   split_count(): 1 | 2 | 4
 }
@@ -111,6 +110,5 @@ export class PageOpsService {
 
     this._raster.invalidate_current()
     this._ctx.set_current_page(follow_page(prev, next, this._ctx.current_page()))
-    this._ctx.sync_view_pos()
   }
 }

@@ -896,15 +896,18 @@ First use of a heavy module (OpenCV, the dewarp and text-line ONNX models) is re
 detail line under the message reads e.g. "Downloading dewarp model 3.1 / 8.4 MB" or "Loading image
 engine…". If no job is running at that moment (e.g. while a scan is being opened), the same card
 shows on its own, without Cancel, until loading finishes.
-Cancel sets a flag checked before each page and stops promptly with no partial file. While a batch
-is busy, controls are disabled and further clicks are ignored (no command queueing). A per-page
+Cancel sets a flag checked before each page (and before a job commits its result or file) and stops
+promptly with no partial file; the job counts as busy until its worker has actually stopped, so no
+new action can overlap a cancelled job still finishing its current page. While a batch
+is busy, controls are disabled and further clicks, keyboard shortcuts and file drops are ignored
+(no command queueing). A per-page
 exception surfaces as an error dialog (§19) and ends the batch cleanly.
 
 Raster export streams (§21 #9): each output page is rendered, then handed to `export.worker.ts`,
 which encodes it at once (JPEG/PNG/TIFF bytes, or a JPEG page added to the PDF) and releases the
 bitmap while the next page renders — at most two raw page bitmaps exist at any moment, however long
 the document, and only compressed bytes accumulate until the final PDF/zip is assembled. The bar
-therefore advances once per encoded page (`total === display_total`).
+therefore advances once per encoded page.
 
 ---
 

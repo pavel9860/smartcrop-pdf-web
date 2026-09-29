@@ -408,3 +408,12 @@ describe('split_rects_grid (spec §7.3, §9.6)', () => {
   })
 })
 
+
+describe('auto_crop_rect never inverts', () => {
+  it('shrinking offsets larger than the union stop at MIN_RECT', () => {
+    const r = auto_crop_rect({ x0: 50, y0: 50, x1: 60, y1: 60 }, { x0: 50, y0: 50, x1: 60, y1: 60 },
+      { left: -40, top: -40, right: -40, bottom: -40 }, 200, 300, true, true)
+    expect(r.x1 - r.x0).toBeGreaterThanOrEqual(MIN_RECT)
+    expect(r.y1 - r.y0).toBeGreaterThanOrEqual(MIN_RECT)
+  })
+})

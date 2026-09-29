@@ -55,7 +55,7 @@ export class AppModel {
   private _doc:     DocInfo | null = null
   private _mode:    Mode = Mode.NORMAL
   private _current_page = 0    // 0-based source page
-  private _view_pos = 1        // 1-based output-view position
+  private _split_idx = 0       // which committed split view of the current page is shown
 
   private _pages_mode   = PagesMode.ALL
   private _select_pattern = ''
@@ -160,7 +160,6 @@ export class AppModel {
       set_detection: set_detection_state,
       recompute_union: (cache): Box | null => this._detection.compute_union(cache),
       set_current_page: (p): void => { this._current_page = p },
-      sync_view_pos: (): void => { this._sync_view_pos() },
       page_count: (): number => this.page_count(),
       split_count: (): 1 | 2 | 4 => this._crop.split_count,
     })
@@ -206,7 +205,7 @@ export class AppModel {
     this._view = new ViewSnapshotBuilder(this._raster, this._crop, {
       ...page_ctx,
       ...detection_accessors,
-      view_pos: (): number => this._view_pos,
+      view_pos: (): number => this.view_position,
       view_total: (): number => this.view_total,
       page_count: (): number => this.page_count(),
     })
@@ -235,7 +234,7 @@ export class AppModel {
     this.document = default_document_state()
     this.history.clear()
     this._current_page = 0
-    this._view_pos = 1
+    this._split_idx = 0
     this._pages_mode = PagesMode.ALL
     this._select_pattern = ''
     this._current_follow = false
@@ -272,10 +271,15 @@ export class AppModel {
     return output_page_count(this.page_count(), this.document.applied)
   }
 
-  get view_position(): number { return this._view_pos }
+  // Derived, never stored: the current page's first output view plus the split view shown, so it
+  // can never disagree with the current page when committed crops change the view count.
+  get view_position(): number {
+    const views = this.document.applied.get(this._current_page)?.length ?? 1
+    return source_to_first_view(this._current_page, this.document.applied) + Math.min(this._split_idx, views - 1)
+  }
 
-  next_page(): void { this._go_to(this._view_pos + 1) }
-  prev_page(): void { this._go_to(this._view_pos - 1) }
+  next_page(): void { this._go_to(this.view_position + 1) }
+  prev_page(): void { this._go_to(this.view_position - 1) }
   jump_to_output_page(n: number): void { this._go_to(n) }
   go_to_page(p: number): void { this._go_to(source_to_first_view(p, this.document.applied)) }
   get current_page(): number { return this._current_page }
@@ -286,23 +290,14 @@ export class AppModel {
   private _go_to(pos: number): void {
     if (!this._doc) return
     const clamped = Math.max(1, Math.min(this.view_total, pos))
-    this._view_pos = clamped
-    const { src_page } = view_to_source(clamped, this.page_count(), this.document.applied)
+    const { src_page, split_idx } = view_to_source(clamped, this.page_count(), this.document.applied)
     this._current_page = src_page
+    this._split_idx = split_idx
     // Follow toggle: keep pattern in sync
     if (this._current_follow && this._pages_mode === PagesMode.SELECT) {
       this._select_pattern = String(src_page + 1)
     }
     this._invalidate_current_bitmap()
-  }
-
-  // Committed crops decide how many output views each page has; after any change to them, keep the
-  // current source page and put the position back on its first view if it now points elsewhere.
-  private _sync_view_pos(): void {
-    const { src_page } = view_to_source(this._view_pos, this.page_count(), this.document.applied)
-    if (this._view_pos > this.view_total || src_page !== this._current_page) {
-      this._view_pos = source_to_first_view(this._current_page, this.document.applied)
-    }
   }
 
   // ---------------------------------------------------------------------------
@@ -381,7 +376,6 @@ export class AppModel {
       }
     }
     this._drawn = null   // the drawn window became the crop across all pages (§12.2)
-    this._sync_view_pos()
   }
 
   // Anchors/offsets/keep-ratio/split/same-size, and the full drag gesture state machine
@@ -390,7 +384,7 @@ export class AppModel {
   set_anchor(left: boolean | null, top: boolean | null): void { this._crop.set_anchor(left, top) }
   set_drawn_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void { this._crop.set_drawn_offset(edge, value) }
   set_keep_ratio(on: boolean, ratio?: number): void { this._crop.set_keep_ratio(on, ratio) }
-  set_split(n: 1 | 2 | 4): void { this._crop.set_split(n); this._sync_view_pos() }
+  set_split(n: 1 | 2 | 4): void { this._crop.set_split(n) }
   set_same_size(on: boolean): void { this._crop.set_same_size(on) }
   begin_drag(px: number, py: number, tol: number): void { this._crop.begin_drag(px, py, tol) }
   update_drag(px: number, py: number): void { this._crop.update_drag(px, py) }
@@ -452,7 +446,6 @@ export class AppModel {
       this._current_page = follow_page(prev, state.pages, this._current_page)
       this._raster.invalidate_current()
     }
-    this._sync_view_pos()
   }
 
   get can_undo(): boolean { return this.history.can_undo }

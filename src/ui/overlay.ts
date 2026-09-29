@@ -38,8 +38,7 @@ export class ProgressOverlay {
   show(job: BatchJob, on_cancel: () => void): void {
     this._on_cancel = on_cancel
     this._title_el.textContent = job.title
-    this._display_total = job.display_total
-    this._el.classList.toggle('overlay--indeterminate', job.display_total <= 1)
+    this._el.classList.toggle('overlay--indeterminate', job.total <= 1)
     this._cancel_btn.classList.remove('hidden')
     this._update(0, job.total)
     this._el.classList.remove('hidden')
@@ -48,7 +47,6 @@ export class ProgressOverlay {
   // Module loading with no job running: message only, indeterminate, no Cancel.
   show_status(text: string): void {
     this._title_el.textContent = text
-    this._display_total = 0
     this._el.classList.add('overlay--indeterminate')
     this._cancel_btn.classList.add('hidden')
     this._el.classList.remove('hidden')
@@ -65,14 +63,9 @@ export class ProgressOverlay {
     this._on_cancel = null
   }
 
-  // display_total is the real, user-facing count (e.g. page count) — total may be inflated
-  // (image exports double it so the bar keeps moving through the encode phase) and must never
-  // show as "N / 2×pages" in the counter (bug: export progress). The bar still uses the full,
-  // possibly-inflated total/done so its width keeps animating smoothly through both phases.
-  private _display_total = 0
   private _update(done: number, total: number): void {
     const pct = total > 0 ? (done / total) * 100 : 0
     this._bar_el.style.width = `${pct.toFixed(1)}%`
-    this._counter_el.textContent = `${Math.min(done, this._display_total)} / ${this._display_total}`
+    this._counter_el.textContent = `${Math.min(done, total)} / ${total}`
   }
 }

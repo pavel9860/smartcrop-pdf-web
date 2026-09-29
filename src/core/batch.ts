@@ -17,13 +17,7 @@ export type ProgressCallback = (done: number, total: number) => void
 
 export interface BatchJob {
   readonly title: string
-  // `total` is the internal step count driving the progress BAR — image exports double it
-  // (render phase + encode phase) so the bar keeps moving instead of stalling at 100% during zip
-  // encoding (spec-web §11). `display_total` is the real, user-facing count (e.g. page count) the
-  // overlay's COUNTER text shows — equal to `total` unless a caller passes a distinct one, so a
-  // doubled internal total never reads as "2x more pages" to the user (bug: export progress).
   readonly total: number
-  readonly display_total: number
   readonly done:  number   // updated as work progresses
   cancel(): void
   onProgress(cb: ProgressCallback): void
@@ -41,7 +35,6 @@ export interface BatchController {
 export class PageBatchJob implements BatchJob {
   readonly title: string
   readonly total: number
-  readonly display_total: number
   get done(): number { return this._done }
   private _done = 0
 
@@ -50,18 +43,15 @@ export class PageBatchJob implements BatchJob {
   private _resolve!: (r: BatchResult) => void
   private readonly _promise: Promise<BatchResult>
 
-  constructor(title: string, total: number, display_total = total) {
+  constructor(title: string, total: number) {
     this.title = title
     this.total = total
-    this.display_total = display_total
     this._promise = new Promise<BatchResult>(res => { this._resolve = res })
   }
 
-  cancel(): void {
-    if (this._cancelled) return
-    this._cancelled = true
-    this._resolve(new Cancelled())
-  }
+  // Only requests the stop: the result resolves when the worker actually stops (it checks
+  // is_cancelled before each page), so nothing is still running once the UI goes idle.
+  cancel(): void { this._cancelled = true }
 
   onProgress(cb: ProgressCallback): void { this._cbs.push(cb) }
 
@@ -76,7 +66,7 @@ export class PageBatchJob implements BatchJob {
     this._done += n
     for (const cb of this._cbs) cb(this._done, this.total)
   }
-  complete = (r: BatchResult): void => { this._resolve(r) }
+  complete = (r: BatchResult): void => { this._resolve(this._cancelled ? new Cancelled() : r) }
 
   get controller(): BatchController { return this }
 }
@@ -88,9 +78,9 @@ export class PageBatchJob implements BatchJob {
 // controller on its own error paths; the .catch here is a safety net only, so a worker that
 // somehow rejects past that still resolves the job instead of becoming an unhandled rejection.
 export function start_batch(
-  title: string, total: number, worker: (job: PageBatchJob) => Promise<void>, display_total?: number,
+  title: string, total: number, worker: (job: PageBatchJob) => Promise<void>,
 ): PageBatchJob {
-  const job = new PageBatchJob(title, total, display_total)
+  const job = new PageBatchJob(title, total)
   worker(job).catch((e: unknown) => { fail_batch(job.controller, e) })
   return job
 }

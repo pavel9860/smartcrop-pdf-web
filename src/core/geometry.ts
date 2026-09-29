@@ -138,8 +138,9 @@ export function auto_crop_rect(
 
   const left   = left_base - (offsets.left   / 100) * page_w
   const top    = top_base  - (offsets.top    / 100) * page_h
-  const right  = left_base + W + (offsets.right  / 100) * page_w
-  const bottom = top_base  + H + (offsets.bottom / 100) * page_h
+  // Shrinking offsets larger than the union would invert the box: it stops at MIN_RECT instead.
+  const right  = Math.max(left + MIN_RECT, left_base + W + (offsets.right  / 100) * page_w)
+  const bottom = Math.max(top + MIN_RECT, top_base  + H + (offsets.bottom / 100) * page_h)
 
   return clamp_box_shift({ x0: left, y0: top, x1: right, y1: bottom }, page_w, page_h)
 }

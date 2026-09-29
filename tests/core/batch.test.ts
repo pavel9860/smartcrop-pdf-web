@@ -17,19 +17,17 @@ describe('PageBatchJob', () => {
     expect(await job.result()).toBeInstanceOf(Ok)
   })
 
-  it('cancel resolves Cancelled and is idempotent', async () => {
+  it('cancel only requests the stop: the result waits for the worker, then reads Cancelled', async () => {
     const job = new PageBatchJob('t', 1)
+    let settled = false
+    void job.result().then(() => { settled = true })
     job.cancel()
-    job.cancel()                       // second call early-returns
-    expect(await job.result()).toBeInstanceOf(Cancelled)
+    job.cancel()
+    await Promise.resolve()
+    expect(settled).toBe(false)                    // the worker is still running
     expect(job.controller.is_cancelled).toBe(true)
-  })
-
-  it('display_total defaults to total; a distinct value stays independent of it', () => {
-    expect(new PageBatchJob('t', 5).display_total).toBe(5)
-    const job = new PageBatchJob('t', 20, 10)   // e.g. image export: total doubled, display_total real
-    expect(job.total).toBe(20)
-    expect(job.display_total).toBe(10)
+    job.controller.complete(new Ok())              // worker finishes its page, reports Ok
+    expect(await job.result()).toBeInstanceOf(Cancelled)
   })
 })
 

@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest'
 import { CropController, type CropContext } from '@core/crop_controller'
 import { History } from '@core/history'
 import { default_document_state, type DocumentState } from '@core/document_state'
-import { scale_box, unscale_box, type Box } from '@core/geometry'
+import { scale_box, unscale_box, MIN_RECT, type Box } from '@core/geometry'
 import type { PageSize } from '@core/model'
 
 function ctx(overrides: Partial<CropContext> = {}): { doc: DocumentState; ctx: CropContext } {
@@ -259,5 +259,18 @@ describe('CropController.reset', () => {
     expect(c.anchor_top).toBe(true)
     expect(c.same_size).toBe(false)
     expect(c.draw_rect).toBeNull()
+  })
+})
+
+describe('CropController.set_drawn_offset never inverts the window', () => {
+  it('an edge typed past the opposite edge stops MIN_RECT short of it', () => {
+    let drawn: Box | null = unscale_box({ x0: 20, y0: 30, x1: 180, y1: 270 }, 200, 300)
+    const { c } = controller({ drawn: () => drawn, set_drawn: (b) => { drawn = b } })
+    c.set_drawn_offset('L', 95)                          // right edge is at 90% (R = 10)
+    const r = scale_box(drawn!, 200, 300)
+    expect(r.x1 - r.x0).toBeCloseTo(MIN_RECT)
+    c.set_drawn_offset('B', 99)
+    const r2 = scale_box(drawn!, 200, 300)
+    expect(r2.y1 - r2.y0).toBeCloseTo(MIN_RECT)
   })
 })

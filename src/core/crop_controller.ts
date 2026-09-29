@@ -86,14 +86,16 @@ export class CropController {
   set_drawn_offset(edge: 'L' | 'T' | 'R' | 'B', value: number): void {
     const o = this.drawn_offsets()
     if (!o) return   // no drawn window to edit
-    const clamped = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, value))
-    const next: Offsets = {
-      left:   edge === 'L' ? clamped : o.left,
-      top:    edge === 'T' ? clamped : o.top,
-      right:  edge === 'R' ? clamped : o.right,
-      bottom: edge === 'B' ? clamped : o.bottom,
-    }
     const sz = this._ctx.page_dims(this._ctx.current_page())
+    // An edge may not cross its opposite edge: it stops MIN_RECT short of it (edges are % of page).
+    const room_x = 100 - (MIN_RECT / sz.width) * 100, room_y = 100 - (MIN_RECT / sz.height) * 100
+    const v = Math.max(-OFFSET_LIMIT, Math.min(OFFSET_LIMIT, value))
+    const next: Offsets = {
+      left:   edge === 'L' ? Math.min(v, room_x - o.right) : o.left,
+      top:    edge === 'T' ? Math.min(v, room_y - o.bottom) : o.top,
+      right:  edge === 'R' ? Math.min(v, room_x - o.left) : o.right,
+      bottom: edge === 'B' ? Math.min(v, room_y - o.top) : o.bottom,
+    }
     this._set_drawn_on(drawn_offset_rect(next, sz.width, sz.height), sz)
   }
 

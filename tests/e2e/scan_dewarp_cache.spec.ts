@@ -33,10 +33,9 @@ test('1-page SCANNED doc: Dewarp&Deskew, then switching filters, completes and r
   await load_scan(page)
   const canvas = page.locator('canvas.page-canvas')
 
-  // display_total===1 (single page) skips the progress overlay entirely (app.ts dispatch_job), so
-  // it can't be used as a completion signal here (it may never appear, or may already be hidden
-  // before the async work finishes) — poll the checksum itself instead, which is both the real
-  // completion signal and the correctness assertion.
+  // The progress overlay appears only after OVERLAY_SHOW_DELAY_MS, so it is not a reliable
+  // completion signal — poll the checksum itself instead, which is both the real completion signal
+  // and the correctness assertion.
   const timed = async (click: () => Promise<void>): Promise<number> => {
     const before = await checksum(canvas)
     const t0 = Date.now()
