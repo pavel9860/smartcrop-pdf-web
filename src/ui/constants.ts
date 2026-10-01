@@ -35,5 +35,9 @@ export const LOADING_FONT_SIZE        = 16
 export type DetailPanel = 'settings' | 'help' | null
 
 // Theme names
+// Built-in manual opened when no file is open (spec-web §1), served from public/
+export const MANUAL_FILE = 'manual.pdf'
+
+// Theme names
 export const THEMES = ['dark', 'light', 'system'] as const
 export type Theme = typeof THEMES[number]

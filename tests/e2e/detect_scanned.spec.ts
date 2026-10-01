@@ -4,6 +4,7 @@
 // (an incidental component, e.g. a footer rule line) instead of the actual text block. Asserted via
 // window.__model (DEV hook, main.ts) — the detected box's geometry isn't otherwise DOM-visible.
 import { test, expect, type Page } from '@playwright/test'
+import { open_app } from './open_app'
 import { fileURLToPath } from 'node:url'
 
 interface Snap {
@@ -23,7 +24,7 @@ const SCAN_IMAGE = fileURLToPath(
   new URL('../assets/Learning Python_sample_content.png', import.meta.url))
 
 test('auto-detect on a real scanned text page finds the body text, not a sliver', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', SCAN_IMAGE)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
 

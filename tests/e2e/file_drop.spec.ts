@@ -1,12 +1,13 @@
 // Dropping files anywhere on the window (here: the sidebar, outside the canvas) opens them.
 import { test, expect } from '@playwright/test'
+import { open_app } from './open_app'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const JPG = readFileSync(fileURLToPath(new URL('../assets/Deep Work_sample.jpg', import.meta.url))).toString('base64')
 
 test('dropping an image on the sidebar opens it', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   const transfer = await page.evaluateHandle((b64) => {
     const dt = new DataTransfer()
     const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0))

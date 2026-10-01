@@ -161,26 +161,11 @@ input, select { font: inherit; }
   position: relative;
   background: var(--bg-canvas);
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
 }
 
-/* The page (canvases + overlays, all absolutely positioned) above the page strip. */
-.canvas-stage { position: relative; flex: 1; min-height: 0; }
-
-/* ── Page strip (page_strip.ts, spec-web §3) ── */
-.page-strip {
-  flex-shrink: 0; display: flex; gap: 8px; padding: 8px 12px;
-  overflow-x: auto; overflow-y: hidden;
-  background: var(--bg-chrome); border-top: 1px solid var(--border);
-}
-.page-strip__item {
-  flex: none; min-width: 32px; height: 28px; padding: 0 6px;
-  border: 2px solid var(--border); border-radius: var(--radius);
-  background: var(--bg-card); color: var(--text-dim); font-size: 0.75rem; cursor: pointer;
-}
-.page-strip__item.selected { border-color: var(--accent-dim); }
-.page-strip__item.current { border-color: var(--accent); color: var(--text-primary); }
 
 .page-canvas, .overlay-canvas {
   display: block;

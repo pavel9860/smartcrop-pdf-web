@@ -20,7 +20,7 @@ const CACHE_NAME = `smartcrop-${CACHE_VERSION}`
 // deploy root, or a GitHub Pages project-page subpath — self.registration.scope, never a
 // hardcoded '/'). Everything else (the hashed JS/CSS bundle, wasm, ONNX models, cmaps, fonts)
 // populates the cache the first time the running app actually requests it.
-const SHELL_PATHS = ['', 'index.html', 'favicon.svg', 'site.webmanifest']
+const SHELL_PATHS = ['', 'index.html', 'favicon.svg', 'site.webmanifest', 'manual.pdf']
 
 self.addEventListener('install', (event) => {
   self.skipWaiting()

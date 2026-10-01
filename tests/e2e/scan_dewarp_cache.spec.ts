@@ -10,6 +10,7 @@
 // mocked unit test can't: it doesn't hang, and the rendered result actually changed — the same
 // "generous ceiling, not a tight budget" pattern as tests/e2e/scan_simd.spec.ts.
 import { test, expect, type Page, type Locator } from '@playwright/test'
+import { open_app } from './open_app'
 import { fileURLToPath } from 'node:url'
 
 const SCAN_JPG = fileURLToPath(new URL('../assets/ml_interview_warped_001.jpg', import.meta.url))
@@ -22,7 +23,7 @@ const checksum = (canvas: Locator): Promise<number> => canvas.evaluate((el: HTML
 })
 
 async function load_scan(page: Page): Promise<void> {
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', SCAN_JPG)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
   await expect(page.locator('#nav-total')).toHaveText('/ 1')

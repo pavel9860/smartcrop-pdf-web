@@ -10,6 +10,13 @@ import { make_adapter, make_bitmap } from '../core/harness'
 
 export { make_adapter, make_bitmap }
 
+/** Waits out AppController's async startup load (the manual; under jsdom its fetch fails, so the
+ * placeholder), then refreshes. */
+export async function started(ctrl: AppController): Promise<void> {
+  await vi.waitFor(() => { if (!ctrl.model.has_document) throw new Error('startup load pending') })
+  await ctrl.refresh_all()
+}
+
 /** jsdom has no canvas backend (no getContext('2d')) and no ResizeObserver — CanvasView (and
  * anything that constructs one, e.g. AppController) only needs permissive stand-ins for both, not
  * real implementations. Call in a test that constructs one; pair with vi.restoreAllMocks() +

@@ -1,14 +1,15 @@
-// Smoke / layout (spec-web §3). Verifies the three-column shell renders, the synthetic
-// document (SYNTH_PAGES = 1) is loaded on start, and every primary control is present.
+// Smoke / layout (spec-web §3). Verifies the three-column shell renders, the manual is loaded on
+// start (spec-web §1), and every primary control is present.
 import { test, expect } from '@playwright/test'
+import { open_app } from './open_app'
 
-test.beforeEach(async ({ page }) => { await page.goto('/') })
+test.beforeEach(async ({ page }) => { await open_app(page) })
 
-test('three-column layout renders with the synthetic document', async ({ page }) => {
+test('three-column layout renders with the manual open', async ({ page }) => {
   await expect(page.locator('.sidebar')).toBeVisible()
   await expect(page.locator('.canvas-area')).toBeVisible()
   await expect(page.locator('canvas.page-canvas')).toBeVisible()
-  await expect(page.locator('#nav-total')).toHaveText('/ 1')
+  await expect(page.locator('#pp-docname')).toContainText('manual')
 })
 
 test('closed detail panel does not paint over the sidebar (regression)', async ({ page }) => {
@@ -24,9 +25,9 @@ test('closed detail panel does not paint over the sidebar (regression)', async (
   expect(panel_box.x).toBeGreaterThanOrEqual(sidebar_box.x + sidebar_box.width)
 })
 
-test('deleting the only page shows a themed info dialog, not a toast or a confirm prompt (bug 18)', async ({ page }) => {
-  // The synthetic placeholder doc has exactly 1 page with "All" selected by default — deleting it
-  // would always fail (DeleteAllPagesError), so it's checked before any dialog opens.
+test('deleting every page shows a themed info dialog, not a toast or a confirm prompt (bug 18)', async ({ page }) => {
+  // "All" is selected by default — deleting every page always fails (DeleteAllPagesError), so it's
+  // checked before any dialog opens.
   await page.click('#cp-delete')
   // .overlay__card also matches the always-in-DOM (but class="hidden" by default) progress
   // overlay (overlay.ts) — scope to the OK button, which only the alert dialog has.

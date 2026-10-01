@@ -1,5 +1,6 @@
 // Phone layout (spec-web §3): full-width page, sidebar as a slide-out drawer, visible page arrows.
 import { test, expect, devices, type Page } from '@playwright/test'
+import { open_app } from './open_app'
 import { fileURLToPath } from 'node:url'
 
 const JPGS = ['ml_interview_warped_001.jpg', 'ml_interview_warped_002.jpg']
@@ -11,7 +12,7 @@ const sidebar_x = (page: Page): Promise<number> =>
   page.locator('.sidebar').evaluate(el => el.getBoundingClientRect().x)
 
 test('the sidebar is a drawer: closed by default, opened by the toggle, closed by the backdrop', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   const vw = page.viewportSize()!.width
   await expect.poll(() => sidebar_x(page)).toBeLessThan(-100)
   expect((await page.locator('.page-canvas').boundingBox())!.width).toBeGreaterThan(vw * 0.9)
@@ -32,7 +33,7 @@ test('the sidebar is a drawer: closed by default, opened by the toggle, closed b
 
 test('desktop width keeps the fixed sidebar and hides the toggle', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 })
-  await page.goto('/')
+  await open_app(page)
   await expect(page.locator('.drawer-toggle')).toBeHidden()
   expect(await sidebar_x(page)).toBe(0)
 })

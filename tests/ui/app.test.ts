@@ -7,7 +7,7 @@ import type { BatchJob } from '@core/batch'
 import { Failed } from '@core/batch'
 import { ImagingError } from '@core/errors'
 import { PagesMode } from '@core/enums'
-import { mount, make_adapter, stub_canvas_apis } from './harness'
+import { mount, make_adapter, stub_canvas_apis, started } from './harness'
 import { OVERLAY_SHOW_DELAY_MS } from '@ui/constants'
 import { with_module_status } from '@pdf/module_status'
 
@@ -30,7 +30,7 @@ describe('AppController.dispatch_job', () => {
     stub_canvas_apis()
     const root = mount()
     ctrl = new AppController(root, make_adapter())
-    await ctrl.refresh_all()   // let the initial synthetic-doc load_files([]) settle
+    await started(ctrl)
 
     ctrl.dispatch_job(() => failing_job('boom'))
     await new Promise(resolve => setTimeout(resolve, 0))   // let job.result().then(...) run
@@ -103,7 +103,7 @@ describe('AppController progress for single-page jobs and module loading (spec-w
     stub_canvas_apis()
     const root = mount()
     const ctrl = new AppController(root, make_adapter())
-    await ctrl.refresh_all()
+    await started(ctrl)
     vi.useFakeTimers()
     let finish: () => void = () => undefined
     const job: BatchJob = {
@@ -182,7 +182,7 @@ describe('AppController keyboard shortcuts', () => {
     stub_canvas_apis()
     const root = mount()
     ctrl = new AppController(root, make_adapter(3))
-    await ctrl.refresh_all()
+    await started(ctrl)
     ctrl.model.jump_to_output_page(2)
     expect(ctrl.model.view_position).toBe(2)
 
@@ -200,7 +200,7 @@ describe('AppController keyboard shortcuts', () => {
     stub_canvas_apis()
     const root = mount()
     ctrl = new AppController(root, make_adapter(3))
-    await ctrl.refresh_all()
+    await started(ctrl)
     ctrl.model.jump_to_output_page(2)
     const input = document.createElement('input')
     document.body.appendChild(input)
@@ -218,7 +218,7 @@ describe('AppController keyboard shortcuts', () => {
     stub_canvas_apis()
     const root = mount()
     ctrl = new AppController(root, make_adapter(3))
-    await ctrl.refresh_all()
+    await started(ctrl)
     // A selection smaller than "every page" — deleting everything takes the alert() branch
     // instead of confirm() (crop_panel.ts pre-checks this same condition).
     ctrl.model.set_pages_mode(PagesMode.SELECT)
@@ -240,7 +240,7 @@ describe('AppController.delete_selected_pages / trigger_export', () => {
     stub_canvas_apis()
     const root = mount()
     ctrl = new AppController(root, make_adapter(3))
-    await ctrl.refresh_all()   // default Pages selection is All == every page
+    await started(ctrl)   // default Pages selection is All == every page
 
     ctrl.delete_selected_pages()
     expect(root.querySelector('.overlay__card .confirm-actions [data-act="confirm"]')).toBeNull()
@@ -252,7 +252,7 @@ describe('AppController.delete_selected_pages / trigger_export', () => {
     stub_canvas_apis()
     const root = mount()
     ctrl = new AppController(root, make_adapter(3))
-    await ctrl.refresh_all()
+    await started(ctrl)
     ctrl.model.set_pages_mode(PagesMode.SELECT)
     ctrl.model.set_select_pattern('1')
     const count_before = ctrl.model.page_count()
@@ -267,7 +267,7 @@ describe('AppController.delete_selected_pages / trigger_export', () => {
     stub_canvas_apis()
     const root = mount()
     ctrl = new AppController(root, make_adapter(3))
-    await ctrl.refresh_all()
+    await started(ctrl)
     ctrl.model.set_pages_mode(PagesMode.SELECT)
     ctrl.model.set_select_pattern('1')
 
@@ -281,10 +281,42 @@ describe('AppController.delete_selected_pages / trigger_export', () => {
     stub_canvas_apis()
     const root = mount()
     ctrl = new AppController(root, make_adapter(3))
-    await ctrl.refresh_all()
+    await started(ctrl)
     expect(ctrl.busy).toBe(false)
 
     ctrl.trigger_export()
     expect(ctrl.busy).toBe(true)   // dispatch_job set a current job synchronously
+  })
+})
+
+describe('AppController startup manual (spec-web §1)', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+  function start(): { ctrl: AppController; respond: () => void; read: ReturnType<typeof vi.fn> } {
+    stub_canvas_apis()
+    const read = vi.fn(() => Promise.resolve(new Blob(['%PDF'])))
+    let respond = (): void => undefined
+    vi.stubGlobal('fetch', () => new Promise<Response>(r => { respond = () => { r({ ok: true, blob: read } as unknown as Response) } }))
+    return { ctrl: new AppController(mount(), make_adapter()), respond: () => { respond() }, read }
+  }
+
+  it('opens the manual when no file is open', async () => {
+    const { ctrl, respond } = start()
+    const load = vi.spyOn(ctrl.model, 'load_files')
+    respond()
+    await vi.waitFor(() => { expect(load).toHaveBeenCalledOnce() })
+    expect(load.mock.calls[0]![0].map(f => f.name)).toEqual(['manual.pdf'])
+    ctrl.destroy()
+  })
+
+  it('keeps a file opened before the manual arrives', async () => {
+    const { ctrl, respond, read } = start()
+    await ctrl.model.load_files([new File(['%PDF'], 'a.pdf')])
+    const load = vi.spyOn(ctrl.model, 'load_files')
+    respond()
+    await vi.waitFor(() => { expect(read).toHaveBeenCalled() })
+    await new Promise(r => setTimeout(r, 0))
+    expect(load).not.toHaveBeenCalled()
+    ctrl.destroy()
   })
 })

@@ -2,6 +2,7 @@
 // each split region and writes the result into crop_rects, instead of being disabled at split > 1.
 // Asserted via window.__model (DEV hook, main.ts) — crop_rects geometry isn't otherwise DOM-visible.
 import { test, expect, type Page } from '@playwright/test'
+import { open_app, MANUAL_PAGES } from './open_app'
 import { fileURLToPath } from 'node:url'
 
 interface Box { x0: number; y0: number; x1: number; y1: number }
@@ -14,17 +15,12 @@ const readCropRects = (page: Page): Promise<Box[]> => page.evaluate(() => {
 
 const NORMAL_PDF = fileURLToPath(new URL('../assets/Deep Work.pdf', import.meta.url))
 
-// Waits for the real multi-page document to finish loading. The mode badge alone is NOT a valid
-// wait condition here — the synthetic placeholder document is already NORMAL by default, so
-// `expect(#pp-badge).toHaveText('NORMAL')` is trivially true before the load even starts and
-// doesn't wait for anything (a real bug in an earlier version of this test: it let split-detect
-// run against the still-loading 1-page placeholder, and only some of that page's 190-page-real
-// counterpart's data, depending on how the race happened to land — flaky and misleading, not
-// exercising split-detect against the real document at all).
+// Waits for the 190-page document to replace the manual. The NORMAL badge is no wait condition:
+// the manual is NORMAL too.
 async function loaded(page: Page): Promise<void> {
   await page.waitForFunction(
-    () => (window as unknown as { __model?: { page_count(): number } }).__model!.page_count() > 1,
-    null, { timeout: 15_000 },
+    (n) => (window as unknown as { __model?: { page_count(): number } }).__model!.page_count() > n,
+    MANUAL_PAGES, { timeout: 15_000 },
   )
 }
 
@@ -51,7 +47,7 @@ async function detectOnePage(
 }
 
 test('auto-detect at split=2 detects independently within each region', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', NORMAL_PDF)
   await loaded(page)
   await expect(page.locator('#cp-detect')).toBeEnabled()   // never gated by split > 1 (spec §4.5)
@@ -69,7 +65,7 @@ test('auto-detect at split=2 detects independently within each region', async ({
 })
 
 test('regression: the two windows meet exactly at the split boundary — no gap', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', NORMAL_PDF)
   await loaded(page)
 
@@ -80,7 +76,7 @@ test('regression: the two windows meet exactly at the split boundary — no gap'
 })
 
 test('regression: result is identical regardless of which page was open when Auto-detect was pressed', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', NORMAL_PDF)
   await loaded(page)
 
@@ -96,7 +92,7 @@ test('regression: result is identical regardless of which page was open when Aut
 })
 
 test('same_size ON gives every split region the same width and height', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', NORMAL_PDF)
   await loaded(page)
 

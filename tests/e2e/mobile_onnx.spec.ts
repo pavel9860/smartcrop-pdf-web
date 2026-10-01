@@ -3,6 +3,7 @@
 // broken navigator.gpu so ORT's WebGPU build fails and create_onnx_session must fall back, and once
 // on SwiftShader-emulated WebGPU so concurrent WebGPU session builds are exercised for real.
 import { test, expect, devices, type Locator } from '@playwright/test'
+import { open_app } from './open_app'
 import { fileURLToPath } from 'node:url'
 
 const SCAN_JPG = fileURLToPath(new URL('../assets/ml_interview_warped_001.jpg', import.meta.url))
@@ -32,7 +33,7 @@ for (const [name, init] of Object.entries(GPU_SETUPS)) {
     test.skip(browserName !== 'chromium', 'Android Chrome regression')
     test.setTimeout(240_000)
     await page.addInitScript(init)
-    await page.goto('/')
+    await open_app(page)
     await page.click('.drawer-toggle')                   // phone layout: controls live in the drawer
     await page.setInputFiles('#pp-file', SCAN_JPG)
     await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })

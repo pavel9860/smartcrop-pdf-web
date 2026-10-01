@@ -3,6 +3,7 @@
 // Asserts no error dialog appears, the page counter stays in range, and the saved zip holds one
 // image per output view.
 import { test, expect, type Page } from '@playwright/test'
+import { open_app } from './open_app'
 import { fileURLToPath } from 'node:url'
 import { unzipSync } from 'fflate'
 import { readFileSync } from 'node:fs'
@@ -27,7 +28,7 @@ async function step(page: Page, action: () => Promise<void>): Promise<void> {
 
 test('mixed action sequence on mixed-size scans ends in a correct Save', async ({ page }) => {
   test.setTimeout(240_000)
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', FILES)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
   await expect(page.locator('#nav-total')).toHaveText('/ 3')

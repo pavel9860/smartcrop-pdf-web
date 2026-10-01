@@ -4,6 +4,7 @@
 // SIMD disassembly check and the Node timing in tests/perf/scan_speed.test.ts (see
 // vendor/opencv-js-simd/BUILD.md for that verification method).
 import { test, expect } from '@playwright/test'
+import { open_app } from './open_app'
 import { fileURLToPath } from 'node:url'
 
 // An image file (not a PDF) always classifies SCANNED (spec §4) and exercises the identical
@@ -12,7 +13,7 @@ const SCAN_PDF = fileURLToPath(
   new URL('../assets/Learning Python_sample_content.png', import.meta.url))
 
 test('a scanned PDF loads as SCANNED mode and the B/W filter renders correctly', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', SCAN_PDF)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
 

@@ -120,7 +120,7 @@ export class AppModel {
     this._raster = new PageRasterPipeline(_adapter, this._page_index, {
       mode: (): Mode => this._mode,
       display_dpi: (): number => this._display_dpi,
-      is_synthetic: (): boolean => this.is_placeholder,
+      is_synthetic: (): boolean => this._doc === null || !!this._doc.synthetic,
       rotation: (p): number => this.document.rotation.get(p) ?? 0,
       process_intent: (p): PageProcessIntent => this._page_process_intent(p),
       dewarp_supersample: (): number => this.settings.dewarp_supersample,
@@ -281,11 +281,6 @@ export class AppModel {
   next_page(): void { this._go_to(this.view_position + 1) }
   prev_page(): void { this._go_to(this.view_position - 1) }
   jump_to_output_page(n: number): void { this._go_to(n) }
-  go_to_page(p: number): void { this._go_to(source_to_first_view(p, this.document.applied)) }
-  get current_page(): number { return this._current_page }
-
-  // True while no real file is open (the placeholder page, spec-web §1).
-  get is_placeholder(): boolean { return this._doc === null || !!this._doc.synthetic }
 
   private _go_to(pos: number): void {
     if (!this._doc) return

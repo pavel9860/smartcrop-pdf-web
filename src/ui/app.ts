@@ -14,12 +14,11 @@ import { CropPanel } from './panels/crop_panel'
 import { ScanPanel } from './panels/scan_panel'
 import { OutputPanel } from './panels/output_panel'
 import { NavBar } from './nav_bar'
-import { PageStrip } from './page_strip'
 import { DetailPanel } from './detail_panel'
 import { apply_theme } from './theme'
 import type { DetailPanel as DetailPanelType } from './constants'
 import {
-  FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX, ZOOM_PRESETS, OVERLAY_SHOW_DELAY_MS,
+  FONT_SIZE_MIN, FONT_SIZE_MAX, FONT_SIZE_DEFAULT, UI_SCALE_MIN, UI_SCALE_MAX, ZOOM_PRESETS, OVERLAY_SHOW_DELAY_MS, MANUAL_FILE,
 } from './constants'
 import { requireEl } from './dom'
 import { load_output_prefs, save_output_prefs } from './persist'
@@ -56,7 +55,6 @@ export class AppController {
   private readonly _canvas_view: CanvasView
   private readonly _overlay: ProgressOverlay
   private readonly _drop_zone: HTMLElement
-  private readonly _page_strip: PageStrip
   private readonly _pages_panel: PagesPanel
   private readonly _crop_panel: CropPanel
   private readonly _scan_panel: ScanPanel
@@ -91,12 +89,8 @@ export class AppController {
 
     // Canvas + overlay
     this._canvas_view = new CanvasView(this._model, () => this.busy)
-    const stage = document.createElement('div')
-    stage.className = 'canvas-stage'
-    stage.appendChild(this._canvas_view.el)
-    this._canvas_col.appendChild(stage)
-    this._page_strip = new PageStrip(this._canvas_col, this._model, this)
-    this._wire_drawer(root, stage)
+    this._canvas_col.appendChild(this._canvas_view.el)
+    this._wire_drawer(root)
     this._overlay = new ProgressOverlay(this._canvas_col)
     this._off_module_status = on_module_status(s => { this._on_module_status(s) })
 
@@ -131,11 +125,16 @@ export class AppController {
     // Global keyboard shortcuts (spec §21)
     window.addEventListener('keydown', this._on_shortcut)
 
-    // Start with synthetic placeholder document (frozen spec §1: shown when no file is
-    // open). load_files([]) with no prior files yields the SYNTH_PAGES-page demo doc; the
-    // prior code only called _refresh_async(), leaving has_document false and view_total 0.
+    // With no file open the manual is the document (spec-web §1); the blank placeholder only if
+    // it can't be fetched.
     apply_theme('dark')
-    this.dispatch_async(() => this._model.load_files([]))
+    this.dispatch_async(() => this._open_manual())
+  }
+
+  private async _open_manual(): Promise<void> {
+    const res = await fetch(import.meta.env.BASE_URL + MANUAL_FILE).catch(() => null)
+    const files = res?.ok ? [new File([await res.blob()], MANUAL_FILE, { type: 'application/pdf' })] : []
+    if (!this._model.has_document) await this._model.load_files(files)
   }
 
   // ---------------------------------------------------------------------------
@@ -274,7 +273,6 @@ export class AppController {
     this._crop_panel.refresh(this._model, busy)
     this._output_panel.refresh(this._model, busy)
     this._nav_bar.refresh(this._model, busy)
-    this._page_strip.refresh(this._model)
     this._detail_panel.refresh(this._model, this._ui_config)
   }
 
@@ -284,7 +282,7 @@ export class AppController {
 
   // Phone layout (spec-web §3): the sidebar is a slide-out drawer, toggled by a button over the
   // canvas and closed by tapping the backdrop. Only visible below the CSS phone breakpoint.
-  private _wire_drawer(root: HTMLElement, stage: HTMLElement): void {
+  private _wire_drawer(root: HTMLElement): void {
     const toggle = document.createElement('button')
     toggle.className = 'drawer-toggle btn-icon'
     toggle.title = 'Controls'
@@ -292,7 +290,7 @@ export class AppController {
     toggle.textContent = '☰'
     const backdrop = document.createElement('div')
     backdrop.className = 'drawer-backdrop'
-    stage.append(toggle, backdrop)
+    this._canvas_col.append(toggle, backdrop)
     toggle.addEventListener('click', () => { root.classList.toggle('drawer-open') })
     backdrop.addEventListener('click', () => { root.classList.remove('drawer-open') })
   }

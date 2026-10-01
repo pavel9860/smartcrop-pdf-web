@@ -3,6 +3,7 @@
 // one part of the fix that is a pointer-pixel mapping (canvas_view crop_origin) and so cannot be
 // unit-tested — it is asserted here through window.__model (DEV hook, main.ts).
 import { test, expect, type Page } from '@playwright/test'
+import { open_app } from './open_app'
 
 interface Snap {
   page_w: number
@@ -32,7 +33,7 @@ async function drag(page: Page, ox: number, oy: number,
 }
 
 test('drawing on a committed page stays cropped and never flips to the full page', async ({ page }) => {
-  await page.goto('/')
+  await open_app(page)
   const canvas = page.locator('canvas.page-canvas')
   await expect(canvas).toBeVisible()
   const box = await canvas.boundingBox()

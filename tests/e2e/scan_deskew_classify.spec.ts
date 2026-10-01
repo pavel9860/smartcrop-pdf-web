@@ -8,6 +8,7 @@
 // server for it to fetch the model from, same reason dewarp.ts's real ONNX inference is e2e-only,
 // never perf-tested).
 import { test, expect, type Page, type Locator } from '@playwright/test'
+import { open_app } from './open_app'
 import { fileURLToPath } from 'node:url'
 
 const SKEW_ONLY_JPG = fileURLToPath(new URL(
@@ -56,7 +57,7 @@ const ink_aspect = (canvas: Locator): Promise<number> => canvas.evaluate((el: HT
 async function run_dewarp(page: Page, file: string): Promise<{ canvas: Locator; models: string[] }> {
   const models: string[] = []
   page.on('request', r => { if (r.url().includes('/models/')) models.push(r.url()) })
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', file)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
   await expect(page.locator('#nav-total')).toHaveText('/ 1')
@@ -84,7 +85,7 @@ test('a real skewed scan is corrected via DBNet + vanishing-point, not always-ON
 
 test('the same scan rotated 90deg is corrected without undoing the 90deg orientation', async ({ page }) => {
   test.setTimeout(180_000)
-  await page.goto('/')
+  await open_app(page)
   await page.setInputFiles('#pp-file', ROTATED_SCAN_PNG)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
   const aspect_before = await ink_aspect(page.locator('canvas.page-canvas'))
