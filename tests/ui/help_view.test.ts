@@ -21,7 +21,7 @@ describe('HelpView', () => {
 
   it('About shows the package.json version', () => {
     new HelpView(root)
-    expect(root.textContent).toContain('version 1.0.4')
+    expect(root.textContent).toContain('version 1.3.2')
   })
 
   it('clicking a contents entry scrolls to its section', () => {

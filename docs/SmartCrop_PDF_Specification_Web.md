@@ -276,7 +276,7 @@ page count — a committed split expands one source page into N views (§7.6), s
 every split in order and the counter always matches what will be exported. Prev disables on the
 first output page, Next on the last.
 
-Help's **About** section names the app version — `package.json` `version` (currently 1.0.4), the one
+Help's **About** section names the app version — `package.json` `version` (currently 1.3.2), the one
 source, injected at build time as `__APP_VERSION__`.
 
 ---
