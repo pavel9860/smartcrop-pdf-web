@@ -31,14 +31,9 @@ test('a scanned PDF loads as SCANNED mode and the B/W filter renders correctly',
 
   const t0 = Date.now()
   await page.click('#sp-bw')
-  // The overlay shows only once a job outlasts OVERLAY_SHOW_DELAY_MS — best-effort wait, the real
-  // completion signal below (overlay hidden again) is what's timed.
-  await page.locator('.overlay').first().waitFor({ state: 'visible', timeout: 3_000 }).catch(() => {})
-  await page.locator('.overlay').first().waitFor({ state: 'hidden', timeout: 30_000 })
+  // The repaint is the completion signal: the filter actually changed the page, not a no-op.
+  await expect.poll(() => canvas.evaluate(checksum), { timeout: 30_000 }).not.toBe(before)
   const elapsed_ms = Date.now() - t0
-
-  const after = await canvas.evaluate(checksum)
-  expect(after).not.toBe(before)   // filter actually changed the rendered page, not a no-op
 
   console.log(`[scan_simd] B/W filter over the ${SCAN_PDF} pages: ${elapsed_ms} ms (in-browser, chromium/firefox)`)
   // Generous ceiling — this asserts "didn't hang / didn't fall back to something absurd", the

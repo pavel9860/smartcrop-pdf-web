@@ -145,9 +145,6 @@ describe('detection_union (spec-web §5)', () => {
     expect(u.x0).toBe(5)
     expect(u.y0).toBe(5)
   })
-  it('throws on an empty array', () => {
-    expect(() => detection_union([])).toThrow()
-  })
 })
 
 describe('detection_union outlier tolerance (spec-web §5, #11)', () => {

@@ -29,13 +29,10 @@ test('auto-detect on a real scanned text page finds the body text, not a sliver'
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
 
   await page.click('#cp-detect')
-  await expect(page.locator('.overlay')).toHaveCount(1)
-  await page.locator('.overlay').first().waitFor({ state: 'hidden', timeout: 15_000 }).catch(() => {})
+  await expect.poll(async () => (await readSnap(page)).overlay.some(o => o.kind === 'auto'), { timeout: 15_000 }).toBe(true)
 
   const snap = await readSnap(page)
-  const auto = snap.overlay.find(o => o.kind === 'auto')
-  expect(auto?.box).toBeDefined()
-  const box = auto!.box!
+  const box = snap.overlay.find(o => o.kind === 'auto')!.box!
 
   const w = box.x1 - box.x0, h = box.y1 - box.y0
   // The bug produced a ~1px-tall sliver; a real text page's content spans a large majority of

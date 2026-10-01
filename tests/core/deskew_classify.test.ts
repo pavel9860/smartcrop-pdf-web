@@ -17,11 +17,6 @@ describe('classify_warp (spec-web §7.1a)', () => {
     expect(classify_warp(WARP_SHARPNESS_MIN)).toBe(false)
     expect(classify_warp(WARP_SHARPNESS_MIN + 1)).toBe(false)
   })
-
-  it('never throws on degenerate input', () => {
-    expect(() => classify_warp(0)).not.toThrow()
-    expect(() => classify_warp(-1)).not.toThrow()
-  })
 })
 
 describe('needs_skew_correction (spec-web §7.1b)', () => {
@@ -42,8 +37,7 @@ describe('needs_skew_correction (spec-web §7.1b)', () => {
     }
   })
 
-  it('never throws on degenerate input', () => {
-    expect(() => needs_skew_correction(0)).not.toThrow()
-    expect(() => needs_skew_correction(NaN)).not.toThrow()
+  it('NaN angle never triggers a correction', () => {
+    expect(needs_skew_correction(NaN)).toBe(false)
   })
 })

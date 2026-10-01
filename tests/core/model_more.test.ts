@@ -173,6 +173,7 @@ describe('gesture misses fall through', () => {
     m.begin_drag(1000, 1000, 3)      // far from the live auto handle
     m.update_drag(150, 250)
     m.end_drag()
-    expect(m.view_snapshot()).toBeDefined()
+    expect(m.view_snapshot().overlay.map(o => o.kind)).toEqual(['committed'])   // drawn window replaces the auto box
+    expect(m.view_snapshot().overlay[0]!.box).toEqual({ x0: 150, y0: 250, x1: 200, y1: 300 })
   })
 })
