@@ -2,26 +2,14 @@
 // delete, independent of AppModel (which exercises it indirectly through its own suite).
 import { describe, it, expect } from 'vitest'
 import { PageOpsService, type PageOpsContext, type DetectionState } from '@core/page_ops_service'
-import { split_rects_grid } from '@core/geometry'
+import { split_rects_grid, union_box } from '@core/geometry'
 import { PageIndexMap } from '@core/page_index_map'
-import { PageRasterPipeline } from '@core/page_raster_pipeline'
+import type { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { History } from '@core/history'
 import { default_document_state, type DocumentState } from '@core/document_state'
 import { DeleteAllPagesError } from '@core/errors'
-import { Mode } from '@core/enums'
-import type { RendererAdapter, DocInfo, PageSize } from '@core/model'
-import { make_adapter } from './harness'
-
-function bmp(w = 100, h = 100): ImageBitmap { return { width: w, height: h, close: (): void => {} } }
-function adapter(page_count = 3): RendererAdapter {
-  return {
-    ...make_adapter(page_count),
-    get_source_image: () => Promise.resolve(bmp()),
-    rotate_bitmap: (b) => Promise.resolve(b),
-    render_output_image: () => Promise.resolve(bmp()),
-    detect_content_box: (_i, w, h) => Promise.resolve({ x0: 0, y0: 0, x1: w, y1: h }),
-  }
-}
+import type { PageSize } from '@core/model'
+import { make_adapter, make_raster, bmp } from './harness'
 
 function setup(page_count = 3): {
   svc: PageOpsService
@@ -34,12 +22,7 @@ function setup(page_count = 3): {
 } {
   const idx = new PageIndexMap()
   idx.reset(page_count)
-  const raster = new PageRasterPipeline(adapter(page_count), idx, {
-    mode: () => Mode.NORMAL, display_dpi: () => 96, is_synthetic: () => false,
-    rotation: () => 0, process_intent: () => ({ dewarp: false, filter: null }),
-    dewarp_supersample: () => 1,
-    undo_depth: () => 2,
-  })
+  const raster = make_raster(make_adapter({ page_count }), idx)
   const doc = default_document_state()
   doc.pages = Array.from({ length: page_count }, (_, i) => i)
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
@@ -50,14 +33,7 @@ function setup(page_count = 3): {
     page_dims: (): PageSize => ({ width: 200, height: 300 }),
     detection: () => detection,
     set_detection: (d) => { detection.cache = d.cache; detection.union = d.union; detection.auto_active = d.auto_active },
-    recompute_union: (cache) => {
-      if (cache.size === 0) return null
-      const boxes = [...cache.values()]
-      return boxes.reduce((a, b) => ({
-        x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0),
-        x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1),
-      }))
-    },
+    recompute_union: cache => cache.size ? union_box([...cache.values()]) : null,
     current_page: () => current_page.v,
     set_current_page: (p) => { current_page.v = p },
     page_count: () => idx.length,
@@ -79,21 +55,15 @@ describe('PageOpsService.rotate', () => {
     expect(doc.rotation.get(0)).toBe(0)   // 90*4 wraps to 0
   })
 
-  it('rotates a committed crop box CW along with the page', () => {
-    const { svc, doc } = setup()
-    doc.applied.set(0, [{ x0: 0, y0: 0, x1: 100, y1: 50 }])
+  it('rotates the committed crop and the cached detection CW with the page, rebuilding the union', () => {
+    const { svc, doc, detection } = setup()
+    const b = { x0: 0, y0: 0, x1: 100, y1: 50 }
+    doc.applied.set(0, [b])
+    detection.cache.set(0, b)
+    detection.union = b
     svc.rotate([0])
-    const rotated = doc.applied.get(0)![0]!
-    expect(rotated).not.toEqual({ x0: 0, y0: 0, x1: 100, y1: 50 })
-  })
-
-  it('rotates a cached detected box and rebuilds the union when one exists', () => {
-    const { svc, detection } = setup()
-    detection.cache.set(0, { x0: 0, y0: 0, x1: 100, y1: 50 })
-    detection.union = { x0: 0, y0: 0, x1: 100, y1: 50 }
-    svc.rotate([0])
-    expect(detection.cache.get(0)).not.toEqual({ x0: 0, y0: 0, x1: 100, y1: 50 })
-    expect(detection.union).not.toBeNull()
+    const cw = { x0: 250, y0: 0, x1: 300, y1: 100 }
+    expect([doc.applied.get(0), detection.cache.get(0), detection.union]).toEqual([[cw], cw, cw])
   })
 
   it('resets offsets', () => {
@@ -105,8 +75,7 @@ describe('PageOpsService.rotate', () => {
 
   it('invalidates the page\'s crop/split output preview (rotated box coordinates no longer match it)', async () => {
     const { svc, raster } = setup()
-    await raster.prerender_output_views(
-      0, [{ x0: 0, y0: 0, x1: 100, y1: 100 }], { width: 200, height: 300 }, bmp())
+    await raster.prerender_output_views(0, [{ x0: 0, y0: 0, x1: 100, y1: 100 }], { width: 200, height: 300 }, bmp())
     expect(raster.output_at(0, 0)).not.toBeNull()
 
     svc.rotate([0])
@@ -162,11 +131,11 @@ describe('PageOpsService.delete', () => {
 
   it('rebuilds the union from surviving detected pages when auto_active was on', () => {
     const { svc, detection } = setup(3)
-    detection.cache.set(1, { x0: 0, y0: 0, x1: 50, y1: 50 })
+    detection.cache.set(0, { x0: 0, y0: 0, x1: 90, y1: 90 })
+    detection.cache.set(1, { x0: 10, y0: 10, x1: 50, y1: 50 })
     detection.auto_active = true
     svc.delete([0])
-    expect(detection.auto_active).toBe(true)
-    expect(detection.union).not.toBeNull()
+    expect([detection.auto_active, detection.union]).toEqual([true, { x0: 10, y0: 10, x1: 50, y1: 50 }])
   })
 
   it('moves current_page to a surviving page when its own page is deleted', () => {

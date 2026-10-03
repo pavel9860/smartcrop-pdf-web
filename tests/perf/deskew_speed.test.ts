@@ -17,25 +17,15 @@
 // e2e-timed) < 1s/page.
 import { describe, it, expect, beforeAll } from 'vitest'
 import { DESKEW_MAX_DEG, DESKEW_CLASSIFY_DOWNSCALE_PX } from '@core/constants'
+import { ensure_cv, cv } from '@pdf/cv'
+import { estimate_deskew } from '@pdf/deskew'
+import { estimate_vanishing_point, local_angle_from_vp, fold_line_angle } from '@pdf/vanishing_point'
+import { apply_vp_correction } from '@pdf/vp_correct'
+import { bench, PAGE_W, PAGE_H } from './bench'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-let cv: any
-
-async function load_cv(): Promise<any> {
-  const mod: any = await import('@techstark/opencv-js')
-  const inst = mod.default ?? mod
-  if (inst.Mat) return inst
-  await new Promise<void>((resolve) => {
-    inst.onRuntimeInitialized = (): void => resolve()
-    const poll = setInterval(() => { if (inst.Mat) { clearInterval(poll); resolve() } }, 20)
-    setTimeout(() => { clearInterval(poll); resolve() }, 20_000)
-  })
-  return inst
-}
-
-const PAGE_W = 1240
-const PAGE_H = 1755
+beforeAll(async () => { await ensure_cv() })
 
 // Dense rows of synthetic "text" (Hershey-font glyphs via cv.putText) — deterministic, no font/
 // canvas dependency. Real-scan-like line spacing so the row-sum profile has genuine valleys.
@@ -88,31 +78,21 @@ function warp_mat_test(mat: any, amplitude = 20, freq = 1.6): any {
   return out
 }
 
-function bench(fn: () => void, iters: number): number {
-  for (let i = 0; i < 2; i++) fn()
-  const t0 = performance.now()
-  for (let i = 0; i < iters; i++) fn()
-  return (performance.now() - t0) / iters
-}
-
 describe('warp classifier (spec-web §7.1a, §16 budgets)', () => {
   let flat: any, skewed_2_3: any, warped: any
 
-  beforeAll(async () => {
-    cv = await load_cv()
+  beforeAll(() => {
     flat = make_text_page()
     skewed_2_3 = rotate_mat_test(flat, 2.3)
     warped = warp_mat_test(flat)
   })
 
-  it('detects the injected rotation angle within 0.1deg', async () => {
-    const { estimate_deskew } = await import('@pdf/deskew')
+  it('detects the injected rotation angle within 0.1deg', () => {
     const { angle_deg } = estimate_deskew(skewed_2_3, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG)
     expect(Math.abs(angle_deg - (-2.3))).toBeLessThan(0.1)
   })
 
-  it('sharpness separates flat/skewed pages from a warped page', async () => {
-    const { estimate_deskew } = await import('@pdf/deskew')
+  it('sharpness separates flat/skewed pages from a warped page', () => {
     const flat_result = estimate_deskew(flat, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG)
     const skewed_result = estimate_deskew(skewed_2_3, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG)
     const warped_result = estimate_deskew(warped, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG)
@@ -122,8 +102,7 @@ describe('warp classifier (spec-web §7.1a, §16 budgets)', () => {
     expect(warped_result.sharpness).toBeLessThan(flat_result.sharpness)
   })
 
-  it('classifier runs under the 100ms/page budget (spec-web §16) — flag if exceeded', async () => {
-    const { estimate_deskew } = await import('@pdf/deskew')
+  it('classifier runs under the 100ms/page budget (spec-web §16) — flag if exceeded', () => {
     const ms = bench(() => estimate_deskew(skewed_2_3, DESKEW_CLASSIFY_DOWNSCALE_PX, DESKEW_MAX_DEG), 10)
     console.log(`[perf] warp classifier: ${ms.toFixed(1)} ms/page @ ${PAGE_W}x${PAGE_H}`)
     if (ms >= 100) {
@@ -134,10 +113,6 @@ describe('warp classifier (spec-web §7.1a, §16 budgets)', () => {
 })
 
 describe('vanishing-point math (spec-web §7.1b) — direct geometry, no DBNet', () => {
-  beforeAll(async () => {
-    cv = await load_cv()
-  })
-
   // Builds a segment through (x, y) exactly along the direction implied by a known VP — self-
   // consistent synthetic data to test the ESTIMATOR's fidelity to the model it assumes, distinct
   // from DBNet's real-world detection accuracy (proven separately, see file header).
@@ -152,8 +127,7 @@ describe('vanishing-point math (spec-web §7.1b) — direct geometry, no DBNet',
     return [{ x: x - ux * half_len, y: y - uy * half_len }, { x: x + ux * half_len, y: y + uy * half_len }]
   }
 
-  it('recovers a known pure-rotation VP (at infinity) from clean segments', async () => {
-    const { estimate_vanishing_point, local_angle_from_vp } = await import('@pdf/vanishing_point')
+  it('recovers a known pure-rotation VP (at infinity) from clean segments', () => {
     const true_angle = 2.3
     const true_v: readonly [number, number, number] =
       [Math.cos(true_angle * Math.PI / 180), Math.sin(true_angle * Math.PI / 180), 0]
@@ -168,8 +142,7 @@ describe('vanishing-point math (spec-web §7.1b) — direct geometry, no DBNet',
     expect(Math.abs(recovered_angle - true_angle)).toBeLessThan(0.05)
   })
 
-  it('PROSAC/MSAC stay robust to a minority of outlier segments', async () => {
-    const { estimate_vanishing_point, local_angle_from_vp } = await import('@pdf/vanishing_point')
+  it('PROSAC/MSAC stay robust to a minority of outlier segments', () => {
     const true_angle = -1.5
     const true_v: readonly [number, number, number] =
       [Math.cos(true_angle * Math.PI / 180), Math.sin(true_angle * Math.PI / 180), 0]
@@ -188,16 +161,14 @@ describe('vanishing-point math (spec-web §7.1b) — direct geometry, no DBNet',
     expect(Math.abs(recovered_angle - true_angle)).toBeLessThan(0.1)
   })
 
-  it('folds a line orientation to (-90, 90] regardless of which sign the estimator returns', async () => {
-    const { fold_line_angle } = await import('@pdf/vanishing_point')
+  it('folds a line orientation to (-90, 90] regardless of which sign the estimator returns', () => {
     expect(fold_line_angle(0)).toBeCloseTo(0, 5)
     expect(fold_line_angle(179.9)).toBeCloseTo(-0.1, 5)
     expect(fold_line_angle(-179.9)).toBeCloseTo(0.1, 5)
     expect(fold_line_angle(90)).toBeCloseTo(90, 5)
   })
 
-  it('returns null rather than throwing on too few segments', async () => {
-    const { estimate_vanishing_point } = await import('@pdf/vanishing_point')
+  it('returns null rather than throwing on too few segments', () => {
     expect(estimate_vanishing_point([], [], [])).toBeNull()
     expect(estimate_vanishing_point(
       [[{ x: 0, y: 0 }, { x: 1, y: 1 }]], [0.9], [1],
@@ -208,15 +179,12 @@ describe('vanishing-point math (spec-web §7.1b) — direct geometry, no DBNet',
 describe('VP-based correction (spec-web §7.1b) — direct geometry, no DBNet', () => {
   let flat: any, skewed_2_3: any
 
-  beforeAll(async () => {
-    cv = await load_cv()
+  beforeAll(() => {
     flat = make_text_page()
     skewed_2_3 = rotate_mat_test(flat, 2.3)
   })
 
-  it('a pure-rotation VP straightens a skewed page (re-measured via the classic-CV classifier)', async () => {
-    const { apply_vp_correction } = await import('@pdf/vp_correct')
-    const { estimate_deskew } = await import('@pdf/deskew')
+  it('a pure-rotation VP straightens a skewed page (re-measured via the classic-CV classifier)', () => {
     // VP constructed directly (not detected) — isolates the correction math from DBNet. Matches
     // estimate_deskew's own convention (verified by the "detects the injected rotation angle"
     // test above): a page rotated by +2.3deg is DETECTED at -2.3deg, and that detected value is
@@ -229,8 +197,7 @@ describe('VP-based correction (spec-web §7.1b) — direct geometry, no DBNet', 
     expect(Math.abs(angle_deg)).toBeLessThan(0.2)
   })
 
-  it('runs well under the 1s/page budget for the correction step alone (spec-web §16)', async () => {
-    const { apply_vp_correction } = await import('@pdf/vp_correct')
+  it('runs well under the 1s/page budget for the correction step alone (spec-web §16)', () => {
     const true_v: readonly [number, number, number] =
       [Math.cos(2.3 * Math.PI / 180), Math.sin(2.3 * Math.PI / 180), 0]
     const ms = bench(() => apply_vp_correction(skewed_2_3.clone(), true_v).delete(), 5)
@@ -241,8 +208,7 @@ describe('VP-based correction (spec-web §7.1b) — direct geometry, no DBNet', 
     expect(ms).toBeLessThan(1000)
   })
 
-  it('content genuinely rotated ~90deg (e.g. fed sideways) keeps that orientation — only the small residual skew is corrected, never a coarse reorientation', async () => {
-    const { apply_vp_correction } = await import('@pdf/vp_correct')
+  it('content genuinely rotated ~90deg (e.g. fed sideways) keeps that orientation — only the small residual skew is corrected, never a coarse reorientation', () => {
     // A blank canvas with one small marker, off-center — isolates position tracking from the
     // dense text page's own edge churn (which saturates any whole-image pixel-diff metric within
     // a couple of degrees either way, making it useless for distinguishing "1deg" from "90deg").

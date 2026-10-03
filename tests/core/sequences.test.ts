@@ -6,23 +6,17 @@ import { Mode, FilterMode, PagesMode } from '@core/enums'
 import { Failed, type BatchJob } from '@core/batch'
 import { SmartCropError } from '@core/errors'
 import type { Box } from '@core/geometry'
-import { make_adapter, make_bitmap, FILE, recording_sink } from './harness'
+import { make_adapter, FILE, recording_sink, rng } from './harness'
 
 const SIZES = [{ width: 200, height: 300 }, { width: 420, height: 297 }, { width: 150, height: 150 }, { width: 612, height: 792 }]
 const EPS = 1e-6
 
-function rng(seed: number): () => number {
-  let s = seed >>> 0
-  return () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 2 ** 32 }
-}
-
 interface Harness { adapter: RendererAdapter; violations: string[]; exported: () => number }
 
 function adapter(mode: Mode, page_count: number): Harness {
-  const base = make_adapter(page_count, mode)
+  const base = make_adapter({ mode, page_sizes: Array.from({ length: page_count }, (_, i) => SIZES[i % SIZES.length]!) })
   const violations: string[] = []
   let exported = 0
-  const sizes = Array.from({ length: page_count }, (_, i) => SIZES[i % SIZES.length]!)
   const inside = (b: Box, w: number, h: number): boolean =>
     b.x0 >= -EPS && b.y0 >= -EPS && b.x1 <= w + EPS && b.y1 <= h + EPS && b.x1 > b.x0 && b.y1 > b.y0
   return {
@@ -30,16 +24,10 @@ function adapter(mode: Mode, page_count: number): Harness {
     exported: () => exported,
     adapter: {
       ...base,
-      load_files: files => Promise.resolve({ page_count, page_sizes: sizes, file_names: files.map(f => f.name), mode }),
-      get_source_image: (orig, _dpi, rotation) => {
-        const s = sizes[orig]!
-        return Promise.resolve(rotation % 180 ? make_bitmap(s.height, s.width) : make_bitmap(s.width, s.height))
-      },
-      get_work_image: src => Promise.resolve(make_bitmap(src.width, src.height)),
-      render_output_image: (src, box, w, h) => {
+      render_output_image: (src, box, w, h, ...rest) => {
         if (!inside(box, w, h)) violations.push(`render box ${JSON.stringify(box)} outside ${w}x${h}`)
         if (Math.abs(src.width / src.height - w / h) > 0.02) violations.push(`raster ${src.width}x${src.height} vs page ${w}x${h}`)
-        return Promise.resolve(make_bitmap(Math.max(1, Math.round(box.x1 - box.x0)), Math.max(1, Math.round(box.y1 - box.y0))))
+        return base.render_output_image(src, box, w, h, ...rest)
       },
       detect_content_box: (_i, w, h, _mode, region) => {
         const r = region ?? { x0: 0, y0: 0, x1: w, y1: h }

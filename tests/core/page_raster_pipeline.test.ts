@@ -2,54 +2,24 @@
 // raster cache/fetch collaborator, independent of AppModel (which exercises it indirectly through
 // its own extensive suite — this file targets the pipeline's own contract in isolation).
 import { describe, it, expect } from 'vitest'
-import { PageRasterPipeline, type RasterContext } from '@core/page_raster_pipeline'
 import { PageIndexMap } from '@core/page_index_map'
 import { Mode, FilterMode } from '@core/enums'
-import type { RendererAdapter, DocInfo, PageSize } from '@core/model'
+import type { RendererAdapter, PageSize } from '@core/model'
+import type { RasterContext } from '@core/page_raster_pipeline'
 import type { PageProcessIntent } from '@core/document_state'
-import { make_adapter } from './harness'
+import { make_adapter, make_raster, bmp } from './harness'
 
-function bmp(w = 100, h = 100): ImageBitmap {
-  return { width: w, height: h, close: (): void => {} }
-}
-
-function ctx(overrides: Partial<RasterContext> = {}): RasterContext {
-  return {
-    mode: () => Mode.NORMAL,
-    display_dpi: () => 96,
-    is_synthetic: () => false,
-    rotation: () => 0,
-    process_intent: (): PageProcessIntent => ({ dewarp: false, filter: null }),
-    dewarp_supersample: () => 1,
-    undo_depth: () => 2,
-    ...overrides,
-  }
-}
-
-function adapter(overrides: Partial<RendererAdapter> = {}): RendererAdapter {
-  return {
-    ...make_adapter(1),
-    get_source_image: () => Promise.resolve(bmp()),
-    get_work_image: () => Promise.resolve(bmp()),
-    rotate_bitmap: (b, degrees) => Promise.resolve(
-      degrees % 180 === 90 ? bmp(b.height, b.width) : bmp(b.width, b.height)),
-    render_output_image: (_s, b) => Promise.resolve(bmp(b.x1 - b.x0, b.y1 - b.y0)),
-    make_synth_page: (_i, w, h) => Promise.resolve(bmp(w, h)),
-    ...overrides,
-  }
-}
-
-function pipeline(a: RendererAdapter, c: RasterContext, n = 1): PageRasterPipeline {
-  const idx = new PageIndexMap()
-  idx.reset(n)
-  return new PageRasterPipeline(a, idx, c)
+const adapter = (overrides: Partial<RendererAdapter> = {}): RendererAdapter =>
+  ({ ...make_adapter({ page_count: 50 }), ...overrides })
+const SCANNED_DEWARP: Partial<RasterContext> = {
+  mode: () => Mode.SCANNED, process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
 }
 
 describe('PageRasterPipeline.get_source / get_work', () => {
   it('caches get_source: a second call for the same page does not re-render', async () => {
     let calls = 0
     const a = adapter({ get_source_image: () => { calls++; return Promise.resolve(bmp()) } })
-    const p = pipeline(a, ctx())
+    const p = make_raster(a)
     await p.get_source(0)
     await p.get_source(0)
     expect(calls).toBe(1)
@@ -61,7 +31,7 @@ describe('PageRasterPipeline.get_source / get_work', () => {
       get_source_image: () => { real = true; return Promise.resolve(bmp()) },
       make_synth_page: (_i, w, h) => { synth = true; return Promise.resolve(bmp(w, h)) },
     })
-    const p = pipeline(a, ctx({ is_synthetic: () => true }))
+    const p = make_raster(a, 1, { is_synthetic: () => true })
     await p.get_source(0)
     expect(synth).toBe(true)
     expect(real).toBe(false)
@@ -70,7 +40,7 @@ describe('PageRasterPipeline.get_source / get_work', () => {
   it('NORMAL mode: get_work returns the source bitmap directly, without a get_work_image call', async () => {
     let work_calls = 0
     const a = adapter({ get_work_image: () => { work_calls++; return Promise.resolve(bmp()) } })
-    const p = pipeline(a, ctx())
+    const p = make_raster(a)
     const src = await p.get_source(0)
     const work = await p.get_work(0)
     expect(work).toBe(src)
@@ -80,7 +50,7 @@ describe('PageRasterPipeline.get_source / get_work', () => {
   it('SCANNED + a no-op intent (no dewarp, no filter) also short-circuits to the source bitmap', async () => {
     let work_calls = 0
     const a = adapter({ get_work_image: () => { work_calls++; return Promise.resolve(bmp()) } })
-    const p = pipeline(a, ctx({ mode: () => Mode.SCANNED }))
+    const p = make_raster(a, 1, { mode: () => Mode.SCANNED })
     const src = await p.get_source(0)
     const work = await p.get_work(0)
     expect(work).toBe(src)
@@ -90,10 +60,7 @@ describe('PageRasterPipeline.get_source / get_work', () => {
   it('SCANNED + a real intent calls get_work_image and caches the result', async () => {
     let work_calls = 0
     const a = adapter({ get_work_image: () => { work_calls++; return Promise.resolve(bmp(9, 9)) } })
-    const p = pipeline(a, ctx({
-      mode: () => Mode.SCANNED,
-      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
-    }))
+    const p = make_raster(a, 1, SCANNED_DEWARP)
     const w1 = await p.get_work(0)
     const w2 = await p.get_work(0)
     expect(work_calls).toBe(1)
@@ -112,10 +79,7 @@ describe('PageRasterPipeline.get_source / get_work', () => {
       },
     })
     let rotation = 0
-    const p = pipeline(a, ctx({
-      mode: () => Mode.SCANNED, rotation: () => rotation,
-      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
-    }))
+    const p = make_raster(a, 1, { ...SCANNED_DEWARP, rotation: () => rotation })
 
     await p.get_work(0)                  // rotation 0: computes the canonical ONNX result
     expect(dewarp_calls).toBe(1)
@@ -144,7 +108,7 @@ describe('PageRasterPipeline.get_source / get_work', () => {
       get_work_image: (_src, intent) => { calls.push(intent); return Promise.resolve(bmp()) },
     })
     let intent: PageProcessIntent = { dewarp: true, filter: [FilterMode.BW, 2] }
-    const p = pipeline(a, ctx({ mode: () => Mode.SCANNED, process_intent: () => intent }))
+    const p = make_raster(a, 1, { mode: () => Mode.SCANNED, process_intent: () => intent })
 
     await p.get_work(0)
     intent = { dewarp: true, filter: [FilterMode.SHARPEN, 2] }
@@ -160,10 +124,7 @@ describe('PageRasterPipeline.get_source / get_work', () => {
   it('SCANNED: dewarp-only (no filter) is not duplicated into the filtered-result cache', async () => {
     let work_calls = 0
     const a = adapter({ get_work_image: () => { work_calls++; return Promise.resolve(bmp()) } })
-    const p = pipeline(a, ctx({
-      mode: () => Mode.SCANNED,
-      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
-    }))
+    const p = make_raster(a, 1, SCANNED_DEWARP)
     const w1 = await p.get_work(0)
     const w2 = await p.get_work(0)
     expect(work_calls).toBe(1)   // one dewarp call, cached — not recomputed, not double-stored
@@ -184,10 +145,7 @@ describe('PageRasterPipeline in-flight de-duplication (regression: two real call
         return dewarp_calls === 1 ? first_gate : Promise.resolve(bmp())
       },
     })
-    const p = pipeline(a, ctx({
-      mode: () => Mode.SCANNED,
-      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
-    }))
+    const p = make_raster(a, 1, SCANNED_DEWARP)
 
     const call1 = p.get_work(0)
     const call2 = p.get_work(0)   // concurrent — call1's ONNX pass has not resolved yet
@@ -205,7 +163,7 @@ describe('PageRasterPipeline in-flight de-duplication (regression: two real call
     const a = adapter({
       get_source_image: () => { calls++; return calls === 1 ? gate : Promise.resolve(bmp()) },
     })
-    const p = pipeline(a, ctx())
+    const p = make_raster(a)
 
     const call1 = p.get_source(0)
     const call2 = p.get_source(0)
@@ -219,10 +177,7 @@ describe('PageRasterPipeline in-flight de-duplication (regression: two real call
   it('a later, non-concurrent get_work call still triggers a fresh compute (dedup does not stick around)', async () => {
     let dewarp_calls = 0
     const a = adapter({ get_work_image: () => { dewarp_calls++; return Promise.resolve(bmp(9, 9)) } })
-    const p = pipeline(a, ctx({
-      mode: () => Mode.SCANNED,
-      process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
-    }))
+    const p = make_raster(a, 1, SCANNED_DEWARP)
     await p.get_work(0)
     expect(dewarp_calls).toBe(1)
     // second call is a resolved-cache hit (not a recompute) — same existing cache behavior, just
@@ -233,11 +188,6 @@ describe('PageRasterPipeline in-flight de-duplication (regression: two real call
 })
 
 describe('PageRasterPipeline in-flight work never leaks across a cache wipe', () => {
-  const scanned_dewarp = (): RasterContext => ctx({
-    mode: () => Mode.SCANNED,
-    process_intent: (): PageProcessIntent => ({ dewarp: true, filter: null }),
-  })
-
   it('after Delete, logical page 0 gets the new page\'s image, not the in-flight dewarp of the deleted one', async () => {
     const gates: Array<(b: ImageBitmap) => void> = []
     const a = adapter({
@@ -246,7 +196,7 @@ describe('PageRasterPipeline in-flight work never leaks across a cache wipe', ()
     })
     const idx = new PageIndexMap()
     idx.reset(2)
-    const p = new PageRasterPipeline(a, idx, scanned_dewarp())
+    const p = make_raster(a, idx, SCANNED_DEWARP)
 
     const stale = p.get_work(0)
     await Promise.resolve()
@@ -265,7 +215,7 @@ describe('PageRasterPipeline in-flight work never leaks across a cache wipe', ()
     const a = adapter({
       get_source_image: () => { const d = doc; return new Promise<ImageBitmap>(res => { gates.push(() => res(bmp(d, 1))) }) },
     })
-    const p = pipeline(a, ctx())
+    const p = make_raster(a)
     const stale = p.get_source(0)
     p.reset()
     doc = 2
@@ -281,7 +231,7 @@ describe('PageRasterPipeline in-flight work never leaks across a cache wipe', ()
     const a = adapter({
       get_source_image: () => { calls++; return new Promise<ImageBitmap>(res => { gates.push(() => res(bmp())) }) },
     })
-    const p = pipeline(a, ctx())
+    const p = make_raster(a)
     void p.get_source(0)
     p.clear_source()
     const second = p.get_source(0)
@@ -296,14 +246,14 @@ describe('PageRasterPipeline in-flight work never leaks across a cache wipe', ()
 
 describe('PageRasterPipeline.load_current / current', () => {
   it('load_current fetches the work raster and marks it as the on-screen bitmap', async () => {
-    const p = pipeline(adapter(), ctx())
+    const p = make_raster(adapter())
     expect(p.current).toBeNull()
     const work = await p.load_current(0)
     expect(p.current).toBe(work)
   })
 
   it('invalidate_current clears the on-screen bitmap without touching the caches', async () => {
-    const p = pipeline(adapter(), ctx())
+    const p = make_raster(adapter())
     await p.load_current(0)
     p.invalidate_current()
     expect(p.current).toBeNull()
@@ -314,7 +264,7 @@ describe('PageRasterPipeline eviction never double-closes the on-screen bitmap',
   it('visiting other pages never evicts a page\'s own version history (walking N pages costs the same as 1)', async () => {
     let calls = 0
     const a = adapter({ get_source_image: () => { calls++; return Promise.resolve(bmp()) } })
-    const p = pipeline(a, ctx(), 50)
+    const p = make_raster(a, 50)
     await p.get_source(0)
     for (let i = 1; i < 50; i++) await p.get_source(i)   // visit every other page once
     expect(calls).toBe(50)
@@ -332,7 +282,7 @@ describe('PageRasterPipeline eviction never double-closes the on-screen bitmap',
         return Promise.resolve({ width: 10, height: 10, close: (): void => { entry.closed = true } } as unknown as ImageBitmap)
       },
     })
-    const p = pipeline(a, ctx({ rotation: () => rotation, undo_depth: () => 1 }))   // 2 slots/page
+    const p = make_raster(a, 1, { rotation: () => rotation, undo_depth: () => 1 })   // 2 slots/page
     await p.load_current(0)                     // rotation 0 becomes "current" -> must never be closed
     for (rotation = 1; rotation <= 5; rotation++) await p.get_source(0)
     // rotation 0's bitmap was evicted from its page's own LRU by now, but load_current marked it
@@ -346,7 +296,7 @@ describe('PageRasterPipeline.reset / page order changes', () => {
   it('reset() clears the on-screen bitmap and forces a re-render on the next get_source', async () => {
     let calls = 0
     const a = adapter({ get_source_image: () => { calls++; return Promise.resolve(bmp()) } })
-    const p = pipeline(a, ctx())
+    const p = make_raster(a)
     await p.load_current(0)
     p.reset()
     expect(p.current).toBeNull()
@@ -359,7 +309,7 @@ describe('PageRasterPipeline.reset / page order changes', () => {
     const a = adapter({ get_source_image: (orig) => { calls.push(orig); return Promise.resolve(bmp(100 + orig, 100)) } })
     const idx = new PageIndexMap()
     idx.reset(3)
-    const p = new PageRasterPipeline(a, idx, ctx())
+    const p = make_raster(a, idx)
     await p.get_source(1)
     await p.get_source(2)
     idx.set([1, 2])                                    // Delete logical page 0
@@ -370,7 +320,7 @@ describe('PageRasterPipeline.reset / page order changes', () => {
   })
 
   it('clear_output() drops only the crop/split preview cache, not source/work (used by undo/redo)', async () => {
-    const p = pipeline(adapter(), ctx())
+    const p = make_raster(adapter())
     await p.load_current(0)
     await p.prerender_output_views(0, [{ x0: 0, y0: 0, x1: 100, y1: 100 }],
       { width: 200, height: 300 }, p.current!)
@@ -387,15 +337,19 @@ describe('PageRasterPipeline.prefetch', () => {
   it('warms an adjacent page in the background', async () => {
     let calls = 0
     const a = adapter({ get_source_image: () => { calls++; return Promise.resolve(bmp()) } })
-    const p = pipeline(a, ctx(), 2)
+    const p = make_raster(a, 2)
     p.prefetch(1)
     await Promise.resolve(); await Promise.resolve()
     expect(calls).toBe(1)
   })
 
-  it('is a no-op out of range or already warm', () => {
-    const p = pipeline(adapter(), ctx(), 2)
-    expect(() => { p.prefetch(-1); p.prefetch(99) }).not.toThrow()
+  it('is a no-op out of range or already warm', async () => {
+    let calls = 0
+    const p = make_raster(adapter({ get_source_image: () => { calls++; return Promise.resolve(bmp()) } }), 2)
+    await p.get_source(1)
+    p.prefetch(-1); p.prefetch(99); p.prefetch(1)
+    await Promise.resolve(); await Promise.resolve()
+    expect(calls).toBe(1)
   })
 })
 
@@ -403,7 +357,7 @@ describe('PageRasterPipeline.prerender_output_views', () => {
   it('renders and caches every split box, keyed by page:split_idx', async () => {
     let render_calls = 0
     const a = adapter({ render_output_image: (_s, b) => { render_calls++; return Promise.resolve(bmp(b.x1 - b.x0, b.y1 - b.y0)) } })
-    const p = pipeline(a, ctx())
+    const p = make_raster(a)
     const sz: PageSize = { width: 200, height: 300 }
     const boxes = [{ x0: 0, y0: 0, x1: 100, y1: 300 }, { x0: 100, y0: 0, x1: 200, y1: 300 }]
     const work = bmp()
@@ -417,7 +371,7 @@ describe('PageRasterPipeline.prerender_output_views', () => {
   })
 
   it('output_at returns null for an unrendered key', () => {
-    const p = pipeline(adapter(), ctx())
+    const p = make_raster(adapter())
     expect(p.output_at(5, 0)).toBeNull()
   })
 })
@@ -432,8 +386,7 @@ describe('PageRasterPipeline: a filter result finishing after Delete never lands
     })
     const idx = new PageIndexMap()
     idx.reset(2)
-    const c = ctx({ mode: () => Mode.SCANNED, process_intent: (): PageProcessIntent => ({ dewarp: false, filter: [FilterMode.BW, 1] }) })
-    const p = new PageRasterPipeline(a, idx, c)
+    const p = make_raster(a, idx, { mode: () => Mode.SCANNED, process_intent: (): PageProcessIntent => ({ dewarp: false, filter: [FilterMode.BW, 1] }) })
     const stale = p.get_work(0)
     idx.set([1])
     release()

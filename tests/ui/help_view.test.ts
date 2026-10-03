@@ -1,55 +1,31 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+// Help panel content (spec-web §4.10): contents navigation, About version, current-behaviour claims.
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { HelpView } from '@ui/help_view'
 import { mount } from './harness'
 
+const VERSION = (JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }).version
+
 describe('HelpView', () => {
-  let root: HTMLElement
+  afterEach(() => { delete (Element.prototype as Partial<Element>).scrollIntoView })
 
-  beforeEach(() => {
-    root = mount()
-    // jsdom has no layout engine; scrollIntoView is unimplemented.
-    Element.prototype.scrollIntoView = vi.fn()
-  })
-
-  it('renders a table of contents and section blocks', () => {
-    const view = new HelpView(root)
-    expect(view.el).toBeTruthy()
-    const toc = root.querySelectorAll('.help-toc__item')
-    expect(toc.length).toBeGreaterThan(3)
-    expect(root.textContent).toContain('Open files')
-  })
-
-  it('About shows the package.json version', () => {
+  it('a contents entry scrolls to its own section', () => {
+    const root = mount()
     new HelpView(root)
-    expect(root.textContent).toContain('version 1.3.2')
+    const scroll = vi.fn<(this: Element) => void>()
+    Element.prototype.scrollIntoView = scroll
+    const items = root.querySelectorAll<HTMLButtonElement>('.help-toc__item')
+    expect(items.length).toBeGreaterThan(3)
+    items[1]!.click()
+    expect(scroll.mock.contexts.map(el => el.id)).toEqual([items[1]!.dataset['target']])
   })
 
-  it('clicking a contents entry scrolls to its section', () => {
-    new HelpView(root)
-    const first = root.querySelector<HTMLButtonElement>('.help-toc__item')!
-    first.click()
-    expect(Element.prototype.scrollIntoView).toHaveBeenCalled()
-  })
-
-  it('matches current behavior, not stale claims (T8 rewrite)', () => {
+  it('states current behaviour, the package.json version and both contact addresses', () => {
+    const root = mount()
     new HelpView(root)
     const text = root.textContent
-    // The commit action is labelled "Crop" in the actual UI (crop_panel.ts), never "Apply".
-    expect(text).not.toMatch(/press apply/i)
-    // TIFF is supported, and image exports deliver a zip, not one loose file per page.
-    expect(text).not.toMatch(/tiff is not available/i)
-    expect(text).toMatch(/\.zip/)
-    // Output Quality is export-only — the preview is never DPI/colour-adjusted.
-    expect(text).toMatch(/never.*preview|preview.*never/i)
-    // Genuinely new capabilities this rewrite adds coverage for.
-    expect(text).toMatch(/outlier/i)
-    expect(text).toMatch(/vector PDF/i)
-  })
-
-  it('has a Contacts section with both support addresses', () => {
-    new HelpView(root)
-    const text = root.textContent
-    expect(text).toContain('hello@smartcroppdf.com')
-    expect(text).toContain('support@smartcroppdf.com')
+    for (const claim of [`version ${VERSION}`, 'Open files', 'hello@smartcroppdf.com', 'support@smartcroppdf.com']) expect(text).toContain(claim)
+    for (const claim of [/\.zip/, /never.*preview|preview.*never/i, /outlier/i, /vector PDF/i]) expect(text).toMatch(claim)
+    for (const stale of [/press apply/i, /tiff is not available/i]) expect(text).not.toMatch(stale)
   })
 })

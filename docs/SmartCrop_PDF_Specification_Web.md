@@ -1066,7 +1066,7 @@ install/PWA-add-to-homescreen step is required either way.
 |---|---|
 | Canvas repaint (non-imaging) | < 16ms (60fps during drag) |
 | Page navigation | < 100ms (RAM cache hit: immediate draw; RAM-miss recomputes once — no disk tier, §7) |
-| Orchestration overhead (dispatch → cache lookup → batch loop), excluding the mocked adapter's own compute | Dewarp&Deskew < 0.5s, filter apply < 0.3s, over a multi-page selection — regression tests at the AppModel level with an instant-return mock adapter (tests/core/scan_orchestration_speed.test.ts), isolating pipeline/cache overhead from real OpenCV/ONNX cost (which is covered separately above and in tests/perf/scan_speed.test.ts) |
+| Orchestration overhead (dispatch → cache lookup → batch loop), excluding the mocked adapter's own compute | Dewarp&Deskew < 0.5s, filter apply < 0.3s, over a multi-page selection — regression tests at the AppModel level with an instant-return mock adapter (tests/core/model_scan.test.ts), isolating pipeline/cache overhead from real OpenCV/ONNX cost (which is covered separately above and in tests/perf/scan_speed.test.ts) |
 | B/W or Sharpen filter per page | < 500ms (SIMD WASM opencv.js + downscaled illumination-flatten morphology) |
 | Auto-detect per page | < 100ms (SCANNED: raw source, not the processed work image; NORMAL: text-layer, no raster at all) |
 | Dewarp per page (ONNX stage) | low-single-digit seconds on single-thread WASM (no COOP/COEP, e.g. the GitHub Pages mirror); well under 1s multi-threaded (COOP/COEP present, e.g. this app's Cloudflare Pages deploy — see §7.1); fast on WebGPU where available |

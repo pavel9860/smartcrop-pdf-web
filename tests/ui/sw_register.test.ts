@@ -50,7 +50,7 @@ describe('prefetch_scan_tools (SCANNED document open)', () => {
   it('loads the image engine, then the text-line model — not the dewarp model — and swallows a failure', async () => {
     ensure_cv.mockClear(); ensure_onnx.mockClear(); ensure_dbnet.mockClear()
     ensure_dbnet.mockRejectedValueOnce(new Error('offline'))
-    prefetch_scan_tools()
+    void prefetch_scan_tools()
     await vi.waitFor(() => { expect(ensure_dbnet).toHaveBeenCalledTimes(1) })
     expect(ensure_cv).toHaveBeenCalledTimes(1)
     expect(ensure_onnx).not.toHaveBeenCalled()

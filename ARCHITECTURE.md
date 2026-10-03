@@ -330,13 +330,15 @@ C:/DOCS/Code/SmartCroPDF-Web/
     main.ts                 Entry point: mounts AppController to #app, initialises synthetic doc.
 
   tests/
-    core/                   Pure TS unit tests — Vitest, no DOM, workers mocked as interfaces.
-                              One file per core/ module, plus *_edges.test.ts / *_more.test.ts /
-                              *_gestures.test.ts siblings for branch coverage past the happy path.
-    ui/                     DOM wiring tests — Vitest + jsdom, one file per ui/ component/panel.
-    pdf/                    loader.ts/imaging.ts adapter tests (mocked PDF.js/OpenCV.js surfaces).
-    e2e/                    Playwright, real Chromium + Firefox, real PDFs from tests/assets/ —
-                              smoke, crop/split, committed-window, scan/SIMD flows.
+    core/                   Pure TS unit tests on node — Vitest, no DOM. harness.ts holds the one
+                              shared mock RendererAdapter. AppModel is tested by topic (model,
+                              model_detect, model_gestures, model_scan, seeded sequences); each
+                              extracted service and pure module has its own file.
+    ui/                     DOM wiring tests — Vitest + jsdom (the only jsdom project); panels.test.ts
+                              covers every sidebar panel, nav bar, settings and detail panel.
+    pdf/                    loader.ts adapter tests (mocked PDF.js surface, real pdf-lib).
+    e2e/                    Playwright, real Chromium + Firefox, fixtures from tests/assets/ or
+                              generated with pdf-lib at test time.
     perf/                   Standalone perf suite (npm run test:perf), not part of `vitest run`.
     assets/                 Real PDFs + images used by tests (committed, small).
     architecture.test.ts    Import-graph guard: walk src/core/ TS files, fail if any import
@@ -1047,9 +1049,7 @@ tsc --noEmit && eslint src && vitest run --coverage --reporter=verbose && playwr
 invariant → test-file mapping belongs here once it's been verified against the real suite — the
 previous version of this table cited `e2e/crop.spec.ts`, `scan.spec.ts`, `export.spec.ts`,
 `history.spec.ts`, `pages.spec.ts`, `ui/canvas_view.test.ts` and `ui/panels.test.ts`, none of which
-exist in the current `tests/` tree (the real e2e suite is `tests/e2e/{smoke,crop_split,
-committed_window,scan_simd}.spec.ts`, and per-panel coverage lives in `tests/ui/*.test.ts` named
-after the panel, not a single `panels.test.ts`) — it was fabricated or badly stale and has been
-removed rather than left misleading. Rebuild this table against the actual suite instead of
+existed at the time — it was fabricated or badly stale and has been removed rather than left
+misleading. Rebuild this table against the actual suite instead of
 reconstructing it from memory.
 

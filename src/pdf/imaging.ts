@@ -162,7 +162,7 @@ function morph_close_background(gray: Mat, kernel: number): Mat {
 // clean_document_bilevel equivalent (imaging.py:90-140), minus the 2x supersample refinement
 // step (tracked as a residual, non-correctness fidelity note — see ARCHITECTURE.md §9).
 // Returns a bilevel Mat: ink=0, background=255.
-function clean_document_bilevel(gray: Mat, k: number, min_area: number, window: number,
+export function clean_document_bilevel(gray: Mat, k: number, min_area: number, window: number,
   bg_kernel: number): Mat {
   const flat = illumination_flatten(gray, bg_kernel)
   const ink = sauvola_ink_mask(flat, window, k)
@@ -365,7 +365,7 @@ async function process_page(
   return out_canvas.transferToImageBitmap()
 }
 
-function apply_filter_mat(
+export function apply_filter_mat(
   src: ReturnType<typeof cv.matFromImageData>,
   mode: FilterMode,
   strength: number,

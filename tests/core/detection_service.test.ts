@@ -4,14 +4,13 @@ import { describe, it, expect, vi } from 'vitest'
 import { DetectionService, type DetectionContext } from '@core/detection_service'
 import type { DetectionState } from '@core/page_ops_service'
 import { PageIndexMap } from '@core/page_index_map'
-import { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { History } from '@core/history'
 import { default_document_state, type DocumentState } from '@core/document_state'
 import { Mode } from '@core/enums'
 import { Ok, Failed, Cancelled } from '@core/batch'
 import type { RendererAdapter, PageSize } from '@core/model'
 import { scale_box, type Box } from '@core/geometry'
-import { make_adapter, round6 } from './harness'
+import { make_adapter, make_raster, round6 } from './harness'
 
 const page_rects = (doc: DocumentState): Box[] => doc.crop_rects.map(b => round6(scale_box(b, 200, 300)))
 
@@ -36,15 +35,12 @@ function setup(opts: {
   drawn: { v: Box | null }
 } {
   const page_count = opts.page_count ?? 3
-  const adapter: RendererAdapter = { ...make_adapter(page_count, opts.mode ?? Mode.NORMAL), ...opts.adapter }
+  const mode = opts.mode ?? Mode.NORMAL
+  const adapter: RendererAdapter = { ...make_adapter({ page_count, mode }), ...opts.adapter }
   if (opts.omit_detect_text_box) delete adapter.detect_text_box
   const idx = new PageIndexMap()
   idx.reset(page_count)
-  const raster = new PageRasterPipeline(adapter, idx, {
-    mode: () => opts.mode ?? Mode.NORMAL, display_dpi: () => 96, is_synthetic: () => false,
-    rotation: () => 0, process_intent: () => ({ dewarp: false, filter: null }),
-    dewarp_supersample: () => 1, undo_depth: () => 2,
-  })
+  const raster = make_raster(adapter, idx, { mode: () => mode })
   const doc = default_document_state()
   const detection: DetectionState = { cache: new Map(), union: null, auto_active: false }
   const anchor = { left: true, top: true }
@@ -58,7 +54,7 @@ function setup(opts: {
     has_document: () => opts.has_document ?? true,
     document: () => doc,
     page_dims: (): PageSize => dims,
-    mode: () => opts.mode ?? Mode.NORMAL,
+    mode: () => mode,
     detection: () => detection,
     set_detection: (d) => { detection.cache = d.cache; detection.union = d.union; detection.auto_active = d.auto_active },
     split_count: () => opts.split_count ?? 1,
@@ -112,11 +108,10 @@ describe('DetectionService.detect — SCANNED mode', () => {
 
 describe('DetectionService.detect — union/ratio/refresh', () => {
   it('sets auto_active and computes a union from the detected (non-full-page) boxes', async () => {
-    const text_box = vi.fn(() => Promise.resolve({ x0: 10, y0: 10, x1: 100, y1: 100 } as Box))
+    const text_box = vi.fn((p: number) => Promise.resolve(p ? { x0: 5, y0: 20, x1: 90, y1: 150 } : { x0: 10, y0: 10, x1: 100, y1: 100 }))
     const { svc, detection } = setup({ mode: Mode.NORMAL, adapter: { detect_text_box: text_box } })
     await svc.detect([0, 1]).result()
-    expect(detection.auto_active).toBe(true)
-    expect(detection.union).not.toBeNull()
+    expect([detection.auto_active, detection.union]).toEqual([true, { x0: 5, y0: 10, x1: 95, y1: 140 }])
   })
 
   it('sets the crop ratio to the union aspect when keep_ratio is off', async () => {
@@ -139,8 +134,7 @@ describe('DetectionService.detect — union/ratio/refresh', () => {
     const { svc, doc, invalidated } = setup({ mode: Mode.NORMAL, adapter: { detect_text_box: text_box } })
     doc.applied.set(0, [{ x0: 10, y0: 10, x1: 50, y1: 50 }])
     await svc.detect([0]).result()
-    expect(doc.applied.get(0)).not.toEqual([{ x0: 10, y0: 10, x1: 50, y1: 50 }])
-    expect(invalidated).toContain(0)
+    expect([doc.applied.get(0), invalidated]).toEqual([[{ x0: 0, y0: 0, x1: 100, y1: 100 }], [0]])
   })
 
   it('does not touch a committed page when neither anchor is on', async () => {
@@ -241,14 +235,17 @@ describe('DetectionService.detect — split regions (spec §4.5/§5a)', () => {
 
   it('n=4: detects within each quadrant independently', async () => {
     const content_box = vi.fn((_i: unknown, _w: number, _h: number, _m: unknown, region: Box) =>
-      Promise.resolve({ x0: region.x0 + 1, y0: region.y0 + 1, x1: region.x1 - 1, y1: region.y1 - 1 } as Box))
+      Promise.resolve({ x0: region.x0 + 10, y0: region.y0 + 10, x1: region.x1 - 10, y1: region.y1 - 10 } as Box))
     const { svc, doc } = setup({
       mode: Mode.SCANNED, split_count: 4, page_count: 1,
       adapter: { detect_content_box: content_box },
     })
     await svc.detect([0]).result()
     expect(content_box).toHaveBeenCalledTimes(4)
-    expect(doc.crop_rects).toHaveLength(4)
+    expect(page_rects(doc)).toEqual([
+      { x0: 10, y0: 10, x1: 90, y1: 140 }, { x0: 10, y0: 160, x1: 90, y1: 290 },
+      { x0: 110, y0: 10, x1: 190, y1: 140 }, { x0: 110, y0: 160, x1: 190, y1: 290 },
+    ])
   })
 
   it('a region with no detected content on any page falls back to the full region box', async () => {

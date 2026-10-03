@@ -1,1196 +1,473 @@
-// AppModel tests — exercises the public interface only (CLAUDE.md: "no private attribute
-// assertions in tests"). A hand-rolled mock RendererAdapter stands in for pdf/loader.ts so
-// these run headless, with no real PDF.js/OpenCV.js/browser APIs involved.
-import { describe, it, expect, beforeEach } from 'vitest'
-import { AppModel, type RendererAdapter, type DocInfo } from '@core/model'
+// AppModel through its public interface only: document lifecycle, navigation, page selection,
+// history, output settings, rotate/delete, export and view preparation. Crop/detect/gestures live in
+// model_detect.test.ts and model_gestures.test.ts, scan toggles in model_scan.test.ts.
+import { describe, it, expect } from 'vitest'
+import { AppModel, type RendererAdapter, type OutputPage, type VectorExportPage } from '@core/model'
 import { Mode, FilterMode, PagesMode } from '@core/enums'
-import { Ok, Failed } from '@core/batch'
+import { Ok, Failed, Cancelled } from '@core/batch'
+import { NoDocumentError, EmptySelectionError, DeleteAllPagesError } from '@core/errors'
 import {
-  NoDocumentError, EmptySelectionError, InvalidSplitError, DeleteAllPagesError,
-} from '@core/errors'
-import {
-  CUSTOM_DPI_MIN, CUSTOM_DPI_MAX, UNDO_DEPTH_OPTIONS,
-  CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DEFAULT_CUSTOM_PAPER_IN,
-  SRC_DPI, NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX,
+  CUSTOM_DPI_MIN, CUSTOM_DPI_MAX, CUSTOM_PAPER_MIN, CUSTOM_PAPER_MAX, DEFAULT_CUSTOM_PAPER_IN,
+  SRC_DPI, NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX, DEWARP_SUPERSAMPLE_MAX, DEFAULT_DETECT_OUTLIER, PAPER_SIZES,
 } from '@core/constants'
-import { make_bitmap, FILE, split_rects, round6, recording_sink } from './harness'
+import {
+  make_adapter, spy, n_calls, loaded, bmp, FILE, draw, select, recording_sink, round6,
+} from './harness'
 
-// ---------------------------------------------------------------------------
-// Mock adapter — this file needs call-count/arg-tracking instrumentation the shared
-// tests/core/harness.ts adapter doesn't provide, so it keeps its own richer mock.
-// ---------------------------------------------------------------------------
+const A4 = PAPER_SIZES.A4.height_in
+const dims = (m: AppModel): [number, number] => [m.view_snapshot().page_w, m.view_snapshot().page_h]
 
-interface MockOpts {
-  page_count?: number
-  page_w?: number
-  page_h?: number
-  mode?: Mode
-}
-
-function make_mock_adapter(opts: MockOpts = {}): {
-  adapter: RendererAdapter
-  calls: Record<string, number>
-  render_args: { dpi: number | null; grey: boolean }[]
-  source_dpis: number[]
-} {
-  const { page_count = 3, page_w = 200, page_h = 300, mode = Mode.NORMAL } = opts
-  const calls: Record<string, number> = {}
-  const render_args: { dpi: number | null; grey: boolean }[] = []
-  const source_dpis: number[] = []
-  const bump = (k: string): void => { calls[k] = (calls[k] ?? 0) + 1 }
-
-  const adapter: RendererAdapter = {
-    load_files: (files: File[]): Promise<DocInfo> => {
-      bump('load_files')
-      // page_count is independent of files.length — one PDF file can hold many pages, exactly
-      // like the real PdfRendererAdapter derives it from parsed page count, not input count.
-      return Promise.resolve({
-        page_count,
-        page_sizes: Array.from({ length: page_count }, () => ({ width: page_w, height: page_h })),
-        file_names: files.map(f => f.name),
-        mode,
-      })
-    },
-    get_source_image: (_i, dpi): Promise<ImageBitmap> => {
-      bump('get_source_image')
-      source_dpis.push(dpi)
-      return Promise.resolve(make_bitmap(page_w, page_h))
-    },
-    get_work_image: (): Promise<ImageBitmap> => {
-      bump('get_work_image')
-      return Promise.resolve(make_bitmap(page_w, page_h))
-    },
-    rotate_bitmap: (b): Promise<ImageBitmap> => {
-      bump('rotate_bitmap')
-      return Promise.resolve(b)
-    },
-    render_output_image: (_src, box, _pw, _ph, target_dpi, greyscale): Promise<ImageBitmap> => {
-      bump('render_output_image')
-      render_args.push({ dpi: target_dpi, grey: greyscale })
-      const w = Math.max(1, Math.round(box.x1 - box.x0))
-      const h = Math.max(1, Math.round(box.y1 - box.y0))
-      return Promise.resolve(make_bitmap(w, h))
-    },
-    detect_content_box: (_img, pw, ph) => {
-      bump('detect_content_box')
-      // Inset box — not near-full-page, so it survives the FULL_PAGE_FRAC union filter.
-      return Promise.resolve({ x0: 20, y0: 20, x1: pw - 20, y1: ph - 20 })
-    },
-    // NORMAL-mode detect is text-layer only, no raster fallback — mirror detect_content_box's
-    // inset box here so NORMAL-mode detect_content() calls in this file behave as before.
-    detect_text_box: (_i) => {
-      bump('detect_text_box')
-      return Promise.resolve({ x0: 20, y0: 20, x1: page_w - 20, y1: page_h - 20 })
-    },
-    begin_export: (format) => {
-      bump(format === 'PDF' ? 'export_pdf' : 'export_images')
-      return recording_sink()
-    },
-    make_synth_page: (_idx, w, h) => {
-      bump('make_synth_page')
-      return Promise.resolve(make_bitmap(w, h))
-    },
-    close: (): void => { bump('close') },
-  }
-  return { adapter, calls, render_args, source_dpis }
-}
-
-async function loaded_model(opts: MockOpts = {}): Promise<AppModel> {
-  const { adapter } = make_mock_adapter(opts)
-  const model = new AppModel(adapter)
-  await model.load_files([FILE()])
-  return model
-}
-
-// ---------------------------------------------------------------------------
-// Document
-// ---------------------------------------------------------------------------
-
-describe('load_files / reset / has_document / page_count', () => {
-  it('starts with no document', () => {
-    const { adapter } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    expect(model.has_document).toBe(false)
-    expect(model.page_count()).toBe(0)
+describe('document lifecycle', () => {
+  it('with no document every query is empty and every command is a no-op or NoDocumentError', async () => {
+    const m = new AppModel(make_adapter())
+    expect([m.has_document, m.page_count(), m.resolve_pages(), m.document_name, m.mode])
+      .toEqual([false, 0, [], '', Mode.NORMAL])
+    expect(m.view_snapshot()).toMatchObject({ image: null, total: 0, overlay: [] })
+    expect(m.suggested_export_name()).toMatch(/^document/)
+    expect(m.estimate_export_bytes()).toBe(0)
+    await m.prepare_current_view()
+    await m.reset()
+    expect(m.view_snapshot().image).toBeNull()
+    for (const cmd of [() => m.detect_content(), () => m.export('x'), () => m.rotate_pages(), () => m.delete_pages()]) {
+      expect(cmd).toThrow(NoDocumentError)
+    }
+    expect(() => { draw(m, 0, 0, 50, 50) }).not.toThrow()
   })
 
-  it('load_files populates has_document/page_count from the adapter', async () => {
-    const model = await loaded_model({ page_count: 4 })
-    expect(model.has_document).toBe(true)
-    expect(model.page_count()).toBe(4)
+  it('load_files reports page count and document name; several files read "+N more"', async () => {
+    const m = new AppModel(make_adapter({ page_count: 4 }))
+    await m.load_files([FILE('scan.pdf')])
+    expect([m.has_document, m.page_count(), m.document_name]).toEqual([true, 4, 'scan.pdf'])
+    await m.load_files([FILE('a.pdf'), FILE('b.pdf'), FILE('c.pdf')])
+    expect(m.document_name).toBe('a.pdf +2 more')
   })
 
-  it('reset() re-opens the same files and clears undoable state', async () => {
-    const { adapter, calls } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.set_split(2)
-    await model.reset()
-    expect(model.split_count).toBe(1)          // _reset_state() clears interaction state
-    expect(calls['load_files']).toBe(2)            // reset() calls load_files([]) again
+  it('reset re-opens the same files and clears interaction state', async () => {
+    const { adapter, calls } = spy(make_adapter())
+    const m = await loaded(adapter)
+    m.set_split(2)
+    m.rotate_pages()
+    await m.reset()
+    expect([m.split_count, m.can_undo, n_calls(calls, 'load_files')]).toEqual([1, false, 2])
+    expect(dims(m)).toEqual([200, 300])
   })
 
-  it('reset() is a no-op with no document loaded', async () => {
-    const { adapter, calls } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    await model.reset()
-    expect(calls['load_files']).toBeUndefined()
+  it('a synthetic (placeholder) document renders via make_synth_page, never get_source_image', async () => {
+    const { adapter, calls } = spy(make_adapter({ page_count: 1, synthetic: true }))
+    const m = await loaded(adapter)
+    await m.prepare_current_view()
+    expect([n_calls(calls, 'make_synth_page'), n_calls(calls, 'get_source_image')]).toEqual([1, 0])
   })
 })
-
-// ---------------------------------------------------------------------------
-// Navigation
-// ---------------------------------------------------------------------------
 
 describe('navigation', () => {
-  it('view_total equals page_count with no committed splits', async () => {
-    const model = await loaded_model({ page_count: 5 })
-    expect(model.view_total).toBe(5)
-    expect(model.view_position).toBe(1)
-  })
-
-  it('next_page/prev_page move and clamp at the bounds', async () => {
-    const model = await loaded_model({ page_count: 3 })
-    model.next_page(); model.next_page(); model.next_page()   // clamp at 3
-    expect(model.view_position).toBe(3)
-    model.prev_page(); model.prev_page(); model.prev_page()   // clamp at 1
-    expect(model.view_position).toBe(1)
-  })
-
-  it('jump_to_output_page moves directly and clamps out-of-range targets', async () => {
-    const model = await loaded_model({ page_count: 5 })
-    model.jump_to_output_page(3)
-    expect(model.view_position).toBe(3)
-    model.jump_to_output_page(999)
-    expect(model.view_position).toBe(5)
-    model.jump_to_output_page(-5)
-    expect(model.view_position).toBe(1)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Pages selection
-// ---------------------------------------------------------------------------
-
-describe('pages selection', () => {
-  it('resolve_pages reflects the active PagesMode', async () => {
-    const model = await loaded_model({ page_count: 4 })
-    expect(model.resolve_pages()).toEqual([0, 1, 2, 3])
-    model.set_pages_mode(PagesMode.ODD)
-    expect(model.resolve_pages()).toEqual([0, 2])
-  })
-
-  it('set_select_pattern switches to a Select-mode pattern and turns off follow', async () => {
-    const model = await loaded_model({ page_count: 10 })
-    model.set_current_follow(true)
-    model.set_select_pattern('2-4')
-    expect(model.current_follow).toBe(false)
-    expect(model.pages_mode).toBe(PagesMode.SELECT)
-    expect(model.resolve_pages()).toEqual([1, 2, 3])
-  })
-
-  it('set_current_follow syncs the pattern to the current page and re-syncs on navigation', async () => {
-    const model = await loaded_model({ page_count: 10 })
-    model.jump_to_output_page(3)
-    model.set_current_follow(true)
-    expect(model.select_pattern).toBe('3')
-    model.next_page()
-    expect(model.select_pattern).toBe('4')
-  })
-
-  it('resolve_pages is empty with no document', () => {
-    const { adapter } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    expect(model.resolve_pages()).toEqual([])
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Crop / detect
-// ---------------------------------------------------------------------------
-
-describe('detect_content / apply_crop', () => {
-  it('can_detect requires a document and at least one anchor on (works at any split count)', async () => {
-    const model = await loaded_model()
-    expect(model.can_detect).toBe(true)
-    model.set_anchor(false, false)
-    expect(model.can_detect).toBe(false)
-    model.set_anchor(true, null)
-    model.set_split(2)
-    expect(model.can_detect).toBe(true)
-  })
-
-  it('detect_content at split=2/4 detects per-region and writes crop_rects (spec §4.5/§5a)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.set_split(2)
-    const result = await model.detect_content().result()
-    expect(result).toBeInstanceOf(Ok)
-    expect(model.can_apply).toBe(true)   // crop_rects populated to exactly split_count entries
-  })
-
-  it('rotate/delete/set_split each clear any prior per-region detect result', async () => {
-    // No direct getter for the private per-region cache — this exercises the three clear-call
-    // sites (rotate_pages/delete_pages/set_split) and confirms a fresh detect still resolves
-    // cleanly afterward each time (a stale union surviving would silently mis-anchor it).
-    const model = await loaded_model({ page_w: 200, page_h: 300, page_count: 3 })
-    model.set_split(2)
-    await model.detect_content().result()
-    model.rotate_pages()
-    expect(await model.detect_content().result()).toBeInstanceOf(Ok)
-
-    model.set_pages_mode(PagesMode.SELECT); model.set_select_pattern('1')   // leave 2 of 3 pages
-    model.delete_pages()
-    model.set_pages_mode(PagesMode.ALL)
-    expect(await model.detect_content().result()).toBeInstanceOf(Ok)
-
-    model.set_split(4)
-    expect(await model.detect_content().result()).toBeInstanceOf(Ok)
-  })
-
-  it('detect_content raises NoDocumentError with no document', () => {
-    const { adapter } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    expect(() => model.detect_content()).toThrow(NoDocumentError)
-  })
-
-  it('detect_content resolves Ok and sets auto_active + a live overlay box', async () => {
-    const model = await loaded_model()
-    const job = model.detect_content()
-    const result = await job.result()
-    expect(result).toBeInstanceOf(Ok)
-    expect(model.auto_active).toBe(true)
-    const snap = model.view_snapshot()
-    expect(snap.overlay.some(o => o.kind === 'auto')).toBe(true)
-  })
-
-  it('detect_content emits progress per page, not all at the end (#5)', async () => {
-    const model = await loaded_model({ page_count: 3 })
-    const job = model.detect_content()
-    const seen: number[] = []
-    job.onProgress((done) => { seen.push(done) })
-    await job.result()
-    // one advance() per page, strictly increasing — not a single jump straight to `total`.
-    expect(seen).toEqual([1, 2, 3])
-  })
-
-  it('detect_content does not move the current page/view position (#5)', async () => {
-    const model = await loaded_model({ page_count: 3 })
-    model.next_page()
-    const before = model.view_position
-    await model.detect_content().result()
-    expect(model.view_position).toBe(before)
-  })
-
-  it('apply_crop with split=1 requires an active auto-detect box (draw/detect first)', async () => {
-    const model = await loaded_model()
-    model.apply_crop()   // no detect run yet — silently commits nothing (spec: crop never dropped, never fabricated)
-    expect(model.view_snapshot().overlay).toEqual([])
-  })
-
-  it('apply_crop after detect_content commits the live box', async () => {
-    const model = await loaded_model()
-    await model.detect_content().result()
-    const full = model.view_snapshot().page_w
-    model.apply_crop()
-    const snap = model.view_snapshot()
-    expect(snap.page_w).toBeLessThan(full)   // committed page paints the cropped region at box dims
-    expect(snap.overlay).toHaveLength(0)     // no crop outline over the already-cropped view
-  })
-
-  it('apply_crop with a mismatched split count raises InvalidSplitError', async () => {
-    // split_count is a non-undoable interaction setting (ARCHITECTURE §5.2) but crop_rects
-    // lives in undoable DocumentState — an undo can restore crop_rects from before a
-    // set_split() call while split_count itself stays put, producing a real mismatch.
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()   // history.push, crop_rects=[]
-    model.set_split(4)   // crop_rects now has 4 rects; split_count=4; not itself undoable; pushes (C1)
-    model.undo()         // restores document to the pre-split snapshot: crop_rects=[] either way
-    expect(model.split_count).toBe(4)              // untouched by undo
-    expect(() => { model.apply_crop(); }).toThrow(InvalidSplitError)
-  })
-
-  it('detect_content raises EmptySelectionError when the page selection is empty', async () => {
-    const model = await loaded_model({ page_count: 4 })
-    model.set_select_pattern('999')   // resolves to no pages
-    model.set_pages_mode(PagesMode.SELECT)
-    expect(() => model.detect_content()).toThrow(EmptySelectionError)
-  })
-
-  it('set_keep_ratio(true) with no union defaults to the PAGE aspect ratio (bug E)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 400 })
-    model.set_keep_ratio(true)
-    expect(model.keep_ratio).toBe(true)
-    expect(model.ratio).toBeCloseTo(0.5)   // no detection yet → default to page w/h = 200/400
-  })
-
-  it('a hand-drawn window shows on every page and Crop applies it to ALL, then clears (bug D)', async () => {
-    const model = await loaded_model({ page_count: 3, page_w: 200, page_h: 300 })
-    model.begin_drag(40, 50, 8)
-    model.update_drag(160, 250)
-    model.end_drag()
-    expect(model.view_snapshot().overlay).toHaveLength(1)   // drawn window outline, page 1
-    model.next_page()
-    expect(model.view_snapshot().overlay).toHaveLength(1)   // same global window on page 2
-    model.prev_page()
-    model.apply_crop()
-    for (const n of [1, 2, 3]) {                            // every page now carries the crop
-      model.jump_to_output_page(n)
-      const s = model.view_snapshot()
-      expect(s.page_w).toBeCloseTo(120)   // committed to the drawn window's width (160-40) on every page
-      expect(s.overlay).toHaveLength(0)   // drawn window cleared; no stray outline on the crop
-    }
-  })
-
-  it('pressing inside a manual drawn window MOVES it, not replaces it (bug: move manual crop)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()
-    const before = model.view_snapshot().overlay[0]?.box   // {40,50,160,250}
-    model.begin_drag(100, 150, 8)   // press INSIDE the window
-    model.update_drag(120, 170)     // drag +20,+20
-    model.end_drag()
-    const after = model.view_snapshot().overlay[0]?.box
-    expect(after?.x0).toBeCloseTo((before?.x0 ?? 0) + 20)   // moved, not a fresh tiny rubber-band
-    expect(after?.y0).toBeCloseTo((before?.y0 ?? 0) + 20)
-  })
-
-  it('keep-ratio ratio initialises to the first page w/h on load, not 1.0 (bug E-init)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    expect(model.ratio).toBeCloseTo(200 / 300)
-  })
-
-  it('moving a drawn window into the page edge preserves its size (no deform at border)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.begin_drag(40, 40, 8); model.update_drag(120, 140); model.end_drag()  // {40,40,120,140}, 80×100
-    model.begin_drag(80, 90, 8)              // press INSIDE → move
-    model.update_drag(80 + 500, 90 + 500)    // shove far past the bottom-right corner
-    model.end_drag()
-    const box = model.view_snapshot().overlay[0]?.box
-    expect(box?.x1 ?? 0 - (box?.x0 ?? 0)).not.toBeNaN()
-    expect((box?.x1 ?? 0) - (box?.x0 ?? 0)).toBeCloseTo(80)    // width preserved (not shrunk)
-    expect((box?.y1 ?? 0) - (box?.y0 ?? 0)).toBeCloseTo(100)   // height preserved
-    expect(box?.x1).toBeCloseTo(200)                          // stopped at the right edge
-    expect(box?.y1).toBeCloseTo(300)                          // stopped at the bottom edge
-  })
-
-  it('resizing a drawn window with keep-ratio holds the ratio live during the drag', async () => {
-    const model = await loaded_model({ page_w: 400, page_h: 400 })
-    model.begin_drag(50, 50, 8); model.update_drag(150, 150); model.end_drag()  // 100×100 square
-    model.set_keep_ratio(true, 2.0)          // lock width:height = 2:1
-    model.begin_drag(150, 150, 8)            // BR handle
-    model.update_drag(300, 250)              // resize out (no end_drag → mid-drag state)
-    const box = model.view_snapshot().overlay[0]?.box
-    const w = (box?.x1 ?? 0) - (box?.x0 ?? 0), h = (box?.y1 ?? 0) - (box?.y0 ?? 0)
-    expect(w / h).toBeCloseTo(2.0, 1)        // ratio preserved DURING the drag, not only on release
-  })
-
-  it('cancel_drag (Esc / right-click) drops the pending drawn window (bug 5)', async () => {
-    const model = await loaded_model()
-    model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()
-    expect(model.view_snapshot().overlay).toHaveLength(1)   // drawn window shown
-    model.cancel_drag()
-    expect(model.view_snapshot().overlay).toHaveLength(0)   // dropped by Esc/right-click
-  })
-
-  it('cancel_drag on an EXISTING drawn window restores it, not drops it (H1)', async () => {
-    const model = await loaded_model()
-    model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()   // drawn={40,50,160,250}
-    const box0 = model.view_snapshot().overlay[0]?.box
-    const before = box0 && round6(box0)
-    model.begin_drag(40, 50, 8)      // grab the TL handle of the existing drawn window
-    model.update_drag(80, 90)        // resize it
-    expect(model.view_snapshot().overlay[0]?.box).not.toEqual(before)   // live during the drag
-    model.cancel_drag()
-    const box1 = model.view_snapshot().overlay[0]?.box
-    expect(box1 && round6(box1)).toEqual(before)   // cancel changes nothing (help_view §5)
-  })
-
-  it('starting a new draw drops the old drawn window immediately on press (bug 6)', async () => {
-    const model = await loaded_model()
-    model.begin_drag(40, 50, 8); model.update_drag(160, 250); model.end_drag()
-    expect(model.view_snapshot().overlay).toHaveLength(1)
-    model.begin_drag(20, 20, 8)                             // press to start a NEW draw
-    expect(model.view_snapshot().overlay).toHaveLength(0)   // old window gone before any move
-    model.cancel_drag()
-  })
-
-  it('set_keep_ratio(true) pre-populates from the detection UNION, not the page (model.py:435-441)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 400 })
-    model.set_keep_ratio(false)
-    await model.detect_content().result()   // mock detect_content_box -> {20,20,180,380} on 200x400
-    model.set_keep_ratio(true)
-    // union width=160, height=360 (page ratio would have been 200/400=0.5 — must not match that)
-    expect(model.ratio).toBeCloseTo(160 / 360, 5)
-  })
-
-  it('set_keep_ratio(true) at split>1 prefers a manually resized window over the fresh-grid cell aspect (bug #4)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.set_split(2)
-    const r = split_rects(model)[0]!            // {0,0,100,300}
-    model.begin_drag(r.x1, (r.y0 + r.y1) / 2, 8)        // R handle
-    model.update_drag(180, (r.y0 + r.y1) / 2)           // manually resize BEFORE keep-ratio is pressed
-    model.end_drag()
-    expect(split_rects(model)[0]!.x1).toBeCloseTo(180)
-
-    model.set_keep_ratio(true)
-    // the fresh-grid cell aspect would be 100/300; the manual edit's own aspect must win instead.
-    expect(model.ratio).toBeCloseTo(180 / 300, 5)
-  })
-
-  it('set_keep_ratio(true) at split=1 prefers a manually drawn window over the page aspect (bug #4)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.begin_drag(20, 20, 5); model.update_drag(120, 70); model.end_drag()   // drawn {20,20,120,70}: 100x50
-    model.set_keep_ratio(true)
-    expect(model.ratio).toBeCloseTo(100 / 50, 5)   // not the page aspect 200/300
-  })
-
-  it('changing the split count while keep-ratio is ON re-derives the ratio fresh, not scaled from the prior value (bug #3)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.set_keep_ratio(true)                 // split=1, nothing drawn/detected yet -> page aspect
-    expect(model.ratio).toBeCloseTo(200 / 300, 5)
-    model.set_split(2)
-    // split-2's fresh grid cell is (page_w/2)/page_h = 100/300 -- exactly half the prior ratio here,
-    // but as a SIDE EFFECT of the new grid's shape, not a dedicated *0.5 rule (a custom-typed ratio
-    // does not survive the split change either — it is dropped and re-derived, by design).
-    expect(model.ratio).toBeCloseTo(100 / 300, 5)
-    expect(model.ratio).toBeCloseTo(0.5 * (200 / 300), 5)
-  })
-
-  it('set_split seeds crop_rects for the requested count', async () => {
-    const model = await loaded_model()
-    model.set_split(4)
-    expect(model.split_count).toBe(4)
-    expect(model.can_apply).toBe(true)   // crop_rects freshly seeded to exactly 4 -> matches split_count
-  })
-
-  it('set_same_size toggles', async () => {
-    const model = await loaded_model()
-    expect(model.same_size).toBe(false)
-    model.set_same_size(true)
-    expect(model.same_size).toBe(true)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Gestures — draw a new crop rectangle end to end
-// ---------------------------------------------------------------------------
-
-describe('gestures: draw / cancel', () => {
-  it('a full draw gesture (begin -> update -> end) commits a crop box', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.begin_drag(10, 10, 5)
-    model.update_drag(150, 250)
-    model.end_drag()
-    const snap = model.view_snapshot()
-    expect(snap.overlay).toHaveLength(1)
-    expect(snap.overlay[0]?.kind).toBe('committed')
-  })
-
-  it('a too-small draw is discarded (below MIN_RECT), nothing committed', async () => {
-    const model = await loaded_model()
-    model.begin_drag(10, 10, 5)
-    model.update_drag(11, 11)
-    model.end_drag()
-    expect(model.view_snapshot().overlay).toEqual([])
-  })
-
-  it('cancel_drag on a crop-edit restores the prior committed box', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    // Commit a box: draw a window, then Crop (draw now sets the global drawn window).
-    model.begin_drag(10, 10, 5)
-    model.update_drag(150, 250)
-    model.end_drag()
-    model.apply_crop()                       // committed to {10,10,150,250}; drawn cleared
-    // Grab the committed box's TL handle, drag, then cancel — the committed crop is restored.
-    model.begin_drag(10, 10, 5)
-    model.update_drag(80, 80)
-    model.cancel_drag()
-    const s = model.view_snapshot()
-    expect(s.page_w).toBeCloseTo(140)        // 150 - 10, committed crop dims preserved
-    expect(s.page_h).toBeCloseTo(240)        // 250 - 10
-  })
-
-  it('drag without a loaded document is a no-op', () => {
-    const { adapter } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    expect(() => { model.begin_drag(0, 0, 5); model.update_drag(1, 1); model.end_drag() }).not.toThrow()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Scan processing
-// ---------------------------------------------------------------------------
-
-describe('scan processing (toggle flips instantly; warm batch behavior in scan_batch.test.ts)', () => {
-  it('run_dewarp toggles dewarp_on synchronously', async () => {
-    const model = await loaded_model({ mode: Mode.SCANNED })
-    expect(model.dewarp_on).toBe(false)
-    model.run_dewarp()
-    expect(model.dewarp_on).toBe(true)
-  })
-
-  it('set_filter_mode sets the mode; pressing the same mode again is a no-op (persists until Undo)', async () => {
-    const model = await loaded_model({ mode: Mode.SCANNED })
-    model.set_filter_mode(FilterMode.BW)
-    expect(model.filter_mode).toBe(FilterMode.BW)
-    model.set_filter_mode(FilterMode.BW)
-    expect(model.filter_mode).toBe(FilterMode.BW)
-  })
-
-  it('set_filter_strength clamps to [FILTER_STRENGTH_MIN, FILTER_STRENGTH_MAX]', async () => {
-    const model = await loaded_model({ mode: Mode.SCANNED })
-    model.set_filter_strength(99)
-    expect(model.filter_strength).toBe(3)
-    model.set_filter_strength(-5)
-    expect(model.filter_strength).toBe(1)
-  })
-
-  it('a failing renderer does not throw at the toggle call (failure surfaces via the job result)', async () => {
-    const { adapter } = make_mock_adapter({ mode: Mode.SCANNED })
-    adapter.get_work_image = (): Promise<ImageBitmap> => Promise.reject(new Error('boom'))
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    let job
-    expect(() => { job = model.run_dewarp() }).not.toThrow()   // intent recorded; job fails async
-    expect(model.dewarp_on).toBe(true)
-    expect(await job!.result()).toBeInstanceOf(Failed)
-  })
-})
-
-describe('set_display_scale (NORMAL preview sharpness, spec-web §2)', () => {
-  it('is a no-op in SCANNED mode — SRC_DPI never changes', async () => {
-    const { adapter, source_dpis } = make_mock_adapter({ mode: Mode.SCANNED, page_count: 1 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.set_display_scale(10)   // would resolve to a huge NORMAL-scale DPI if it applied here
-    await model.prepare_current_view()
-    expect(source_dpis.every(d => d === SRC_DPI)).toBe(true)
-  })
-
-  it('resolves NORMAL render DPI from display scale, clamped [NORMAL_DPI, NORMAL_DISPLAY_DPI_MAX]', async () => {
-    const { adapter, source_dpis } = make_mock_adapter({ mode: Mode.NORMAL, page_count: 1 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    await model.prepare_current_view()
-    expect(source_dpis).toEqual([NORMAL_DPI])   // baseline before any display-scale report
-
-    model.set_display_scale(3)   // 3 physical px per PDF point -> 216dpi, within bounds
-    source_dpis.length = 0
-    await model.prepare_current_view()
-    expect(source_dpis).toEqual([216])
-
-    model.set_display_scale(1000)   // absurd window/DPR -> clamps to the cap, not unbounded
-    source_dpis.length = 0
-    await model.prepare_current_view()
-    expect(source_dpis).toEqual([NORMAL_DISPLAY_DPI_MAX])
-  })
-
-  it('only re-renders for a meaningfully sharper request, and never downgrades once bumped', async () => {
-    const { adapter, source_dpis } = make_mock_adapter({ mode: Mode.NORMAL, page_count: 1 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    await model.prepare_current_view()
-    expect(source_dpis).toEqual([NORMAL_DPI])
-
-    // ~151dpi — barely above the 150 baseline, under the 10% bump threshold: cache hit, no re-render.
-    model.set_display_scale(151 / 72)
-    source_dpis.length = 0
-    await model.prepare_current_view()
-    expect(source_dpis).toEqual([])
-
-    // 216dpi — meaningfully higher: bumps and re-renders.
-    model.set_display_scale(3)
-    source_dpis.length = 0
-    await model.prepare_current_view()
-    expect(source_dpis).toEqual([216])
-
-    // Window shrinks back down — must not discard the sharper cached render.
-    model.set_display_scale(1)
-    source_dpis.length = 0
-    await model.prepare_current_view()
-    expect(source_dpis).toEqual([])
-  })
-})
-
-// ---------------------------------------------------------------------------
-// History
-// ---------------------------------------------------------------------------
-
-describe('undo / redo', () => {
-  it('can_undo/can_redo reflect history state around a crop commit', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    expect(model.can_undo).toBe(false)
-    model.begin_drag(10, 10, 5)
-    model.update_drag(150, 250)
-    model.end_drag()
-    // The drawn window is non-undoable scaffolding (§W9.2) — nothing undo-tracked changes until
-    // Crop commits it into `applied`.
-    expect(model.can_undo).toBe(false)
-    expect(model.view_snapshot().overlay).toHaveLength(1)   // still shown as a pending window
-
-    model.apply_crop()
-    expect(model.can_undo).toBe(true)
-    expect(model.document.applied.size).toBeGreaterThan(0)
-
-    model.undo()
-    expect(model.document.applied.size).toBe(0)
-    expect(model.can_redo).toBe(true)
-
-    model.redo()
-    expect(model.document.applied.size).toBeGreaterThan(0)
-  })
-
-  it('set_split destroys committed crops but undo fully restores them (C1)', async () => {
-    const model = await loaded_model({ page_count: 2, page_w: 200, page_h: 300 })
-    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()
-    model.apply_crop()                                    // both pages committed to {10,10,150,250}
-    expect(model.document.applied.size).toBe(2)
-
-    model.set_split(2)                                    // destructive: clears document.applied
-    expect(model.document.applied.size).toBe(0)
-
-    model.undo()
-    expect(model.document.applied.size).toBe(2)
-    expect(model.document.applied.get(0)).toEqual([{ x0: 10, y0: 10, x1: 150, y1: 250 }])
-    expect(model.document.applied.get(1)).toEqual([{ x0: 10, y0: 10, x1: 150, y1: 250 }])
-  })
-
-  it('a completed auto-drag resize is undoable one drag at a time (C1)', async () => {
-    // Two sequential drags: a single stray undo must revert only the SECOND one, proving
-    // _begin_auto_drag pushes its own checkpoint per drag rather than relying on a stale
-    // snapshot from an earlier call (detect_content) that coincidentally has the same offsets.
-    const model = await loaded_model({ page_w: 200, page_h: 400 })
-    await model.detect_content().result()
-    const b1 = model.view_snapshot().overlay.find(o => o.kind === 'auto')?.box
-    if (!b1) throw new Error('no auto overlay')
-    model.begin_drag(b1.x0, b1.y0, 8)
-    model.update_drag(b1.x0 + 15, b1.y0 + 15)
-    model.end_drag()
-    const after_first_drag = model.offsets
-
-    const b2 = model.view_snapshot().overlay.find(o => o.kind === 'auto')?.box
-    if (!b2) throw new Error('no auto overlay')
-    model.begin_drag(b2.x1, b2.y1, 8)
-    model.update_drag(b2.x1 + 15, b2.y1 + 15)
-    model.end_drag()
-    expect(model.offsets).not.toEqual(after_first_drag)
-
-    model.undo()   // should undo ONLY the second drag
-    expect(model.offsets).toEqual(after_first_drag)
-  })
-
-  it('a completed split-drag resize is undoable (C1)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.set_split(2)
-    const before = [...split_rects(model)]
-    const r = split_rects(model)[0]
-    if (!r) throw new Error('no split rect')
-    model.begin_drag(r.x0, r.y0, 8)
-    model.update_drag(r.x0 + 15, r.y0 + 15)
-    model.end_drag()
-    expect(split_rects(model)).not.toEqual(before)
-    model.undo()
-    expect(split_rects(model)).toEqual(before)
-  })
-
-  it('anchor_left/anchor_top are deliberately non-undoable interaction settings (L5)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()   // history.push
-    model.set_anchor(false, false)
-    model.undo()
-    expect(model.anchor_left).toBe(false)   // NOT reverted — anchors sit outside DocumentState
-    expect(model.anchor_top).toBe(false)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Output settings (outside History)
-// ---------------------------------------------------------------------------
-
-describe('output settings', () => {
-  it('set_compress_preset only accepts known preset names', async () => {
-    const model = await loaded_model()
-    model.set_compress_preset('not-a-real-preset')
-    expect(model.compress_preset).not.toBe('not-a-real-preset')
-    model.set_compress_preset('Medium — 150 dpi')
-    expect(model.compress_preset).toBe('Medium — 150 dpi')
-  })
-
-  it('set_output_colours / set_export_format / set_undo_depth', async () => {
-    const model = await loaded_model()
-    model.set_output_colours('Grayscale')
-    expect(model.output_colours).toBe('Grayscale')
-    model.set_export_format('JPG')
-    expect(model.export_format).toBe('JPG')
-    model.set_export_format('not-a-format')
-    expect(model.export_format).toBe('JPG')   // rejected, unchanged
-    model.set_undo_depth(2)
-    expect(model.undo_depth).toBe(2)
-  })
-
-  it('UNDO_DEPTH_OPTIONS offers [1,2,4,8] (task #9)', () => {
-    expect(UNDO_DEPTH_OPTIONS).toEqual([1, 2, 4, 8])
-  })
-
-  it('set_paper_size accepts a PAPER_SIZES key or the Custom sentinel, rejects anything else', async () => {
-    const model = await loaded_model()
-    model.set_paper_size('A2')
-    expect(model.paper_size).toBe('A2')
-    model.set_paper_size('Custom')
-    expect(model.paper_size).toBe('Custom')
-    model.set_paper_size('not-a-real-size')
-    expect(model.paper_size).toBe('Custom')   // rejected, unchanged
-  })
-
-  it('custom_paper_in defaults to A4 height and clamps to [CUSTOM_PAPER_MIN,MAX]', async () => {
-    const model = await loaded_model()
-    expect(model.custom_paper_in).toBeCloseTo(DEFAULT_CUSTOM_PAPER_IN)
-    model.set_custom_paper_in(20)
-    expect(model.custom_paper_in).toBe(20)
-    model.set_custom_paper_in(9999)
-    expect(model.custom_paper_in).toBe(CUSTOM_PAPER_MAX)
-    model.set_custom_paper_in(-5)
-    expect(model.custom_paper_in).toBe(CUSTOM_PAPER_MIN)
-  })
-
-  it('set_output_postfix / set_dewarp_supersample', async () => {
-    const model = await loaded_model()
-    model.set_output_postfix('_x')
-    expect(model.output_postfix).toBe('_x')
-    model.set_dewarp_supersample(3)
-    expect(model.dewarp_supersample).toBe(3)
-    model.set_dewarp_supersample(99)
-    expect(model.dewarp_supersample).toBe(4)   // clamped to [1,4]
-  })
-
-  it('output settings survive undo (spec §22 inv.4)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.set_output_colours('Grayscale')
-    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()
-    model.undo()
-    expect(model.output_colours).toBe('Grayscale')
-  })
-
-  it('output quality (DPI + colour) applies to export only, not the committed-crop preview (§W2 row 8)', async () => {
-    const { adapter, render_args } = make_mock_adapter({ page_w: 200, page_h: 300 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.set_compress_preset('Low — 75 dpi')
-    model.set_output_colours('Grayscale')
-    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag(); model.apply_crop()
-
-    render_args.length = 0
-    await model.prepare_current_view()
-    expect(render_args.length).toBeGreaterThan(0)          // committed page pre-rendered for preview
-    for (const a of render_args) {
-      expect(a.dpi).toBeNull()                             // preview stays full working resolution
-      expect(a.grey).toBe(false)                           // preview stays true-colour
-    }
-
-    render_args.length = 0
-    await model.export('out.pdf').result()
-    // Export honours the preset via the A4 sizing rule: long side = dpi × 11.69 in (§W2 row 8)
-    expect(render_args.some(a => a.dpi === Math.round(75 * 11.69))).toBe(true)
-    expect(render_args.some(a => a.grey)).toBe(true)
-  })
-
-  it('set_compress_preset accepts Custom; set_custom_dpi clamps to [MIN,MAX] (task 15)', async () => {
-    const model = await loaded_model()
-    model.set_compress_preset('Custom')
-    expect(model.compress_preset).toBe('Custom')
-    model.set_custom_dpi(999999)
-    expect(model.custom_dpi).toBe(CUSTOM_DPI_MAX)
-    model.set_custom_dpi(1)
-    expect(model.custom_dpi).toBe(CUSTOM_DPI_MIN)
-  })
-
-  it('export uses custom_dpi when the preset is Custom (task 15)', async () => {
-    const { adapter, render_args } = make_mock_adapter({ page_w: 200, page_h: 300 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.set_compress_preset('Custom')
-    model.set_custom_dpi(220)
-    render_args.length = 0
-    await model.export('out.pdf').result()
-    // A4 sizing rule (§W2 row 8): long side = custom_dpi × 11.69 in
-    expect(render_args.some(a => a.dpi === Math.round(220 * 11.69))).toBe(true)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Keep-ratio live + anchored (spec-web §W2 row 9)
-// ---------------------------------------------------------------------------
-
-describe('keep-ratio live + anchored', () => {
-  it('drawn-window resize anchors the opposite corner (bug 2, 1-split)', async () => {
-    const model = await loaded_model({ page_w: 400, page_h: 400 })
-    model.begin_drag(50, 50, 5); model.update_drag(250, 250); model.end_drag()  // draw {50,50,250,250}
-    model.set_keep_ratio(true, 2.0)
-    model.begin_drag(50, 50, 8); model.update_drag(80, 80); model.end_drag()     // drag TL handle
-    const box = model.view_snapshot().overlay[0]?.box
-    expect(box).toBeDefined()
-    expect(box!.x1).toBeCloseTo(250)                          // BR x fixed (opposite anchor)
-    expect(box!.y1).toBeCloseTo(250)                          // BR y fixed
-    expect((box!.x1 - box!.x0) / (box!.y1 - box!.y0)).toBeCloseTo(2.0)
-  })
-
-  it('2-split resize holds the ratio LIVE during the drag (bug 1)', async () => {
-    const model = await loaded_model({ page_w: 400, page_h: 600 })
-    model.set_split(2)
-    model.set_keep_ratio(true, 1.0)                           // square
-    model.begin_drag(200, 600, 10); model.update_drag(150, 300)  // BR of rect 0, no end_drag yet
-    const boxes = model.view_snapshot().overlay.filter(o => o.kind === 'split').map(o => o.box)
-    expect(boxes).toHaveLength(2)
-    const r0 = boxes[0]!
-    expect((r0.x1 - r0.x0) / (r0.y1 - r0.y0)).toBeCloseTo(1.0) // ratio held mid-drag, not on release
-  })
-
-  it('a 2-split window keeps its ratio lock past 50% page width instead of deforming (bug #3, geometry §9.7)', async () => {
-    const model = await loaded_model({ page_w: 400, page_h: 120 })
-    model.set_split(2)
-    model.set_keep_ratio(true, 2.0)                            // width:height = 2:1
-    const r0 = split_rects(model)[0]!                   // {0,0,200,120}
-    model.begin_drag(r0.x1, r0.y1, 10)                         // BR handle
-    model.update_drag(300, 120)                                // target width 300 = 75% of the page
-    const box = model.view_snapshot().overlay.find(o => o.kind === 'split')?.box
-    expect(box).toBeDefined()
-    expect((box!.x1 - box!.x0) / (box!.y1 - box!.y0)).toBeCloseTo(2.0)   // ratio held exactly
-    expect(box!.y1).toBeLessThanOrEqual(120)                              // clamped to the page
-    expect(box!.x1 - box!.x0).toBeCloseTo(240)   // width capped back from 300 to hold the ratio at the wall
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Rotate / delete
-// ---------------------------------------------------------------------------
-
-describe('rotate_pages', () => {
-  it('raises NoDocumentError with no document', () => {
-    const { adapter } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    expect(() => { model.rotate_pages(); }).toThrow(NoDocumentError)
-  })
-
-  it('swaps the reported page_w/page_h for a 90 degree rotation', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    const before = model.view_snapshot()
-    expect(before.page_w).toBe(200)
-    expect(before.page_h).toBe(300)
-    model.rotate_pages()
-    const after = model.view_snapshot()
-    expect(after.page_w).toBe(300)
-    expect(after.page_h).toBe(200)
-  })
-
-  it('four rotations return to the original page_w/page_h', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    for (let i = 0; i < 4; i++) model.rotate_pages()
-    const snap = model.view_snapshot()
-    expect(snap.page_w).toBe(200)
-    expect(snap.page_h).toBe(300)
-  })
-
-  it('rotate carries a committed crop through (never dropped, spec §13)', async () => {
-    const model = await loaded_model({ page_w: 200, page_h: 300 })
-    model.begin_drag(10, 10, 5); model.update_drag(150, 250); model.end_drag()
-    expect(model.view_snapshot().overlay).toHaveLength(1)
-    model.rotate_pages()
-    expect(model.view_snapshot().overlay).toHaveLength(1)
-    expect(model.view_snapshot().overlay[0]?.kind).toBe('committed')
-  })
-})
-
-describe('delete_pages', () => {
-  it('raises DeleteAllPagesError when the selection covers every page', async () => {
-    const model = await loaded_model({ page_count: 2 })
-    expect(() => { model.delete_pages(); }).toThrow(DeleteAllPagesError)
-  })
-
-  it('deletes the selected pages and reindexes the rest', async () => {
-    const model = await loaded_model({ page_count: 4 })
-    model.set_select_pattern('2')       // 1-based -> source index 1
-    model.set_pages_mode(PagesMode.SELECT)
-    model.delete_pages()
-    expect(model.page_count()).toBe(3)
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Export
-// ---------------------------------------------------------------------------
-
-describe('export', () => {
-  it('suggested_export_name derives from the first file name and current settings', async () => {
-    const model = await loaded_model()
-    const name = model.suggested_export_name()
-    expect(name).toMatch(/^a_cropped\.pdf$/)
-  })
-
-  it('export raises NoDocumentError with no document', () => {
-    const { adapter } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    expect(() => model.export('out.pdf')).toThrow(NoDocumentError)
-  })
-
-  it('export(PDF) drives export_pdf and the registered download handler', async () => {
-    const { adapter, calls } = make_mock_adapter({ page_count: 2 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    let got_bytes: Uint8Array | null = null
-    model.set_download_handlers((bytes) => { got_bytes = bytes }, () => { /* unused */ })
-    const result = await model.export('out.pdf').result()
-    expect(result).toBeInstanceOf(Ok)
-    expect(calls['export_pdf']).toBe(1)
-    expect(got_bytes).not.toBeNull()
-  })
-
-  it('export(JPG) drives export_images and the zip download handler', async () => {
-    const { adapter, calls } = make_mock_adapter({ page_count: 1 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.set_export_format('JPG')
-    let got_zip: Uint8Array | null = null
-    let got_base = ''
-    model.set_download_handlers(() => { /* unused */ }, (bytes, base) => { got_zip = bytes; got_base = base })
-    await model.export('out').result()
-    expect(calls['export_images']).toBe(1)
-    expect(calls['export_pdf']).toBeUndefined()
-    expect(got_zip).not.toBeNull()
-    expect(got_base).toBe('out')
-  })
-
-  it('export(TIFF) also drives the image/zip path, not export_pdf', async () => {
-    const { adapter, calls } = make_mock_adapter({ page_count: 2 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.set_export_format('TIFF')
-    let got_zip: Uint8Array | null = null
-    model.set_download_handlers(() => { /* unused */ }, (bytes) => { got_zip = bytes })
-    await model.export('out').result()
-    expect(calls['export_images']).toBe(1)
-    expect(calls['export_pdf']).toBeUndefined()
-    expect(got_zip).not.toBeNull()
-  })
-
-  it('zip base strips a trailing image extension (no "name.png.zip")', async () => {
-    const { adapter } = make_mock_adapter({ page_count: 1 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.set_export_format('PNG')
-    let got_base = ''
-    model.set_download_handlers(() => { /* unused */ }, (_b, base) => { got_base = base })
-    await model.export('doc_cropped.png').result()   // filename carries the format ext
-    expect(got_base).toBe('doc_cropped')
-  })
-
-  it('suggested_export_name uses .tif for TIFF', async () => {
-    const { adapter } = make_mock_adapter({ page_count: 1 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE('scan.pdf')])
-    model.set_export_format('TIFF')
-    const name = model.suggested_export_name()
-    expect(name.endsWith('.tif')).toBe(true)
-  })
-
-  it('export progress counts output pages for every format (encoding is streamed per page)', async () => {
-    const { adapter } = make_mock_adapter({ page_count: 3 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.set_export_format('JPG')
-    expect(model.export('out').total).toBe(model.view_total)
-    model.set_export_format('PDF')
-    expect(model.export('out.pdf').total).toBe(model.view_total)
-  })
-})
-
-describe('document_name', () => {
-  it('is empty with no document, the file name with one, "+N more" with several', async () => {
-    const { adapter } = make_mock_adapter({ page_count: 1 })
-    const model = new AppModel(adapter)
-    expect(model.document_name).toBe('')
-    await model.load_files([FILE('scan.pdf')])
-    expect(model.document_name).toBe('scan.pdf')
-    await model.load_files([FILE('a.pdf'), FILE('b.pdf'), FILE('c.pdf')])
-    expect(model.document_name).toBe('a.pdf +2 more')
-  })
-})
-
-// ---------------------------------------------------------------------------
-// View snapshot / prepare_current_view
-// ---------------------------------------------------------------------------
-
-describe('view_snapshot / prepare_current_view', () => {
-  it('returns a synthetic snapshot with no document', () => {
-    const { adapter } = make_mock_adapter()
-    const model = new AppModel(adapter)
-    const snap = model.view_snapshot()
-    expect(snap.image).toBeNull()
-    expect(snap.total).toBe(0)
-  })
-
-  it('image is null until prepare_current_view() has fetched the raster', async () => {
-    const model = await loaded_model()
-    expect(model.view_snapshot().image).toBeNull()
-    await model.prepare_current_view()
-    expect(model.view_snapshot().image).not.toBeNull()
-  })
-})
-
-describe('AppModel constructor / has_document edge cases', () => {
-  let model: AppModel
-  beforeEach(() => {
-    const { adapter } = make_mock_adapter()
-    model = new AppModel(adapter)
-  })
-
-  it('a fresh model has no document and default mode NORMAL', () => {
-    expect(model.has_document).toBe(false)
-    expect(model.mode).toBe(Mode.NORMAL)
-  })
-})
-
-describe('prepare_current_view: a superseded fetch never replaces the newer view', () => {
-  it('after Delete, a slow in-flight render of the deleted page does not become the current image', async () => {
-    let release: () => void = () => undefined
-    const gate = new Promise<void>(r => { release = r })
-    const { adapter } = make_mock_adapter({ page_count: 2 })
-    const model = new AppModel({
-      ...adapter,
-      get_source_image: async (orig: number) => {
-        if (orig === 0) await gate
-        return make_bitmap(100 + orig, 300)
-      },
-    })
-    await model.load_files([FILE()])
-    const stale = model.prepare_current_view()
-    model.set_select_pattern('1'); model.set_pages_mode(PagesMode.SELECT)
-    model.delete_pages()
-    model.set_pages_mode(PagesMode.ALL)
-    await model.prepare_current_view()
-    release()
-    await stale
-    expect(model.view_snapshot().image?.width).toBe(101)
-  })
-})
-
-describe('mixed page sizes: split and drawn windows are page-proportional (spec-web §4.4, §4.6)', () => {
-  async function mixed(): Promise<AppModel> {
-    const { adapter } = make_mock_adapter({ page_count: 2 })
-    const sizes = [{ width: 600, height: 800 }, { width: 150, height: 150 }]
-    const m = new AppModel({ ...adapter, load_files: f => Promise.resolve({ page_count: 2, page_sizes: sizes, file_names: f.map(x => x.name), mode: Mode.NORMAL }) })
-    await m.load_files([FILE()])
-    return m
-  }
-
-  it('split windows set on a large page are the same halves on a small page', async () => {
-    const m = await mixed()
+  it('next/prev/jump move between output pages and clamp at both ends', async () => {
+    const m = await loaded({ page_count: 5 })
+    expect([m.view_position, m.view_total]).toEqual([1, 5])
+    m.prev_page()
+    expect(m.view_position).toBe(1)
+    for (let i = 0; i < 9; i++) m.next_page()
+    expect(m.view_position).toBe(5)
+    m.jump_to_output_page(3)
+    expect(m.view_position).toBe(3)
+    m.jump_to_output_page(999)
+    expect(m.view_position).toBe(5)
+    m.jump_to_output_page(-5)
+    expect(m.view_position).toBe(1)
+  })
+
+  it('committed split pages multiply the output pages navigation walks', async () => {
+    const m = await loaded({ page_count: 3 })
     m.set_split(2)
-    m.jump_to_output_page(2)
-    expect(split_rects(m)).toEqual([{ x0: 0, y0: 0, x1: 75, y1: 150 }, { x0: 75, y0: 0, x1: 150, y1: 150 }])
-  })
-
-  it('a window drawn in the lower right of a large page never commits an empty crop on a small page', async () => {
-    const m = await mixed()
-    m.begin_drag(300, 400, 8); m.update_drag(600, 800); m.end_drag()
     m.apply_crop()
-    m.jump_to_output_page(2)
-    await m.prepare_current_view()
-    const v = m.view_snapshot()
-    expect([v.crop_origin.x, v.crop_origin.y, v.page_w, v.page_h].map(n => +n.toFixed(6))).toEqual([75, 75, 75, 75])
+    expect(m.view_total).toBe(6)
+    for (let i = 0; i < 10; i++) m.next_page()
+    expect(m.view_position).toBe(6)
   })
-})
 
-describe('view position follows the current page when committed crops change the view count', () => {
-  it('leaving split mode from a late split view does not leave the position past the end', async () => {
-    const model = await loaded_model({ page_count: 4 })
-    model.set_split(4)
-    model.apply_crop()
-    model.jump_to_output_page(11)
-    model.set_split(1)
-    expect(model.view_position).toBeLessThanOrEqual(model.view_total)
-    expect(model.view_snapshot().position).toBe(3)
+  it('leaving split mode from a late split view keeps the position on the same source page', async () => {
+    const m = await loaded({ page_count: 4 })
+    m.set_split(4)
+    m.apply_crop()
+    m.jump_to_output_page(11)
+    m.set_split(1)
+    expect([m.view_position, m.view_total]).toEqual([3, 4])
   })
 
   it('undo of a split crop keeps showing the same source page', async () => {
-    const model = await loaded_model({ page_count: 3 })
-    model.jump_to_output_page(2)
-    model.set_split(2)
-    model.apply_crop()
-    expect(model.view_position).toBe(3)
-    model.undo()
-    expect(model.view_position).toBe(2)
+    const m = await loaded({ page_count: 3 })
+    m.jump_to_output_page(2)
+    m.set_split(2)
+    m.apply_crop()
+    expect(m.view_position).toBe(3)
+    m.undo()
+    expect(m.view_position).toBe(2)
   })
 })
 
-describe('a failed scan batch commits nothing (spec-web §21 #26)', () => {
-  it('failed Dewarp leaves dewarp off and the page still renders', async () => {
-    const { adapter } = make_mock_adapter({ page_count: 2, mode: Mode.SCANNED })
-    const model = new AppModel({ ...adapter, get_work_image: () => Promise.reject(new Error('model load failed')) })
-    await model.load_files([FILE()])
-    const result = await model.run_dewarp().result()
-    expect(result).toBeInstanceOf(Failed)
-    expect(model.dewarp_on).toBe(false)
-    await model.prepare_current_view()
-    expect(model.view_snapshot().image).not.toBeNull()
+describe('page selection', () => {
+  it('resolve_pages follows ALL / ODD / EVEN / SELECT', async () => {
+    const m = await loaded({ page_count: 6 })
+    const got = (mode: PagesMode): number[] => { m.set_pages_mode(mode); return m.resolve_pages() }
+    expect(got(PagesMode.ALL)).toEqual([0, 1, 2, 3, 4, 5])
+    expect(got(PagesMode.ODD)).toEqual([0, 2, 4])
+    expect(got(PagesMode.EVEN)).toEqual([1, 3, 5])
+    m.set_select_pattern('2-4')
+    expect(got(PagesMode.SELECT)).toEqual([1, 2, 3])
+  })
+
+  it('an empty selection makes every page command raise EmptySelectionError', async () => {
+    const m = await loaded({ page_count: 4, mode: Mode.SCANNED })
+    select(m, '99')
+    expect(m.resolve_pages()).toEqual([])
+    for (const cmd of [() => m.detect_content(), () => m.rotate_pages(), () => m.run_dewarp(), () => m.set_filter_strength(2)]) {
+      expect(cmd).toThrow(EmptySelectionError)
+    }
+  })
+
+  it('current-page follow selects the current page, re-syncs on navigation, and ends on a manual edit', async () => {
+    const m = await loaded({ page_count: 10 })
+    m.jump_to_output_page(3)
+    m.set_current_follow(true)
+    expect([m.pages_mode, m.select_pattern]).toEqual([PagesMode.SELECT, '3'])
+    m.next_page()
+    expect(m.select_pattern).toBe('4')
+    m.prev_page(); m.prev_page()
+    expect([m.select_pattern, m.resolve_pages()]).toEqual(['2', [1]])
+    m.set_select_pattern('5-6')
+    expect(m.current_follow).toBe(false)
+    m.set_current_follow(true)
+    m.set_pages_mode(PagesMode.ALL)
+    expect(m.current_follow).toBe(false)
   })
 })
 
-describe('Delete is undoable (spec-web §12)', () => {
-  it('undo restores the pages, their crops and the viewed page without re-rendering; redo deletes again', async () => {
-    const { adapter, calls } = make_mock_adapter({ page_count: 4 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    model.begin_drag(20, 20, 5); model.update_drag(120, 220); model.end_drag()
-    model.set_select_pattern('2'); model.set_pages_mode(PagesMode.SELECT)
-    model.apply_crop()                                       // crop page 2 only
-    model.set_pages_mode(PagesMode.ALL)
-    for (let p = 1; p <= 4; p++) { model.jump_to_output_page(p); await model.prepare_current_view() }
-    const renders = calls['get_source_image']
+describe('history', () => {
+  it('a drawn window is not undoable; Crop is, and undo/redo toggle it', async () => {
+    const m = await loaded()
+    draw(m, 10, 10, 150, 250)
+    expect(m.can_undo).toBe(false)
+    m.apply_crop()
+    expect([m.can_undo, m.document.applied.size]).toEqual([true, 3])
+    m.undo()
+    expect([m.can_redo, m.document.applied.size]).toEqual([true, 0])
+    m.redo()
+    expect(m.document.applied.size).toBe(3)
+  })
 
-    model.jump_to_output_page(3)                             // view page 3
-    model.set_select_pattern('1-2'); model.set_pages_mode(PagesMode.SELECT)
-    model.delete_pages()
-    model.set_pages_mode(PagesMode.ALL)
-    expect(model.page_count()).toBe(2)
-    expect(model.view_position).toBe(1)                      // old page 3 is now page 1
-    expect(model.can_undo).toBe(true)
+  it('set_split drops committed crops and undo restores them exactly', async () => {
+    const m = await loaded({ page_count: 2 })
+    draw(m, 10, 10, 150, 250)
+    m.apply_crop()
+    m.set_split(2)
+    expect(m.document.applied.size).toBe(0)
+    m.undo()
+    expect([...m.document.applied]).toEqual([0, 1].map(p => [p, [{ x0: 10, y0: 10, x1: 150, y1: 250 }]]))
+  })
 
-    model.undo()
-    expect(model.page_count()).toBe(4)
-    expect(model.view_position).toBe(3)                      // still on the same page
-    model.jump_to_output_page(2)
-    await model.prepare_current_view()
-    expect(model.view_snapshot().page_w).toBeCloseTo(100)    // page 2's crop is back
-    expect(calls['get_source_image']).toBe(renders)          // nothing re-rendered
+  it('a new committing action clears the redo stack', async () => {
+    const m = await loaded()
+    draw(m, 10, 10, 150, 250); m.apply_crop()
+    m.rotate_pages()
+    m.undo()
+    expect(m.can_redo).toBe(true)
+    draw(m, 20, 20, 140, 240); m.apply_crop()
+    expect(m.can_redo).toBe(false)
+  })
 
-    model.redo()
-    expect(model.page_count()).toBe(2)
+  it('undo depth bounds the reversible steps exactly', async () => {
+    const m = await loaded()
+    m.set_undo_depth(2)
+    m.rotate_pages(); m.rotate_pages(); m.rotate_pages()
+    let steps = 0
+    while (m.can_undo) { m.undo(); steps++ }
+    expect(steps).toBe(2)
+    expect(dims(m)).toEqual([300, 200])
+  })
+
+  it('anchors and output settings sit outside history', async () => {
+    const m = await loaded()
+    m.set_output_colours('Grayscale')
+    draw(m, 10, 10, 150, 250); m.apply_crop()
+    m.set_anchor(false, false)
+    m.undo()
+    expect([m.anchor_left, m.anchor_top, m.output_colours]).toEqual([false, false, 'Grayscale'])
+  })
+
+  for (const mode of [Mode.NORMAL, Mode.SCANNED]) {
+    it(`${mode}: undoing every step then redoing every step lands on the same states`, async () => {
+      const m = await loaded({ page_count: 4, mode })
+      m.set_undo_depth(8)
+      const sig = (): string => JSON.stringify([m.view_total, m.page_count(), m.split_count, m.filter_mode,
+        m.filter_strength, m.dewarp_on, m.view_snapshot().overlay.length, dims(m)])
+      const start = sig()
+      if (mode === Mode.SCANNED) { m.set_filter_mode(FilterMode.BW); m.set_filter_strength(3); m.run_dewarp() }
+      await m.detect_content().result()
+      m.apply_crop()
+      m.rotate_pages()
+      draw(m, 10, 10, 150, 250); m.apply_crop()
+      const end = sig()
+      while (m.can_undo) m.undo()
+      m.cancel_drag()
+      expect(sig()).toBe(start)
+      while (m.can_redo) m.redo()
+      expect(sig()).toBe(end)
+    })
+  }
+})
+
+describe('rotate / delete', () => {
+  it('rotate swaps page dims, four rotations restore them, undo reverts one', async () => {
+    const m = await loaded()
+    m.rotate_pages()
+    expect(dims(m)).toEqual([300, 200])
+    m.undo()
+    expect(dims(m)).toEqual([200, 300])
+    for (let i = 0; i < 4; i++) m.rotate_pages()
+    expect(dims(m)).toEqual([200, 300])
+  })
+
+  it('delete removes the selection, refuses to delete everything, and undo restores without re-rendering', async () => {
+    const { adapter, calls } = spy(make_adapter({ page_count: 4 }))
+    const m = await loaded(adapter)
+    expect(() => { m.delete_pages() }).toThrow(DeleteAllPagesError)
+    draw(m, 20, 20, 120, 220)
+    select(m, '2'); m.apply_crop()
+    m.set_pages_mode(PagesMode.ALL)
+    for (let p = 1; p <= 4; p++) { m.jump_to_output_page(p); await m.prepare_current_view() }
+    const renders = n_calls(calls, 'get_source_image')
+
+    m.jump_to_output_page(3)
+    select(m, '1-2'); m.delete_pages()
+    expect([m.page_count(), m.view_position]).toEqual([2, 1])
+    m.undo()
+    expect([m.page_count(), m.view_position]).toEqual([4, 3])
+    m.jump_to_output_page(2)
+    await m.prepare_current_view()
+    expect(m.view_snapshot().page_w).toBe(100)
+    expect(n_calls(calls, 'get_source_image')).toBe(renders)
+    m.redo()
+    expect(m.page_count()).toBe(2)
   })
 })
 
-describe('estimate_export_bytes', () => {
-  it('is 0 with no document and grows with the page count and output resolution', async () => {
-    const { adapter } = make_mock_adapter({ page_count: 4 })
-    const model = new AppModel(adapter)
-    expect(model.estimate_export_bytes()).toBe(0)
-    await model.load_files([FILE()])
-    model.set_export_format('PNG')
-    const four = model.estimate_export_bytes()
+describe('output settings', () => {
+  it('setters accept known values, reject unknown ones and clamp numbers', async () => {
+    const m = await loaded()
+    m.set_compress_preset('nope')
+    expect(m.compress_preset).not.toBe('nope')
+    m.set_compress_preset('Medium — 150 dpi')
+    m.set_export_format('nope')
+    m.set_export_format('JPG')
+    m.set_paper_size('A2')
+    m.set_paper_size('nope')
+    m.set_output_postfix('_x')
+    expect([m.compress_preset, m.export_format, m.paper_size, m.output_postfix])
+      .toEqual(['Medium — 150 dpi', 'JPG', 'A2', '_x'])
+    expect([m.custom_paper_in, m.detect_outlier_pages]).toEqual([DEFAULT_CUSTOM_PAPER_IN, DEFAULT_DETECT_OUTLIER])
+    const clamps: [(v: number) => void, () => number, number, number][] = [
+      [v => { m.set_custom_dpi(v) }, () => m.custom_dpi, 999999, CUSTOM_DPI_MAX],
+      [v => { m.set_custom_dpi(v) }, () => m.custom_dpi, 1, CUSTOM_DPI_MIN],
+      [v => { m.set_custom_paper_in(v) }, () => m.custom_paper_in, 9999, CUSTOM_PAPER_MAX],
+      [v => { m.set_custom_paper_in(v) }, () => m.custom_paper_in, -5, CUSTOM_PAPER_MIN],
+      [v => { m.set_dewarp_supersample(v) }, () => m.dewarp_supersample, 99, DEWARP_SUPERSAMPLE_MAX],
+      [v => { m.set_detect_outlier_pages(v) }, () => m.detect_outlier_pages, -5, 0],
+      [v => { m.set_detect_outlier_pages(v) }, () => m.detect_outlier_pages, 2.7, 3],
+    ]
+    for (const [set, get, input, want] of clamps) { set(input); expect(get()).toBe(want) }
+  })
+
+  async function export_long_px(setup: (m: AppModel) => void): Promise<{ long: (number | null)[]; grey: boolean[] }> {
+    const { adapter, calls } = spy(make_adapter())
+    const m = await loaded(adapter)
+    draw(m, 10, 10, 150, 250); m.apply_crop()
+    setup(m)
+    await m.export('out.pdf').result()
+    const args = calls['render_output_image'] ?? []
+    return { long: args.map(a => a[4] as number | null), grey: args.map(a => a[5] as boolean) }
+  }
+
+  it('export long side = DPI × paper height; Custom DPI/paper honoured; Original keeps source size', async () => {
+    const cases: [(m: AppModel) => void, number | null][] = [
+      [m => { m.set_compress_preset('High — 300 dpi') }, Math.round(300 * A4)],
+      [m => { m.set_compress_preset('Low — 75 dpi') }, Math.round(75 * A4)],
+      [m => { m.set_compress_preset('Custom'); m.set_custom_dpi(600) }, Math.round(600 * A4)],
+      [m => { m.set_compress_preset('High — 300 dpi'); m.set_paper_size('Custom'); m.set_custom_paper_in(20) }, 6000],
+      [m => { m.set_compress_preset('Original resolution') }, null],
+    ]
+    for (const [setup, want] of cases) expect((await export_long_px(setup)).long).toEqual([want, want, want])
+  })
+
+  it('output quality applies to export only — the committed-crop preview stays full resolution and colour', async () => {
+    const { adapter, calls } = spy(make_adapter({ page_count: 1 }))
+    const m = await loaded(adapter)
+    m.set_compress_preset('Low — 75 dpi')
+    m.set_output_colours('Grayscale')
+    draw(m, 10, 10, 150, 250); m.apply_crop()
+    await m.prepare_current_view()
+    expect(calls['render_output_image']?.map(a => [a[4], a[5]])).toEqual([[null, false]])
+    await m.export('out.pdf').result()
+    expect(calls['render_output_image']?.at(-1)?.slice(4)).toEqual([Math.round(75 * A4), true])
+  })
+})
+
+describe('export', () => {
+  it('suggested name derives from the first file, the postfix and the format extension', async () => {
+    const m = await loaded()
+    const names = (['PDF', 'JPG', 'PNG', 'TIFF'] as const).map(f => { m.set_export_format(f); return m.suggested_export_name() })
+    expect(names).toEqual(['a_cropped.pdf', 'a_cropped.jpg', 'a_cropped.png', 'a_cropped.tif'])
+  })
+
+  it('PDF goes to the PDF handler; image formats go to one zip named without the extension', async () => {
+    const m = await loaded({ page_count: 2 })
+    const got: [string, string][] = []
+    m.set_download_handlers(() => { got.push(['pdf', '']) }, (_b, base) => { got.push(['zip', base]) })
+    await m.export('out.pdf').result()
+    for (const f of ['JPG', 'PNG', 'TIFF']) { m.set_export_format(f); await m.export(`doc.${f.toLowerCase()}`).result() }
+    expect(got).toEqual([['pdf', ''], ['zip', 'doc'], ['zip', 'doc'], ['zip', 'doc']])
+  })
+
+  it('exports committed crops at crop size and never applies an uncommitted auto-crop', async () => {
+    const pages: OutputPage[] = []
+    const m = await loaded({ ...make_adapter({ page_count: 2 }), begin_export: () => recording_sink(pages) })
+    await m.detect_content().result()
+    select(m, '1'); m.apply_crop()
+    expect((await m.export('out.pdf').result())).toBeInstanceOf(Ok)
+    expect(pages.map(p => [p.bitmap.width, p.bitmap.height])).toEqual([[160, 260], [200, 300]])
+  })
+
+  it('progress counts output pages for every format', async () => {
+    const m = await loaded({ page_count: 3 })
+    m.set_split(2); m.apply_crop()
+    for (const f of ['PDF', 'JPG']) { m.set_export_format(f); expect(m.export('out').total).toBe(6) }
+  })
+
+  it('NORMAL PDF uses the adapter vector path with one entry per source page', async () => {
+    let received: readonly VectorExportPage[] = []
+    const m = await loaded({ ...make_adapter({ page_count: 2 }), export_pdf_vector: p => { received = p; return Promise.resolve(new Uint8Array([7])) } })
+    let bytes: Uint8Array | null = null
+    m.set_download_handlers(b => { bytes = b }, () => undefined)
+    expect(await m.export('a.pdf').result()).toBeInstanceOf(Ok)
+    expect([received.length, bytes]).toEqual([2, new Uint8Array([7])])
+  })
+
+  it('a failure in render, sink or vector assembly resolves Failed; cancel during vector assembly downloads nothing', async () => {
+    const boom = (): Promise<never> => Promise.reject(new Error('boom'))
+    const failing: Partial<RendererAdapter>[] = [
+      { render_output_image: boom },
+      { begin_export: () => ({ ...recording_sink(), finish: boom }) },
+      { export_pdf_vector: boom },
+    ]
+    for (const f of failing) expect(await (await loaded({ ...make_adapter(), ...f })).export('a.pdf').result()).toBeInstanceOf(Failed)
+
+    const m = await loaded({ ...make_adapter(), export_pdf_vector: () => new Promise(r => setTimeout(() => { r(new Uint8Array([1])) }, 5)) })
+    const downloads: unknown[] = []
+    m.set_download_handlers(b => downloads.push(b), b => downloads.push(b))
+    const job = m.export('a.pdf')
+    job.cancel()
+    expect(await job.result()).toBeInstanceOf(Cancelled)
+    expect(downloads).toEqual([])
+  })
+
+  it('estimate_export_bytes scales with the pages left', async () => {
+    const m = await loaded({ page_count: 4 })
+    m.set_export_format('PNG')
+    const four = m.estimate_export_bytes()
     expect(four).toBeGreaterThan(0)
-    model.set_select_pattern('1'); model.set_pages_mode(PagesMode.SELECT)
-    model.delete_pages()
-    expect(model.estimate_export_bytes()).toBeCloseTo(four * 3 / 4)
+    select(m, '1'); m.delete_pages()
+    expect(m.estimate_export_bytes()).toBeCloseTo(four * 3 / 4)
   })
 })
 
-describe('Auto-detect resets offsets (spec-web §21 #27)', () => {
-  it('a fresh detect clears offsets left by an earlier drag', async () => {
-    const { adapter } = make_mock_adapter({ page_count: 2 })
-    const model = new AppModel(adapter)
-    await model.load_files([FILE()])
-    await model.detect_content().result()
-    model.begin_drag(20, 20, 8); model.update_drag(60, 70); model.end_drag()   // TL handle of the auto crop
-    expect(model.offsets).not.toEqual({ left: 0, top: 0, right: 0, bottom: 0 })
-    await model.detect_content().result()
-    expect(model.offsets).toEqual({ left: 0, top: 0, right: 0, bottom: 0 })
+describe('view preparation', () => {
+  it('the image is null until prepare_current_view fetches it, in both modes and on committed pages', async () => {
+    for (const mode of [Mode.NORMAL, Mode.SCANNED]) {
+      const m = await loaded({ mode })
+      expect(m.view_snapshot().image).toBeNull()
+      await m.prepare_current_view()
+      expect(m.view_snapshot().image).not.toBeNull()
+      draw(m, 10, 10, 150, 250); m.apply_crop()
+      await m.prepare_current_view()
+      expect(m.view_snapshot()).toMatchObject({ page_w: 140, page_h: 240, image: { width: 140, height: 240 } })
+    }
+  })
+
+  const supersede: Record<string, (m: AppModel) => void> = {
+    navigate: m => { m.jump_to_output_page(2) },
+    rotate: m => { m.rotate_pages() },
+    delete: m => { select(m, '1'); m.delete_pages(); m.set_pages_mode(PagesMode.ALL) },
+  }
+  for (const [name, act] of Object.entries(supersede)) {
+    it(`a late fetch started before ${name} never replaces the newer view`, async () => {
+      let release = (): void => undefined
+      const gate = new Promise<void>(r => { release = r })
+      const base = make_adapter({ page_sizes: [{ width: 200, height: 300 }, { width: 201, height: 300 }, { width: 202, height: 300 }] })
+      let first = true
+      const m = await loaded({
+        ...base,
+        get_source_image: async (p, dpi, rot) => { if (first) { first = false; await gate } return base.get_source_image(p, dpi, rot) },
+      })
+      const stale = m.prepare_current_view()
+      act(m)
+      await m.prepare_current_view()
+      const shown = m.view_snapshot().image
+      release()
+      await stale
+      expect(m.view_snapshot().image).toBe(shown)
+      expect(shown?.width).toBe(name === 'rotate' ? 300 : 201)
+    })
+  }
+
+  it('NORMAL display scale picks the render DPI, clamped, only re-rendering for a >10% sharper need', async () => {
+    const { adapter, calls } = spy(make_adapter({ page_count: 1 }))
+    const m = await loaded(adapter)
+    const dpis = async (scale: number): Promise<unknown[]> => {
+      m.set_display_scale(scale)
+      const before = n_calls(calls, 'get_source_image')
+      await m.prepare_current_view()
+      return (calls['get_source_image'] ?? []).slice(before).map(a => a[1])
+    }
+    expect(await dpis(0)).toEqual([NORMAL_DPI])
+    expect(await dpis(151 / 72)).toEqual([])
+    expect(await dpis(3)).toEqual([216])
+    expect(await dpis(1)).toEqual([])
+    expect(await dpis(1000)).toEqual([NORMAL_DISPLAY_DPI_MAX])
+  })
+
+  it('SCANNED ignores display scale — the source always renders at SRC_DPI', async () => {
+    const { adapter, calls } = spy(make_adapter({ page_count: 1, mode: Mode.SCANNED }))
+    const m = await loaded(adapter)
+    m.set_display_scale(10)
+    await m.prepare_current_view()
+    expect(calls['get_source_image']?.map(a => a[1])).toEqual([SRC_DPI])
+  })
+
+  it('split and drawn windows are page-proportional across mixed page sizes', async () => {
+    const mixed = (): Promise<AppModel> => loaded({ page_sizes: [{ width: 600, height: 800 }, { width: 150, height: 150 }] })
+    const a = await mixed()
+    a.set_split(2)
+    a.jump_to_output_page(2)
+    expect(a.view_snapshot().overlay.map(o => round6(o.box)))
+      .toEqual([{ x0: 0, y0: 0, x1: 75, y1: 150 }, { x0: 75, y0: 0, x1: 150, y1: 150 }])
+
+    const b = await mixed()
+    draw(b, 300, 400, 600, 800, 8)
+    b.apply_crop()
+    b.jump_to_output_page(2)
+    const v = b.view_snapshot()
+    expect([v.crop_origin.x, v.crop_origin.y, v.page_w, v.page_h].map(n => +n.toFixed(6))).toEqual([75, 75, 75, 75])
+  })
+
+  it('invalidating committed previews (Rotate) closes every one, and the snapshot never shows a closed bitmap', async () => {
+    const closed: number[] = []
+    let n = 0
+    const m = await loaded({ ...make_adapter({ page_count: 1 }), render_output_image: () => { const i = n++; return Promise.resolve(bmp(50, 50, () => closed.push(i))) } })
+    m.set_split(4)
+    m.apply_crop()
+    for (let pos = 1; pos <= 4; pos++) { m.jump_to_output_page(pos); await m.prepare_current_view() }
+    expect(closed).toEqual([])
+    m.rotate_pages()
+    expect(closed.sort()).toEqual([0, 1, 2, 3])
+    expect(m.view_snapshot().image).toBeNull()
   })
 })

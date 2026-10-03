@@ -1,105 +1,72 @@
-// Regression for split-mode Auto-detect (spec §4.5/§5a): detection now runs independently within
-// each split region and writes the result into crop_rects, instead of being disabled at split > 1.
-// Asserted via window.__model (DEV hook, main.ts) — crop_rects geometry isn't otherwise DOM-visible.
+// Split-mode Auto-detect (spec-web §4.5/§5a) on a generated NORMAL PDF: detection runs per region,
+// the result is one template independent of the page that happened to be open, and adjacent
+// windows meet at the split line when text crosses it.
 import { test, expect, type Page } from '@playwright/test'
-import { open_app, MANUAL_PAGES } from './open_app'
-import { fileURLToPath } from 'node:url'
+import { PDFDocument, StandardFonts } from 'pdf-lib'
+import { open_app, model } from './open_app'
 
 interface Box { x0: number; y0: number; x1: number; y1: number }
 
-const readCropRects = (page: Page): Promise<Box[]> => page.evaluate(() => {
-  const m = (window as unknown as { __model?: { document: { crop_rects: Box[] } } }).__model
-  if (!m) throw new Error('window.__model missing — DEV hook not installed')
-  return m.document.crop_rects
-})
-
-const NORMAL_PDF = fileURLToPath(new URL('../assets/Deep Work.pdf', import.meta.url))
-
-// Waits for the 190-page document to replace the manual. The NORMAL badge is no wait condition:
-// the manual is NORMAL too.
-async function loaded(page: Page): Promise<void> {
-  await page.waitForFunction(
-    (n) => (window as unknown as { __model?: { page_count(): number } }).__model!.page_count() > n,
-    MANUAL_PAGES, { timeout: 15_000 },
-  )
-}
-
-// Restricts detection to a single page (the 190-page default "All" selection would make every
-// detect() call slow and its completion time timing-dependent) and waits on crop_rects actually
-// changing, rather than a fixed sleep — robust regardless of machine/browser speed.
-async function detectOnePage(
-  page: Page, source_page: number, split_n: 2 | 4, opts: { same_size?: boolean } = {},
-): Promise<void> {
-  await page.click('[data-mode="SELECT"]')
-  await page.fill('#pp-pattern', String(source_page))
-  await page.click(`#cp-split [data-n="${split_n}"]`)   // reveals #cp-same-size (hidden at split=1)
-  if (opts.same_size) await page.click('#cp-same-size')
-  await page.evaluate(() => {
-    const m = (window as unknown as { __model?: { document: { crop_rects: unknown[] } } }).__model!
-    m.document.crop_rects = []   // sentinel so the wait below can't observe a stale value from a prior call
-  })
-  await page.click('#cp-detect')
-  await page.waitForFunction(
-    (n) => (window as unknown as { __model?: { document: { crop_rects: unknown[] } } })
-      .__model!.document.crop_rects.length === n,
-    split_n, { timeout: 15_000 },
-  )
-}
-
-test('auto-detect at split=2 detects independently within each region', async ({ page }) => {
-  await open_app(page)
-  await page.setInputFiles('#pp-file', NORMAL_PDF)
-  await loaded(page)
-  await expect(page.locator('#cp-detect')).toBeEnabled()   // never gated by split > 1 (spec §4.5)
-
-  await detectOnePage(page, 12, 2)
-
-  const rects = await readCropRects(page)
-  expect(rects).toHaveLength(2)
-  // Left region's window sits left of the right region's — detection didn't collapse them together.
-  expect(rects[0]!.x1).toBeLessThanOrEqual(rects[1]!.x0)
-  for (const r of rects) {
-    expect(r.x1 - r.x0).toBeGreaterThan(0)
-    expect(r.y1 - r.y0).toBeGreaterThan(0)
+// 3 pages of 400×600. Page 2 holds lines drawn as two runs that straddle the centre line
+// (x = 200): a left run centred in the left half and a right run centred in the right half.
+async function fixture(): Promise<Buffer> {
+  const doc = await PDFDocument.create()
+  const font = await doc.embedFont(StandardFonts.Helvetica)
+  const run = 'the quick brown fox jumps'
+  const size = 220 / font.widthOfTextAtSize(run, 1)
+  for (let p = 0; p < 3; p++) {
+    const page = doc.addPage([400, 600])
+    if (p === 1) {
+      for (let y = 520; y >= 120; y -= 40) {
+        page.drawText(run, { x: 40, y, size, font })
+        page.drawText(run, { x: 160, y: y - 20, size, font })
+      }
+    } else {
+      page.drawText(run, { x: 30, y: 80 + p * 200, size: size / 2, font })
+    }
   }
-})
+  return Buffer.from(await doc.save())
+}
 
-test('regression: the two windows meet exactly at the split boundary — no gap', async ({ page }) => {
+const crop_rects = (page: Page): Promise<Box[]> =>
+  model(page, m => (m as unknown as { document: { crop_rects: Box[] } }).document.crop_rects.map(b => ({ ...b })))
+
+async function detect_page_2(page: Page, n: 2 | 4, same_size = false): Promise<Box[]> {
+  await page.click('[data-mode="SELECT"]')
+  await page.fill('#pp-pattern', '2')
+  await page.click(`#cp-split [data-n="${n}"]`)
+  if (same_size) await page.click('#cp-same-size')
+  const before = JSON.stringify(await crop_rects(page))
+  await page.click('#cp-detect')
+  await expect.poll(async () => JSON.stringify(await crop_rects(page))).not.toBe(before)
+  return crop_rects(page)
+}
+
+async function load(page: Page): Promise<void> {
   await open_app(page)
-  await page.setInputFiles('#pp-file', NORMAL_PDF)
-  await loaded(page)
+  await page.setInputFiles('#pp-file', { name: 'two_runs.pdf', mimeType: 'application/pdf', buffer: await fixture() })
+  await expect(page.locator('#pp-docname')).toContainText('two_runs')
+  await expect(page.locator('#pp-badge')).toHaveText('NORMAL')
+}
 
-  await detectOnePage(page, 12, 2)
+test('split=2 detects per region, windows meet at the split line, and the open page does not matter', async ({ page }) => {
+  await load(page)
+  await expect(page.locator('#cp-detect')).toBeEnabled()
+  const from_page_1 = await detect_page_2(page, 2)
+  expect(from_page_1).toHaveLength(2)
+  const [l, r] = from_page_1 as [Box, Box]
+  expect(l.x1).toBe(r.x0)
+  expect([l.x0 > 0, r.x1 < 1, l.y0 > 0, l.y1 < 1]).toEqual([true, true, true, true])
 
-  const rects = await readCropRects(page)
-  expect(rects[0]!.x1).toBe(rects[1]!.x0)
-})
-
-test('regression: result is identical regardless of which page was open when Auto-detect was pressed', async ({ page }) => {
-  await open_app(page)
-  await page.setInputFiles('#pp-file', NORMAL_PDF)
-  await loaded(page)
-
-  await detectOnePage(page, 12, 2)
-  const from_page12 = await readCropRects(page)
-
-  await page.fill('#nav-page', '1')
+  await page.fill('#nav-page', '3')
   await page.keyboard.press('Enter')
-  await detectOnePage(page, 12, 2)   // same detected page (12), different page open beforehand
-  const from_page1_open = await readCropRects(page)
-
-  expect(from_page1_open).toEqual(from_page12)
+  await page.click('#cp-split [data-n="1"]')
+  expect(await detect_page_2(page, 2)).toEqual(from_page_1)
 })
 
-test('same_size ON gives every split region the same width and height', async ({ page }) => {
-  await open_app(page)
-  await page.setInputFiles('#pp-file', NORMAL_PDF)
-  await loaded(page)
-
-  await detectOnePage(page, 12, 2, { same_size: true })
-
-  const rects = await readCropRects(page)
-  expect(rects).toHaveLength(2)
-  expect(rects[1]!.x1 - rects[1]!.x0).toBeCloseTo(rects[0]!.x1 - rects[0]!.x0, 3)
-  expect(rects[1]!.y1 - rects[1]!.y0).toBeCloseTo(rects[0]!.y1 - rects[0]!.y0, 3)
+test('same-size gives every region of a 4-split the same width and height', async ({ page }) => {
+  await load(page)
+  const rects = await detect_page_2(page, 4, true)
+  const sizes = rects.map(b => [+(b.x1 - b.x0).toFixed(6), +(b.y1 - b.y0).toFixed(6)])
+  expect(new Set(sizes.map(s => s.join())).size).toBe(1)
 })

@@ -8,7 +8,7 @@ import { DocumentLoadError } from '@core/errors'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-const shared = vi.hoisted(() => ({ pdfQueue: [] as any[] }))
+const shared = vi.hoisted(() => ({ pdfQueue: [] as any[], worker: null as any }))
 
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: {} as Record<string, unknown>,
@@ -33,7 +33,14 @@ vi.mock('@pdf/imaging', () => ({
   process_page_async: vi.fn(),
 }))
 vi.mock('@workers/export.worker?worker', () => ({
-  default: class { postMessage(): void {} terminate(): void {} onmessage: unknown = null },
+  default: class {
+    onmessage: ((ev: { data: unknown }) => void) | null = null
+    onerror: ((ev: { message: string }) => void) | null = null
+    posted: any[] = []
+    constructor() { shared.worker = this }
+    postMessage(msg: unknown): void { this.posted.push(msg) }
+    terminate(): void { /* no-op */ }
+  },
 }))
 
 import { PdfRendererAdapter } from '@pdf/loader'
@@ -69,7 +76,7 @@ beforeEach(() => {
   ;(globalThis as any).OffscreenCanvas = class {
     width: number; height: number
     constructor(w: number, h: number) { this.width = w; this.height = h }
-    getContext(): unknown { return { drawImage: () => { /* no-op */ } } }
+    getContext(): unknown { return { drawImage: () => undefined, translate: () => undefined, rotate: () => undefined } }
     transferToImageBitmap(): any { return { width: this.width, height: this.height, close: () => { /* no-op */ } } }
   }
 })
@@ -321,5 +328,51 @@ describe('a failed load keeps the open document', () => {
     expect((await a.get_source_image(1, 72, 0)).width).toBe(100)
     shared.pdfQueue = [fake_pdf(2, true, 100, 200)]
     expect((await a.load_files([])).file_names).toEqual(['good.pdf'])
+  })
+})
+
+describe('source rendering', () => {
+  it('a rotated render swaps the raster dimensions; no files opens the synthetic placeholder', async () => {
+    shared.pdfQueue = [fake_pdf(1, true, 100, 200)]
+    const a = new PdfRendererAdapter()
+    await a.load_files([pdf_file('a.pdf')])
+    const dims = async (rot: number): Promise<number[]> => { const b = await a.get_source_image(0, 72, rot); return [b.width, b.height] }
+    expect([await dims(0), await dims(90), await dims(180), await dims(270)]).toEqual([[100, 200], [200, 100], [100, 200], [200, 100]])
+
+    const synth = await new PdfRendererAdapter().load_files([])
+    expect([synth.synthetic, synth.file_names, synth.mode]).toEqual([true, [], Mode.NORMAL])
+  })
+})
+
+describe('export worker RPC', () => {
+  const reply = (i: number, data: object): void => { shared.worker.onmessage({ data: { id: shared.worker.posted[i].id, ...data } }) }
+
+  it('streams begin, pages and finish in order and resolves finish with the worker\'s bytes', async () => {
+    const sink = new PdfRendererAdapter().begin_export('JPG', 'out')
+    await vi.waitFor(() => { expect(shared.worker.posted).toHaveLength(1) })
+    const page = { bitmap: { width: 1, height: 1 } as ImageBitmap, width: 1, height: 1 }
+    const added = sink.add(page)
+    reply(0, { type: 'ok', payload: null })
+    await vi.waitFor(() => { expect(shared.worker.posted).toHaveLength(2) })
+    reply(1, { type: 'ok', payload: null })
+    await added
+    const done = sink.finish()
+    await vi.waitFor(() => { expect(shared.worker.posted).toHaveLength(3) })
+    reply(2, { type: 'ok', payload: new Uint8Array([7]) })
+    expect(await done).toEqual(new Uint8Array([7]))
+    expect(shared.worker.posted.map((m: { type: string }) => m.type)).toEqual(['begin', 'page', 'finish'])
+  })
+
+  it('a worker error message rejects that call; a worker crash rejects every pending call instead of hanging', async () => {
+    const sink = new PdfRendererAdapter().begin_export('PDF', 'out')
+    await vi.waitFor(() => { expect(shared.worker.posted).toHaveLength(1) })
+    reply(0, { type: 'error', message: 'encoder failed' })
+    await expect(sink.finish()).rejects.toThrow('encoder failed')
+
+    const second = new PdfRendererAdapter().begin_export('PDF', 'out')
+    const pending = second.finish()
+    await vi.waitFor(() => { expect(shared.worker.posted).toHaveLength(1) })
+    shared.worker.onerror({ message: 'worker died' })
+    await expect(pending).rejects.toThrow('worker died')
   })
 })

@@ -1,42 +1,23 @@
-// In-browser SIMD verification (#4): loads a real scanned page image, applies the B/W filter (the
-// same OpenCV.js path detect/dewarp use), and checks it both renders correctly and completes in
-// real browser wall-clock time — not just that the WASM module loads. Complements the byte-level
-// SIMD disassembly check and the Node timing in tests/perf/scan_speed.test.ts (see
-// vendor/opencv-js-simd/BUILD.md for that verification method).
+// The real OpenCV.js (SIMD WASM) pipeline on a real scanned page: Auto-detect finds the body text
+// (regression: glyphs below MIN_COMP_FRAC used to leave only a sliver, imaging.ts DETECT_CLOSE_W/H)
+// and the B/W filter repaints the page within a generous wall-clock ceiling — "did not hang or fall
+// back to something absurd"; the tight budgets live in tests/perf/scan_speed.test.ts.
 import { test, expect } from '@playwright/test'
-import { open_app } from './open_app'
-import { fileURLToPath } from 'node:url'
+import { asset, open_scans, until_repainted, model } from './open_app'
 
-// An image file (not a PDF) always classifies SCANNED (spec §4) and exercises the identical
-// OpenCV.js pipeline — no PDF rasterization step needed for this test's purpose.
-const SCAN_PDF = fileURLToPath(
-  new URL('../assets/Learning Python_sample_content.png', import.meta.url))
+interface Snap { page_w: number; page_h: number; overlay: { kind: string; box: { x0: number; y0: number; x1: number; y1: number } }[] }
 
-test('a scanned PDF loads as SCANNED mode and the B/W filter renders correctly', async ({ page }) => {
-  await open_app(page)
-  await page.setInputFiles('#pp-file', SCAN_PDF)
-  await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
+test('Auto-detect finds the text block and the B/W filter renders on a real scan', async ({ page }) => {
+  const canvas = await open_scans(page, [asset('Learning Python_sample_content.png')])
+  await page.click('#cp-detect')
+  const snap = (): Promise<Snap> => model(page, m => (m as unknown as { view_snapshot(): Snap }).view_snapshot())
+  await expect.poll(async () => (await snap()).overlay.some(o => o.kind === 'auto'), { timeout: 15_000 }).toBe(true)
+  const s = await snap()
+  const box = s.overlay.find(o => o.kind === 'auto')!.box
+  expect(box.x1 - box.x0).toBeGreaterThan(0.5 * s.page_w)
+  expect(box.y1 - box.y0).toBeGreaterThan(0.5 * s.page_h)
 
-  const canvas = page.locator('canvas.page-canvas')
-  await expect(canvas).toBeVisible()
-  // Checksum the WHOLE canvas (not a corner sample — page margins are uniform and unaffected by the
-  // filter, which would falsely read as "no change").
-  const checksum = (el: HTMLCanvasElement): number => {
-    const d = (el.getContext('2d') as CanvasRenderingContext2D).getImageData(0, 0, el.width, el.height).data
-    let s = 0
-    for (let i = 0; i < d.length; i += 97) s = (s + (d[i] ?? 0) * (i + 1)) >>> 0   // sparse but whole-image
-    return s
-  }
-  const before = await canvas.evaluate(checksum)
-
-  const t0 = Date.now()
-  await page.click('#sp-bw')
-  // The repaint is the completion signal: the filter actually changed the page, not a no-op.
-  await expect.poll(() => canvas.evaluate(checksum), { timeout: 30_000 }).not.toBe(before)
-  const elapsed_ms = Date.now() - t0
-
-  console.log(`[scan_simd] B/W filter over the ${SCAN_PDF} pages: ${elapsed_ms} ms (in-browser, chromium/firefox)`)
-  // Generous ceiling — this asserts "didn't hang / didn't fall back to something absurd", the
-  // tight budget lives in tests/perf/scan_speed.test.ts's ratio-vs-desktop-reference assertion.
-  expect(elapsed_ms).toBeLessThan(20_000)
+  const ms = await until_repainted(canvas, () => page.click('#sp-bw'), 30_000)
+  console.log(`[scan_simd] B/W filter: ${ms} ms`)
+  expect(ms).toBeLessThan(20_000)
 })

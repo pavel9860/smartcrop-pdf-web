@@ -1,10 +1,8 @@
 // Phone layout (spec-web §3): full-width page, sidebar as a slide-out drawer, visible page arrows.
 import { test, expect, devices, type Page } from '@playwright/test'
-import { open_app } from './open_app'
-import { fileURLToPath } from 'node:url'
+import { open_app, asset } from './open_app'
 
-const JPGS = ['ml_interview_warped_001.jpg', 'ml_interview_warped_002.jpg']
-  .map(f => fileURLToPath(new URL(`../assets/${f}`, import.meta.url)))
+const JPGS = ['ml_interview_warped_001.jpg', 'ml_interview_warped_002.jpg'].map(asset)
 
 test.use({ viewport: devices['Pixel 7'].viewport, hasTouch: true })
 

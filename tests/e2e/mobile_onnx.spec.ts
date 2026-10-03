@@ -2,18 +2,10 @@
 // real ONNX models on a mobile viewport on the CPU (wasm) EP — once with WebGPU absent, once with a
 // broken navigator.gpu so ORT's WebGPU build fails and create_onnx_session must fall back, and once
 // on SwiftShader-emulated WebGPU so concurrent WebGPU session builds are exercised for real.
-import { test, expect, devices, type Locator } from '@playwright/test'
-import { open_app } from './open_app'
-import { fileURLToPath } from 'node:url'
+import { test, expect, devices } from '@playwright/test'
+import { open_app, asset, checksum } from './open_app'
 
-const SCAN_JPG = fileURLToPath(new URL('../assets/ml_interview_warped_001.jpg', import.meta.url))
-
-const checksum = (canvas: Locator): Promise<number> => canvas.evaluate((el: HTMLCanvasElement) => {
-  const d = (el.getContext('2d') as CanvasRenderingContext2D).getImageData(0, 0, el.width, el.height).data
-  let s = 0
-  for (let i = 0; i < d.length; i += 97) s = (s + (d[i] ?? 0) * (i + 1)) >>> 0
-  return s
-})
+const SCAN_JPG = asset('ml_interview_warped_001.jpg')
 
 test.use({
   viewport: devices['Pixel 7'].viewport, hasTouch: true,

@@ -3,7 +3,7 @@
 // one part of the fix that is a pointer-pixel mapping (canvas_view crop_origin) and so cannot be
 // unit-tested — it is asserted here through window.__model (DEV hook, main.ts).
 import { test, expect, type Page } from '@playwright/test'
-import { open_app } from './open_app'
+import { open_app, model } from './open_app'
 
 interface Snap {
   page_w: number
@@ -12,14 +12,9 @@ interface Snap {
   overlay: { kind: string }[]
 }
 
-const readSnap = (page: Page): Promise<Snap> => page.evaluate(() => {
-  const m = (window as unknown as { __model?: { view_snapshot(): Snap } }).__model
-  if (!m) throw new Error('window.__model missing — DEV hook not installed')
-  const s = m.view_snapshot()
-  return {
-    page_w: s.page_w, page_h: s.page_h, crop_origin: s.crop_origin,
-    overlay: s.overlay.map(o => ({ kind: o.kind })),
-  }
+const readSnap = (page: Page): Promise<Snap> => model(page, m => {
+  const s = (m as unknown as { view_snapshot(): Snap }).view_snapshot()
+  return { page_w: s.page_w, page_h: s.page_h, crop_origin: s.crop_origin, overlay: s.overlay.map(o => ({ kind: o.kind })) }
 })
 
 async function drag(page: Page, ox: number, oy: number,

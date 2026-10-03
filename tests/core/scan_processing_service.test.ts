@@ -4,13 +4,12 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ScanProcessingService, type ScanContext } from '@core/scan_processing_service'
 import { PageIndexMap } from '@core/page_index_map'
-import { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { History } from '@core/history'
 import { default_document_state, type DocumentState } from '@core/document_state'
 import { FilterMode, Mode } from '@core/enums'
-import { Failed, Cancelled } from '@core/batch'
+import { Ok, Failed, Cancelled } from '@core/batch'
 import type { RendererAdapter } from '@core/model'
-import { make_adapter } from './harness'
+import { make_adapter, make_raster } from './harness'
 
 function setup(opts: { adapter?: Partial<RendererAdapter> } = {}): {
   svc: ScanProcessingService
@@ -22,16 +21,13 @@ function setup(opts: { adapter?: Partial<RendererAdapter> } = {}): {
   const idx = new PageIndexMap()
   idx.reset(3)
   const doc = default_document_state()
-  const adapter: RendererAdapter = { ...make_adapter(3, Mode.SCANNED), ...opts.adapter }
-  const raster = new PageRasterPipeline(adapter, idx, {
-    mode: () => Mode.SCANNED, display_dpi: () => 96, is_synthetic: () => false,
-    rotation: () => 0,
+  const adapter: RendererAdapter = { ...make_adapter({ mode: Mode.SCANNED }), ...opts.adapter }
+  const raster = make_raster(adapter, idx, {
+    mode: () => Mode.SCANNED,
     process_intent: () => ({
       dewarp: doc.dewarp_on,
       filter: doc.filter_mode === FilterMode.NONE ? null : [doc.filter_mode, doc.filter_strength],
     }),
-    dewarp_supersample: () => 1,
-    undo_depth: () => 2,
   })
   const history = new History(20)
   const invalidated_output: number[] = []
@@ -71,11 +67,11 @@ describe('ScanProcessingService.run_dewarp', () => {
     expect(invalidated_output).toEqual([0, 1])
   })
 
-  it('warms the work cache for the selection and completes Ok', async () => {
-    const job = setup().svc.run_dewarp([0])
-    const result = await job.result()
-    expect(result).not.toBeInstanceOf(Failed)
-    expect(result).not.toBeInstanceOf(Cancelled)
+  it('warms the work cache for every selected page and completes Ok', async () => {
+    const get_work_image = vi.fn((src: ImageBitmap) => Promise.resolve(src))
+    const result = await setup({ adapter: { get_work_image } }).svc.run_dewarp([0, 2]).result()
+    expect(result).toBeInstanceOf(Ok)
+    expect(get_work_image).toHaveBeenCalledTimes(2)
   })
 })
 
@@ -116,11 +112,11 @@ describe('ScanProcessingService.set_filter_strength', () => {
 
 describe('ScanProcessingService — batch job behavior', () => {
   it('cancels cleanly without completing further pages', async () => {
-    const { svc } = setup()
-    const job = svc.run_dewarp([0, 1, 2])
+    const get_work_image = vi.fn((src: ImageBitmap) => Promise.resolve(src))
+    const job = setup({ adapter: { get_work_image } }).svc.run_dewarp([0, 1, 2])
     job.cancel()
-    const result = await job.result()
-    expect(result).toBeInstanceOf(Cancelled)
+    expect(await job.result()).toBeInstanceOf(Cancelled)
+    expect(get_work_image.mock.calls.length).toBeLessThan(3)
   })
 
   it('completes Failed when the raster pipeline throws', async () => {

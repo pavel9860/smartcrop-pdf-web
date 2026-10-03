@@ -15,11 +15,13 @@ export default defineConfig({
     },
   },
   test: {
-    environment: 'jsdom',
-    include: ['tests/**/*.test.ts'],
     // tests/perf/** is the standalone perf suite (npm run test:perf, vitest.perf.config.ts) — heavy,
     // machine-dependent timing that must not gate every `vitest run`.
-    exclude: ['tests/e2e/**', 'tests/perf/**'],
+    projects: [
+      { extends: true, test: { name: 'core', environment: 'node', isolate: false, include: ['tests/*.test.ts', 'tests/core/**/*.test.ts'] } },
+      { extends: true, test: { name: 'pdf', environment: 'node', include: ['tests/pdf/**/*.test.ts'] } },
+      { extends: true, test: { name: 'ui', environment: 'jsdom', isolate: false, include: ['tests/ui/**/*.test.ts'] } },
+    ],
     coverage: {
       provider: 'v8',
       include: ['src/core/**', 'src/ui/**', 'src/pdf/**'],

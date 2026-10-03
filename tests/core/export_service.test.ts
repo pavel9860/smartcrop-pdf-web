@@ -3,14 +3,13 @@
 import { describe, it, expect, vi } from 'vitest'
 import { ExportService, type ExportContext } from '@core/export_service'
 import { PageIndexMap } from '@core/page_index_map'
-import { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { default_document_state, type DocumentState } from '@core/document_state'
 import { Mode } from '@core/enums'
 import { EXPORT_BYTES_PER_PX } from '@core/constants'
 import { Failed, Cancelled } from '@core/batch'
 import type { RendererAdapter, PageSize, VectorExportPage, OutputPage } from '@core/model'
 import type { Box } from '@core/geometry'
-import { make_adapter, make_bitmap, recording_sink } from './harness'
+import { make_adapter, make_raster, bmp, recording_sink } from './harness'
 
 function setup(opts: {
   page_count?: number
@@ -26,14 +25,10 @@ function setup(opts: {
 } {
   const page_count = opts.page_count ?? 2
   const mode = opts.mode ?? Mode.NORMAL
-  const adapter: RendererAdapter = { ...make_adapter(page_count, mode), ...opts.adapter }
+  const adapter: RendererAdapter = { ...make_adapter({ page_count, mode }), ...opts.adapter }
   const idx = new PageIndexMap()
   idx.reset(page_count)
-  const raster = new PageRasterPipeline(adapter, idx, {
-    mode: () => mode, display_dpi: () => 96, is_synthetic: () => false,
-    rotation: () => 0, process_intent: () => ({ dewarp: false, filter: null }),
-    dewarp_supersample: () => 1, undo_depth: () => 2,
-  })
+  const raster = make_raster(adapter, idx, { mode: () => mode })
   const doc = default_document_state()
   const ctx: ExportContext = {
     document: () => doc,
@@ -106,7 +101,7 @@ describe('ExportService.export — raster path (streamed, spec-web §21 #9)', ()
     const render_output_image = vi.fn((_s: ImageBitmap, box: Box) => {
       rendered++
       peak = Math.max(peak, rendered - encoded)
-      return Promise.resolve(make_bitmap(box.x1 - box.x0, box.y1 - box.y0))
+      return Promise.resolve(bmp(box.x1 - box.x0, box.y1 - box.y0))
     })
     const begin_export = vi.fn(() => ({
       ...recording_sink(),

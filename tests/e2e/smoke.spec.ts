@@ -5,20 +5,15 @@ import { open_app } from './open_app'
 
 test.beforeEach(async ({ page }) => { await open_app(page) })
 
-test('three-column layout renders with the manual open', async ({ page }) => {
-  await expect(page.locator('.sidebar')).toBeVisible()
-  await expect(page.locator('.canvas-area')).toBeVisible()
+test('the three-column shell renders with the manual open, every primary control visible and the closed detail panel off the sidebar', async ({ page }) => {
   await expect(page.locator('canvas.page-canvas')).toBeVisible()
   await expect(page.locator('#pp-docname')).toContainText('manual')
-})
-
-test('closed detail panel does not paint over the sidebar (regression)', async ({ page }) => {
-  // .sidebar toBeVisible() alone doesn't catch this: it only checks the sidebar's OWN CSS
-  // visibility, not whether an opaque sibling is stacked on top of it. The detail-panel is a
-  // normal-flow flex sibling collapsed to width:0 while closed (spec-web §3) — width:0 makes
-  // overlapping the sidebar structurally impossible, unlike the earlier position:absolute overlay
-  // this regression test was written against (bug: sidebar looked empty until Settings/Help was
-  // opened once, because that overlay's off-screen translateX fell short of the sidebar's width).
+  for (const sel of [
+    '.sidebar', '.canvas-area', '#pp-load', '#cp-detect', '#cp-crop', '#cp-rotate', '#cp-delete',
+    '#nav-undo', '#nav-redo', '#nav-reset', '#op-export', '[data-id="settings"]', '[data-id="help"]',
+  ]) await expect(page.locator(sel)).toBeVisible()
+  // A collapsed (width 0) flex sibling cannot stack over the sidebar; toBeVisible alone would not
+  // notice an opaque panel on top of it.
   const sidebar_box = (await page.locator('.sidebar').boundingBox())!
   const panel_box = (await page.locator('.detail-panel').boundingBox())!
   expect(panel_box.width).toBe(0)
@@ -40,25 +35,7 @@ test('deleting every page shows a themed info dialog, not a toast or a confirm p
   await expect(dialog).toHaveCount(0)   // removed on dismiss, unlike the progress overlay's hide()
 })
 
-test('primary controls are present', async ({ page }) => {
-  for (const id of [
-    '#pp-load', '#cp-detect', '#cp-crop', '#cp-rotate', '#cp-delete',
-    '#nav-undo', '#nav-redo', '#nav-reset', '#op-export', '[data-id="settings"]', '[data-id="help"]',
-  ]) {
-    await expect(page.locator(id)).toBeVisible()
-  }
-})
-
-test('Settings detail panel opens and closes on toggle (Esc no longer closes it, spec-web §20)', async ({ page }) => {
-  await page.click('[data-id="settings"]')
-  await expect(page.locator('#sv-undo')).toBeVisible()   // a Settings control is now shown
-  await page.keyboard.press('Escape')
-  await expect(page.locator('#sv-undo')).toBeVisible()   // Esc drops the crop window instead, not this
-  await page.click('[data-id="settings"]')
-  await expect(page.locator('#sv-undo')).toBeHidden()
-})
-
-test('opening/closing Settings or Help reflows the canvas right by the sidebar width (spec-web §3)', async ({ page }) => {
+test('Settings/Help toggle open and closed (not on Esc) and reflow the canvas by the panel width (spec-web §3)', async ({ page }) => {
   const canvas = page.locator('canvas.page-canvas')
   const panel = page.locator('.detail-panel')
   const sidebar_box = (await page.locator('.sidebar').boundingBox())!
@@ -87,7 +64,9 @@ test('opening/closing Settings or Help reflows the canvas right by the sidebar w
   expect(box_open.x).toBeCloseTo(box_before!.x + sidebar_box.width, 0)   // pushed right by the panel
   expect(box_open.width).toBeCloseTo(box_before!.width - sidebar_box.width, 0)
 
-  await page.click('[data-id="settings"]')   // toggle closed — Esc no longer closes the panel (spec-web §20)
+  await page.keyboard.press('Escape')
+  await expect(panel).toHaveClass(/open/)   // Esc drops the crop window, never the panel (spec-web §20)
+  await page.click('[data-id="settings"]')
   await expect(panel).not.toHaveClass(/open/)
   await settle()
   expect(await canvas.boundingBox()).toEqual(box_before)   // back to the original position/size

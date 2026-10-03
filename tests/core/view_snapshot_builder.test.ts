@@ -5,13 +5,11 @@ import { describe, it, expect } from 'vitest'
 import { ViewSnapshotBuilder, type ViewContext } from '@core/view_snapshot_builder'
 import { CropController, type CropContext } from '@core/crop_controller'
 import { PageIndexMap } from '@core/page_index_map'
-import { PageRasterPipeline } from '@core/page_raster_pipeline'
 import { History } from '@core/history'
 import { default_document_state, type DocumentState } from '@core/document_state'
-import { Mode } from '@core/enums'
 import type { PageSize } from '@core/model'
 import type { Box } from '@core/geometry'
-import { make_adapter } from './harness'
+import { make_adapter, make_raster } from './harness'
 
 function setup(page_count = 2): {
   builder: ViewSnapshotBuilder
@@ -27,11 +25,7 @@ function setup(page_count = 2): {
   const idx = new PageIndexMap()
   idx.reset(page_count)
   const doc = default_document_state()
-  const raster = new PageRasterPipeline(make_adapter(page_count, Mode.NORMAL), idx, {
-    mode: () => Mode.NORMAL, display_dpi: () => 96, is_synthetic: () => false,
-    rotation: () => 0, process_intent: () => ({ dewarp: false, filter: null }),
-    dewarp_supersample: () => 1, undo_depth: () => 2,
-  })
+  const raster = make_raster(make_adapter({ page_count }), idx)
   const current_page = { v: 0 }
   const view_pos = { v: 1 }
   const drawn: { v: Box | null } = { v: null }
@@ -112,9 +106,7 @@ describe('ViewSnapshotBuilder.build — uncommitted page', () => {
     detected.set(0, { x0: 10, y0: 10, x1: 100, y1: 100 })
     union.v = { x0: 10, y0: 10, x1: 100, y1: 100 }
     auto_active.v = true
-    const snap = builder.build()
-    expect(snap.overlay).toHaveLength(1)
-    expect(snap.overlay[0]?.kind).toBe('auto')
+    expect(builder.build().overlay).toEqual([{ kind: 'auto', box: { x0: 10, y0: 10, x1: 100, y1: 100 } }])
   })
 })
 
@@ -164,6 +156,6 @@ describe('ViewSnapshotBuilder.live_auto_crop_for', () => {
     detected.set(0, { x0: 10, y0: 10, x1: 100, y1: 100 })
     union.v = { x0: 10, y0: 10, x1: 100, y1: 100 }
     auto_active.v = true
-    expect(builder.live_auto_crop_for(0)).not.toBeNull()
+    expect(builder.live_auto_crop_for(0)).toEqual({ x0: 10, y0: 10, x1: 100, y1: 100 })
   })
 })

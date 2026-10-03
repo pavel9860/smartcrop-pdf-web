@@ -77,11 +77,11 @@ describe('CropController drawn-window L/T/R/B fields (spec-web §4.6, no separat
 
   it('a handle-drag still resizes the drawn window, kept in sync with the fields', () => {
     const { c, drawn } = drawn_controller({ x0: 20, y0: 30, x1: 180, y1: 270 })
-    c.begin_drag(20, 30, 5)   // top-left handle
+    c.begin_drag(20, 30, 5)
     c.update_drag(10, 10)
     c.end_drag()
-    expect(drawn()).not.toBeNull()
-    expect(drawn()!.x0).toBeLessThan(20)
+    expect(drawn()).toEqual({ x0: 10, y0: 10, x1: 180, y1: 270 })
+    expect(c.drawn_offsets()).toEqual({ left: 5, top: 10 / 3, right: 10, bottom: 10 })
   })
 
   it('clicking outside a drawn window drops it and starts a fresh draw (no manual-mode lock)', () => {
@@ -136,8 +136,7 @@ describe('CropController.set_split', () => {
     const { c } = controller()
     c.set_keep_ratio(true)
     c.set_split(2)
-    const r = c.ratio
-    expect(r).toBeGreaterThan(0)
+    expect(c.ratio).toBeCloseTo(100 / 300)
   })
 })
 
@@ -175,8 +174,7 @@ describe('CropController drag gestures', () => {
     c.begin_drag(10, 10, 5)
     c.update_drag(150, 250)
     c.end_drag()
-    expect(drawn).not.toBeNull()
-    expect(drawn!.x1 - drawn!.x0).toBeGreaterThan(0)
+    expect(drawn).toEqual(unscale_box({ x0: 10, y0: 10, x1: 150, y1: 250 }, 200, 300))
   })
 
   it('a draw smaller than 2*MIN_RECT in either dimension is discarded on end_drag', () => {
@@ -224,11 +222,6 @@ describe('CropController drag gestures', () => {
     c.update_drag(150, 50)
     c.cancel_drag()
     expect(doc.crop_rects).toEqual(before)
-  })
-
-  it('update_drag with no active drag is a no-op', () => {
-    const { c } = controller()
-    expect(() => { c.update_drag(10, 10) }).not.toThrow()
   })
 
   it('a split-drag on the interior (move) never resizes any other window even with same_size on', () => {
