@@ -12,7 +12,7 @@ proposed `AppModel` decomposition, not yet implemented as of this revision.
 | Path | Files | Constraint |
 |---|---|---|
 | `src/core/` | `constants, enums, errors, geometry, parsing, lru, viewmodel, document_state, settings, history, drag, batch, model, deskew_classify`.ts | Zero DOM/Worker/pdf-lib/pdfjs-dist — enforced by `tests/architecture.test.ts` |
-| `src/pdf/` | `loader.ts, imaging.ts, cv.ts, dewarp.ts, deskew.ts, dbnet.ts, vanishing_point.ts, vp_correct.ts, module_status.ts, idb.ts` | Main thread, DOM allowed, imports `@core/*` + `@workers/*` |
+| `src/pdf/` | `loader.ts, imaging.ts, cv.ts, raster.ts, dewarp.ts, deskew.ts, dbnet.ts, vanishing_point.ts, vp_correct.ts, module_status.ts, idb.ts` | Main thread, DOM allowed, imports `@core/*` + `@workers/*` |
 | `src/workers/` | `export.worker.ts, tiff.ts` | Only real Worker in the app; zero `window`/`document` |
 | `src/ui/` | `app.ts, canvas_view.ts, constants.ts, dom.ts, detail_panel.ts, help_view.ts, nav_bar.ts, overlay.ts, persist.ts, settings_view.ts, theme.ts` | Imports `@core/*` + `@pdf/*`; core never imports ui |
 | `src/ui/panels/` | `pages_panel.ts, crop_panel.ts, scan_panel.ts, output_panel.ts` | per `app.ts`'s `./panels/*` imports |
@@ -308,7 +308,7 @@ itself holds detection + the OpenCV filter pipeline:
 
 ```
 detect_content_async(bitmap,page_w,page_h,mode,region?)  [imaging.ts:22]
-  → ensure_cv() [cv.ts:48]  (module-cached init promise, fast-path if cv.Mat already exists)
+  → ensure_cv() [cv.ts:51]  (module-cached lazy import + init promise, fast-path if cv.Mat already exists)
   → detect_content(bitmap,page_w,page_h,region?) [imaging.ts:195, module-private]
        → downscale to DETECT_MAX_PX → clean_document_bilevel(gray, BW_STRENGTH[2].k/minArea, ...) [imaging.ts:156]
             → illumination_flatten(gray,kernel) [imaging.ts:112] → morph_close_background [imaging.ts:129] (downscaled 1/BG_DOWNSCALE, spec-web §16)
@@ -317,13 +317,13 @@ detect_content_async(bitmap,page_w,page_h,mode,region?)  [imaging.ts:22]
        → cv.connectedComponentsWithStats again on the bilevel ink → border-exclude + area-filter → bbox (border-touch fallback if nothing survives) → scale back up
 
 process_page_async(bitmap,intent,supersample)  [imaging.ts:29]
-  → ensure_cv(); if intent.dewarp: ensure_onnx() [dewarp.ts:22]
+  → ensure_cv(); if intent.dewarp: ensure_onnx() [dewarp.ts:29]
   → process_page(bitmap,intent,supersample) [imaging.ts:299, module-private]
-       → if dewarp: apply_dewarp(mat,supersample) [dewarp.ts:156]
+       → if dewarp: apply_dewarp(mat,supersample) [dewarp.ts:197]
             stage 1: mat_to_resized_chw_f32 [dewarp.ts:235] → f32→f16 [dewarp.ts:107] → uvdoc.onnx → warp-field grid
                      (handles both Float16Array and Uint16Array ORT output shapes)
-            stage 2: mat_to_chw_f32(full-res) [dewarp.ts:219] + grid → bilinear_unwarping.onnx (GridSample) →
-                     chw_f32_to_rgba_mat [dewarp.ts:244] → optional cv.resize down if supersample≠1
+            stage 2: raster.grid_unwarp(src RGBA, grid) [raster.ts:30] (align-corners grid upsample + bilinear
+                     GridSample, zero pad; replaces bilinear_unwarping.onnx) → optional cv.resize down if supersample≠1
        → if filter: apply_filter_mat(mat,mode,strength) [imaging.ts:338]
             BW      → clean_document_bilevel(gray, BW_STRENGTH[strength], ...) → grey2rgba
             SHARPEN → illumination_flatten → bilateralFilter(denoise, strength-scaled) →
@@ -331,7 +331,7 @@ process_page_async(bitmap,intent,supersample)  [imaging.ts:29]
        → copy mat.data into a fresh Uint8ClampedArray (NOT mat.data.buffer directly — that's the
          whole WASM heap and throws IndexSizeError) → OffscreenCanvas → ImageBitmap
 
-fetch_with_idb_cache(key,url)  [dewarp.ts:267]  — used only for the two dewarp .onnx model files
+fetch_with_idb_cache(key,url)  [dewarp.ts:267]  — used for the dewarp and text-line .onnx model files
   → open_idb(db_name,store_name) [idb.ts:4] (db 'smartcrop-models') → try cache → else fetch()
     (a failed fetch is NEVER cached) → put → return bytes
 ```
@@ -374,9 +374,10 @@ specifically touches ONNX tensor packing.
 | `core/lru.ts` | `LRUCache<K,V>` | `Map`-based, re-insert-on-get for LRU order; `onEvict` vs `onCapacityEvict` distinction is what makes the work-cache write-back tier possible (§6.13) |
 | `core/parsing.ts` | `resolve_pages` | ALL/ODD/EVEN trivial; SELECT → `parse_pattern` → per-comma-part dispatch to `parse_range` (`a-b`) or `parse_slice` (`start:stop:step`, all optional) or bare int; 1-indexed input, 0-indexed output, deduped+sorted `Set` |
 | `core/viewmodel.ts` | `output_page_count, view_to_source, source_to_first_view` | pure math converting between source-page index and 1-based output-view position, accounting for committed splits expanding one page into N views |
-| `pdf/cv.ts` | `ensure_cv` | module-cached OpenCV.js init promise; 10s `onRuntimeInitialized` fallback resolves unconditionally without re-checking `cv.Mat` exists |
-| `pdf/dewarp.ts` | `ensure_onnx, apply_dewarp, fetch_with_idb_cache`, f16↔f32 helpers | ONNX session init/inference for Dewarp&Deskew (two-stage uvdoc/bilinear_unwarping models, §9a); `ensure_onnx` has no in-flight-promise cache, unlike `ensure_cv` |
-| `pdf/idb.ts` | `open_idb, idb_req, idb_tx` | thin IndexedDB promise wrappers — used only by `dewarp.ts::fetch_with_idb_cache` to cache the two `.onnx` model downloads, not for page rasters |
+| `pdf/cv.ts` | `ensure_cv` | module-cached lazy `import()` of OpenCV.js + init promise; 10s `onRuntimeInitialized` fallback rejects (and clears the cache for a retry) unless `cv.Mat` exists |
+| `pdf/raster.ts` | `grid_unwarp` | docuwarp stage 2 in plain TS (align-corners grid upsample + bilinear GridSample, zero pad) — replaces bilinear_unwarping.onnx |
+| `pdf/dewarp.ts` | `ensure_onnx, apply_dewarp, fetch_with_idb_cache`, f16↔f32 helpers | ONNX session init/inference for Dewarp&Deskew (int8 uvdoc model, then raster.grid_unwarp, §9a); `ensure_onnx` has no in-flight-promise cache, unlike `ensure_cv` |
+| `pdf/idb.ts` | `open_idb, idb_req, idb_tx` | thin IndexedDB promise wrappers — used only by `dewarp.ts::fetch_with_idb_cache` to cache the `.onnx` model downloads, not for page rasters |
 | `ui/dom.ts` | `requireEl, syncCustomReveal` | `requireEl` throws instead of silent-null (replaces `querySelector!`); `syncCustomReveal` is the one shared "Custom…" reveal/sync pattern used by both Output Quality's Custom DPI and Settings' Custom paper height |
 | `ui/persist.ts` | `load_output_prefs, save_output_prefs` | `localStorage` key `scw.output.v1`; load degrades to `{}` on any error (private mode, quota, corrupt JSON), never throws |
 | `ui/theme.ts` | `apply_theme, current_theme` | injects `DARK`/`LIGHT` CSS-custom-property tables onto `documentElement`; `'system'` wires a live `matchMedia` listener |

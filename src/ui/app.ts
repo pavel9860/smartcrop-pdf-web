@@ -4,6 +4,7 @@
 import { AppModel, type RendererAdapter } from '@core/model'
 import type { BatchJob } from '@core/batch'
 import { Failed } from '@core/batch'
+import { Mode } from '@core/enums'
 import { PdfRendererAdapter } from '@pdf/loader'
 import { on_module_status } from '@pdf/module_status'
 import { CanvasView } from './canvas_view'
@@ -22,7 +23,7 @@ import {
 } from './constants'
 import { requireEl } from './dom'
 import { load_output_prefs, save_output_prefs } from './persist'
-import { warm_offline_cache } from './sw_register'
+import { warm_offline_cache, prefetch_scan_tools } from './sw_register'
 
 // UIConfig — presentation-only state that drives NO domain computation (ARCHITECTURE §10);
 // owned here, invisible to core/. theme/font_size/ui_scale/remember_folder/offline_enabled.
@@ -32,8 +33,8 @@ export interface UIConfig {
   ui_scale: number
   remember_folder: boolean
   // Off by default (spec-web §15) — the service worker (public/sw.js) always registers in
-  // production and passively caches whatever's actually used, but SCANNED-mode assets (OpenCV
-  // wasm, both ONNX dewarp models) are otherwise only cached the first time a user exercises that
+  // production and passively caches whatever's actually used, but SCANNED-mode assets (ONNX
+  // wasm, the ONNX models) are otherwise only cached the first time a user exercises that
   // mode online. Turning this on proactively runs that same real init path once, so every feature
   // works offline after, not just whichever ones were already used.
   offline_enabled: boolean
@@ -44,6 +45,8 @@ export class AppController {
   private readonly _adapter: RendererAdapter
   private _current_job: BatchJob | null = null
   private _module_status: string | null = null
+  // Background pre-load of the scan tools (spec-web §4.3) in flight / done: its status never shows a card.
+  private _prefetch: 'running' | 'done' | null = null
   private readonly _off_module_status: () => void
 
   // Layout elements
@@ -62,7 +65,7 @@ export class AppController {
   private readonly _nav_bar: NavBar
   private readonly _detail_panel: DetailPanel
 
-  // adapter: injectable for tests (mock RendererAdapter, no real PDF.js/OpenCV/ONNX); production
+  // adapter: injectable for tests (mock RendererAdapter, no real PDF.js/ONNX); production
   // (main.ts) always omits it and gets the real PdfRendererAdapter.
   constructor(root: HTMLElement, adapter: RendererAdapter = new PdfRendererAdapter()) {
     this._adapter = adapter
@@ -174,6 +177,7 @@ export class AppController {
 
     this._current_job = job
     const shown = setTimeout(() => { this._overlay.show(job, () => { job.cancel() }) }, OVERLAY_SHOW_DELAY_MS)
+    this._refresh_panels()   // disable controls now, not after the page render below
     void this._refresh_async()
 
     job.onProgress((done, total) => { this._overlay.update(done, total) })
@@ -195,8 +199,7 @@ export class AppController {
 
   private _end_job(): void {
     this._current_job = null
-    if (this._module_status) this._overlay.show_status(this._module_status)
-    else this._overlay.hide()
+    this._on_module_status(this._module_status)
   }
 
   // First-use module loading (spec-web §11): a detail line under a running job, or its own card.
@@ -204,7 +207,7 @@ export class AppController {
     this._module_status = status
     this._overlay.set_detail(this._current_job ? status : null)
     if (this._current_job) return
-    if (status) this._overlay.show_status(status)
+    if (status && this._prefetch !== 'running') this._overlay.show_status(status)
     else this._overlay.hide()
   }
 
@@ -263,11 +266,20 @@ export class AppController {
     if (this._model.has_document) {
       try { await this._model.prepare_current_view() } catch (e) { this._show_error(e) }
     }
-    const snap = this._model.view_snapshot()
-    const busy = this.busy
-
-    this._canvas_view.paint(snap)
+    if (this._model.mode === Mode.SCANNED && !this._prefetch) {
+      this._prefetch = 'running'
+      void prefetch_scan_tools().then(ok => {
+        this._prefetch = ok ? 'done' : null
+        if (!this._current_job) this._on_module_status(this._module_status)
+      })
+    }
+    this._canvas_view.paint(this._model.view_snapshot())
     this._drop_zone.classList.toggle('hidden', this._model.has_document)
+    this._refresh_panels()
+  }
+
+  private _refresh_panels(): void {
+    const busy = this.busy
     this._pages_panel.refresh(this._model, busy)
     this._scan_panel.refresh(this._model, busy)
     this._crop_panel.refresh(this._model, busy)

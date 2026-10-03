@@ -6,16 +6,15 @@
 import type { InferenceSession } from 'onnxruntime-web'
 import { MissingDependencyError } from '@core/errors'
 import {
-  DEWARP_MODEL_W, DEWARP_MODEL_H, DEWARP_UVDOC_URL, DEWARP_BILINEAR_URL,
-  DEWARP_UVDOC_CACHE_KEY, DEWARP_BILINEAR_CACHE_KEY, WASM_MAX_THREADS,
+  DEWARP_MODEL_W, DEWARP_MODEL_H, DEWARP_UVDOC_URL, DEWARP_UVDOC_CACHE_KEY, WASM_MAX_THREADS,
 } from '@core/constants'
 import { cv, type Mat } from './cv'
+import { grid_unwarp } from './raster'
 import { open_idb, idb_req, idb_tx } from './idb'
 import { with_module_status } from './module_status'
 
-// ONNX sessions for dewarp (pstwh/docuwarp, two-stage) — loaded once on first dewarp call.
+// ONNX session for dewarp (pstwh/docuwarp's uvdoc CNN) — loaded once on first dewarp call.
 let _uvdoc_session: InferenceSession | null = null
-let _bilinear_session: InferenceSession | null = null
 
 // Cached in-flight init promise so concurrent callers (e.g. prefetching page N+1 while page N's
 // Dewarp&Deskew is still loading the model) share ONE ONNX session build instead of each racing
@@ -24,11 +23,11 @@ let _bilinear_session: InferenceSession | null = null
 // silently overwrites the module-level reference (no .release() call exists anywhere).
 let _onnx_init: Promise<void> | null = null
 
-// Loads both docuwarp ONNX sessions from same-origin /models/ (vite-plugin-static-copy, see
+// Loads the docuwarp ONNX session from same-origin /models/ (vite-plugin-static-copy, see
 // vite.config.ts), cached in IndexedDB after the first fetch. Model files are vendored into the
 // repo, not pulled from a CDN — see apply_dewarp()'s header comment for the licensing note.
 export function ensure_onnx(): Promise<void> {
-  if (_uvdoc_session && _bilinear_session) return Promise.resolve()
+  if (_uvdoc_session) return Promise.resolve()
   if (!_onnx_init) {
     _onnx_init = _load_onnx_sessions().catch((e: unknown) => {
       _onnx_init = null   // allow a retry rather than permanently caching a failed load
@@ -45,13 +44,12 @@ export function ensure_onnx(): Promise<void> {
 // GitHub Pages mirror build cannot, so it reads `crossOriginIsolated === false` and falls back to
 // the single-thread build automatically — no per-host branch needed here. WebGPU needs no SAB
 // either and is tried first where the browser exposes it; wasm+SIMD (threaded or not) is the
-// fallback. Only request WebGPU when the browser exposes it; otherwise ORT would have to fall back
-// internally. Explicit selection keeps behaviour deterministic across Firefox/Safari.
-export function resolve_onnx_execution_providers(ort: { env: { wasm: { numThreads?: number } } }): string[] {
+// fallback. WebGPU is requested only when the browser actually hands out an adapter — exposing
+// navigator.gpu is not enough (no usable GPU), and ORT's own failed WebGPU attempt costs ~1 s.
+export function resolve_onnx_execution_providers(ort: { env: { wasm: { numThreads?: number } } }, has_webgpu: boolean): string[] {
   const isolated = typeof crossOriginIsolated !== 'undefined' && crossOriginIsolated
   const cores = typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : undefined
   ort.env.wasm.numThreads = isolated ? Math.max(1, Math.min(cores ?? 1, WASM_MAX_THREADS)) : 1
-  const has_webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator
   const execution_providers = has_webgpu ? ['webgpu', 'wasm'] : ['wasm']
   // One-time diagnostic (TODO §17): single-thread WASM inference costs seconds/page — this line
   // lets a user verify in the console whether WebGPU/threading was actually available for them.
@@ -64,12 +62,18 @@ type OrtModule = typeof import('onnxruntime-web/webgpu')
 
 let _session_queue: Promise<unknown> = Promise.resolve()
 
+let _webgpu: Promise<boolean> | null = null
+const webgpu_adapter = (): Promise<boolean> => _webgpu ??=
+  Promise.resolve(typeof navigator !== 'undefined' && 'gpu' in navigator
+    ? (navigator.gpu as { requestAdapter(): Promise<unknown> }).requestAdapter() : null)
+    .then(a => a !== null, () => false)
+
 // Shared by every ONNX model (dewarp + dbnet.ts). ORT's WebGPU EP throws "another WebGPU EP
 // inference session is being created" on concurrent builds, so builds are serialized; a failed
 // WebGPU build is retried on the CPU (wasm) EP.
 export function create_onnx_session(ort: Pick<OrtModule, 'env' | 'InferenceSession'>, bytes: ArrayBuffer): Promise<InferenceSession> {
   const build = (): Promise<InferenceSession> => with_module_status('Preparing AI model…', async () => {
-    const eps = resolve_onnx_execution_providers(ort)
+    const eps = resolve_onnx_execution_providers(ort, await webgpu_adapter())
     try {
       return await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: eps })
     } catch (e) {
@@ -87,12 +91,8 @@ async function _load_onnx_sessions(): Promise<void> {
   try {
     const ort = await import('onnxruntime-web/webgpu')
     const base = import.meta.env.BASE_URL
-    const [uvdoc_bytes, bilinear_bytes] = await Promise.all([
-      fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL, 'dewarp model'),
-      fetch_with_idb_cache(DEWARP_BILINEAR_CACHE_KEY, base + DEWARP_BILINEAR_URL, 'unwarp model'),
-    ])
-    _uvdoc_session = await create_onnx_session(ort, uvdoc_bytes)
-    _bilinear_session = await create_onnx_session(ort, bilinear_bytes)
+    _uvdoc_session = await create_onnx_session(ort,
+      await fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL, 'dewarp model'))
   } catch (e) {
     throw new MissingDependencyError(`Failed to load the dewarp model: ${String(e)}`)
   }
@@ -169,15 +169,15 @@ export function f16_data_to_f32_array(data: Uint16Array): Float32Array {
   return out
 }
 
-// Real docuwarp/UVDoc mesh dewarp (spec §10.1) — two ONNX stages, ported from the actual
+// Real docuwarp/UVDoc mesh dewarp (spec §10.1) — two stages, ported from the actual
 // docuwarp package source (github.com/pstwh/docuwarp, unwarp.py Unwarp.prepare_input/
 // inference — same tensor names, dtypes, shapes and call order verified against that source):
 //  1. uvdoc.onnx: a CNN predicts a coarse (1,2,45,31) warp-field grid from the page downscaled
 //     to a FIXED DEWARP_MODEL_W x DEWARP_MODEL_H (a property of the trained weights, not
 //     tunable). Runs in fp16 (the model's native input dtype).
-//  2. bilinear_unwarping.onnx: upsamples that grid to the target resolution (bilinear,
-//     align_corners) and uses it to resample the FULL-resolution source via ONNX GridSample
-//     (bilinear, zero padding, align_corners) — no learned weights in this stage.
+//  2. docuwarp's bilinear_unwarping graph (no learned weights): upsample that grid to the target
+//     resolution (bilinear, align_corners) and resample the FULL-resolution source through it
+//     (GridSample bilinear, zero padding, align_corners) — raster.ts grid_unwarp, not ONNX.
 // `supersample` (spec §15 Dewarp-supersample) requests stage 2's output at supersample x the
 // source resolution, then downsamples back via cv.INTER_AREA — this is a deliberate
 // reinterpretation of desktop's "renders the page larger before the mesh remap, downsamples
@@ -192,18 +192,15 @@ export function f16_data_to_f32_array(data: Uint16Array): Float32Array {
 // forward, not a new one.
 //
 // Numerically cross-checked against a real Python docuwarp reference run on a synthetic test
-// image (same two .onnx files, same tensor plumbing): stage 2 alone reproduces the Python
-// reference bit-for-bit (0.0 max abs diff) when fed the same grid; the full end-to-end path
-// (uvdoc.onnx run under onnxruntime-web/WASM vs Python onnxruntime/CPU) diverges by
-// maxAbsDiff=3.5e-2 / meanAbsDiff=6.5e-6 on a [0,1] scale — consistent with expected benign
-// cross-engine floating-point noise through a 16M-parameter CNN, not an algorithmic error.
+// image; the served uvdoc is a weight-only int8 build (scripts/quantize_models.py) whose grid
+// differs from the fp16 model by < 1 px on average on a full page.
 export async function apply_dewarp(src: Mat, supersample: number): Promise<Mat> {
   // The real guarantee is process_page's `await ensure_onnx()` in the classify_warp branch
   // (imaging.ts, spec-web §7.1a) before this is ever called. Silently returning `src` unprocessed
   // here would surface as a confusing no-op (user presses Dewarp & Deskew, nothing visibly
   // happens) instead of a diagnosable error if that guarantee is ever violated by a future call
   // site or refactor.
-  if (!_uvdoc_session || !_bilinear_session) {
+  if (!_uvdoc_session) {
     throw new MissingDependencyError('apply_dewarp called before ensure_onnx() resolved')
   }
 
@@ -232,28 +229,15 @@ export async function apply_dewarp(src: Mat, supersample: number): Promise<Mat> 
   } else {
     throw new MissingDependencyError(`Dewarp model "output" has unexpected dtype: ${points_raw.type}`)
   }
-  const points_tensor = new ort.Tensor('float32', points_f32, points_raw.dims)
 
-  // Stage 2: resample the full-resolution source through the (upsampled) grid.
+  // Stage 2: resample the full-resolution source through the upsampled grid (raster.ts).
   const target_w = Math.max(1, Math.round(w * supersample))
   const target_h = Math.max(1, Math.round(h * supersample))
-  const warped_tensor = new ort.Tensor('float32', mat_to_chw_f32(src), [1, 3, h, w])
-  // img_size is (width, height), matching docuwarp's `np.array(image.size)` (PIL .size order) —
-  // verified against the actual reference source and its ONNX graph's `img_size` consumer.
-  const img_size_tensor = new ort.Tensor('int64',
-    BigInt64Array.from([BigInt(target_w), BigInt(target_h)]), [2])
-
-  const bl_out = await _bilinear_session.run({
-    warped_img: warped_tensor, point_positions: points_tensor, img_size: img_size_tensor,
-  })
-  const out_raw = bl_out['output']
-  if (!out_raw) throw new MissingDependencyError('Unwarp model returned no "output" tensor')
-  const out_data = out_raw.data
-  if (!(out_data instanceof Float32Array)) {
-    throw new MissingDependencyError(`Unwarp model "output" has unexpected dtype: ${out_raw.type}`)
-  }
-
-  let result = chw_f32_to_rgba_mat(out_data, target_w, target_h)
+  const [, , gh, gw] = points_raw.dims as [number, number, number, number]
+  // Read src.data (a view onto the WASM heap) before allocating a Mat, which can grow and detach it.
+  const unwarped = grid_unwarp(src.data, w, h, points_f32, gw, gh, target_w, target_h)
+  let result = new cv.Mat(target_h, target_w, Number(cv.CV_8UC4))
+  result.data.set(unwarped)
   if (target_w !== w || target_h !== h) {
     const downsampled = new cv.Mat()
     cv.resize(result, downsampled, new cv.Size(w, h), 0, 0, Number(cv.INTER_AREA))
@@ -289,25 +273,6 @@ function mat_to_resized_chw_f32(mat: Mat, target_w: number, target_h: number): F
   const out = mat_to_chw_f32(resized)
   resized.delete()
   return out
-}
-
-// Planar RGB float32 in [0,1] -> RGBA uint8 Mat (alpha fully opaque).
-function chw_f32_to_rgba_mat(data: Float32Array, w: number, h: number): Mat {
-  const plane = w * h
-  const out = new cv.Mat(h, w, Number(cv.CV_8UC4))
-  const dst = out.data
-  for (let p = 0; p < plane; p++) {
-    const o = p * 4
-    dst[o]     = clamp_u8((data[p]            as number) * 255)   // noUncheckedIndexedAccess
-    dst[o + 1] = clamp_u8((data[plane + p]     as number) * 255)   // noUncheckedIndexedAccess
-    dst[o + 2] = clamp_u8((data[2 * plane + p] as number) * 255)   // noUncheckedIndexedAccess
-    dst[o + 3] = 255
-  }
-  return out
-}
-
-function clamp_u8(v: number): number {
-  return v < 0 ? 0 : v > 255 ? 255 : Math.round(v)
 }
 
 // ---------------------------------------------------------------------------

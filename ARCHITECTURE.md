@@ -215,9 +215,11 @@ C:/DOCS/Code/SmartCroPDF-Web/
       cv.ts                  OpenCV.js runtime access point (`cv`, `Mat` type, `ensure_cv()`) —
                               shared by imaging.ts and dewarp.ts.
       dewarp.ts              docuwarp/UVDoc ONNX mesh dewarp: model loading + fp16 tensor
-                              plumbing + the two-stage inference pipeline. Called from
+                              plumbing + inference (uvdoc CNN, then raster.ts grid_unwarp). Called from
                               imaging.ts's process_page_async()/process_page(). Also exports
                               resolve_onnx_execution_providers(), shared with dbnet.ts.
+      raster.ts              docuwarp stage 2 (grid upsample + GridSample) in plain TS — replaces
+                              the weightless bilinear_unwarping.onnx model.
       deskew.ts              Classic-CV warp classifier (§7.1a) — decides ONNX-dewarp vs. not,
                               before either dbnet.ts or dewarp.ts ever runs. No correction of its
                               own; classification only.
@@ -729,7 +731,8 @@ streamed back one at a time so memory stays flat (spec-web §10.5, §16).
 
 ## 9. Image processing (`pdf/imaging.ts`, main thread — §7a)
 
-OpenCV.js WASM — loaded once, lazily, on first call (`ensure_cv()`). All operations are
+OpenCV.js WASM — a separate lazy chunk, loaded once on first call (`ensure_cv()`) or in the
+background when a SCANNED document opens (`sw_register.ts::prefetch_scan_tools`). All operations are
 `ImageBitmap` in → `ImageBitmap` out (stateless beyond the cv module itself and the lazy ONNX
 session, both process-lifetime singletons — no longer worker-lifetime since there's no worker).
 
@@ -743,7 +746,7 @@ session, both process-lifetime singletons — no longer worker-lifetime since th
 | Unsharp mask (Sharpen) | `cv.bilateralFilter` (strength-scaled `d`/`sigmaColor`/`sigmaSpace` from `SHARPEN_STRENGTH`) → `cv.GaussianBlur` (strength-scaled radius) → `cv.addWeighted` (`CLEAN_AMOUNT` gain) | Implemented, strength now drives denoise/blur radius **and** gain|
 | DPI-scaled kernels | — | **Not ported.** `imaging.py`'s `_dpi_scale()` scales the Sauvola window / bg-kernel / min-area by source DPI (0.5×–4× clamp) so scans at different resolutions binarize comparably. The web always uses the base `SAUVOLA_WINDOW`/`BG_KERNEL_SIZE` regardless of DPI. Low-severity residual gap — SRC_DPI is fixed at 200 in the web (no variable-DPI source rasters), so this mainly affects the B/W filter's absolute kernel size relative to `imaging.py`'s 150 DPI reference, not correctness. |
 | 2× supersample refinement | — | **Not ported.** `clean_document_bilevel` upscales 2× before thresholding then downsamples for a cleaner edge; the web version thresholds at native resolution. Cosmetic quality difference only. |
-| Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model → bilinear resample | Implemented — two-stage ONNX pipeline, EPs `['webgpu','wasm']` gated on `navigator.gpu`, sessions built serially via `create_onnx_session` with a wasm retry on WebGPU failure; wasm `numThreads` gated on `crossOriginIsolated` (§18) |
+| Dewarp mesh | `ensure_onnx()` + `apply_dewarp()`: UVDoc warp-field model (int8) → `raster.grid_unwarp` | Implemented — one ONNX model, EPs `['webgpu','wasm']` with WebGPU only when `requestAdapter()` returns an adapter, sessions built serially via `create_onnx_session` with a wasm retry on WebGPU failure; wasm `numThreads` gated on `crossOriginIsolated` (§18) |
 | Deskew angle | `estimate_deskew()` (`pdf/deskew.ts`, warp classifier only) + `estimate_vanishing_point()`/`vp_center_angle()` (`pdf/vanishing_point.ts`) + `apply_vp_correction()` (`pdf/vp_correct.ts`) | **Web-only addition, not a desktop port.** Spec §7.1/§7.1b: a page the classic-CV warp classifier finds not-warped gets its own text-line-detection (`pdf/dbnet.ts`, DBNet ONNX) + vanishing-point fit, corrected via a single rotation remap — added because a page already dewarped elsewhere was being needlessly re-warped, introducing its own residual distortion. Desktop has no equivalent path; there is no parity gap to track here. |
 
 `detect_content()` downscales to `DETECT_MAX_PX` for speed used a direct `cv.adaptiveThreshold` call
@@ -797,9 +800,9 @@ Measured budgets (met): B/W filter < 500 ms/page, Auto-detect < 100 ms/page (spe
 Regression-guarded by `tests/perf/scan_speed.test.ts` (`npm run test:perf`) and, end-to-end in a real
 browser, `tests/e2e/scan_simd.spec.ts`.
 
-**Dewarp** — `apply_dewarp()` runs the two-stage UVDoc pipeline (warp-field inference → bilinear
-resample), wired button→AppModel→`ensure_onnx`→`apply_dewarp`. Execution providers `['webgpu','wasm']`
-gated on `navigator.gpu` (spec-web §7.1).
+**Dewarp** — `apply_dewarp()` runs UVDoc warp-field inference, then `raster.grid_unwarp`, wired
+button→AppModel→`ensure_onnx`→`apply_dewarp`. Execution providers per spec-web §7.1. Served models
+are weight-only int8 builds of `models/*.onnx` (`scripts/quantize_models.py`).
 
 ONNX model cache:
 ```ts
@@ -983,16 +986,18 @@ GitHub repository → push to main
 **Asset sizing (gzip):**
 | Asset | Size |
 |---|---|
-| Main bundle (core + ui + pdf/) | ~120 KB |
-| PDF.js chunk (pdfjs-dist) | ~280 KB |
-| pdf-lib chunk | ~100 KB |
-| OpenCV.js WASM (`pdf/imaging.ts`, main thread — §7a) | ~8 MB (lazy; scanned mode only) |
-| ONNX Runtime Web (lazy) | ~8 MB (lazy; dewarp only) |
-| docuwarp model (lazy, IndexedDB) | ~10 MB (once per session, cached) |
+| Main bundle (core + ui + pdf/) | ~39 KB |
+| PDF.js chunk (pdfjs-dist) | ~97 KB (+ 2.2 MB worker, raw) |
+| pdf-lib chunk | ~176 KB |
+| OpenCV.js WASM (`pdf/imaging.ts`, main thread — §7a) | ~3.3 MB (11 MB raw; lazy, pre-loaded when a SCANNED document opens) |
+| ONNX Runtime Web wasm (lazy; pre-loaded with a SCANNED document) | ~6 MB |
+| text-line model, int8 (pre-loaded with the runtime; IndexedDB) | ~1.3 MB |
+| docuwarp model, int8 (lazy, first WARPED page; IndexedDB) | ~8 MB |
 
 Normal-mode users (the majority) download ~500 KB total.
-Scanned-mode users load the 8MB OpenCV chunk once on first filter/detect press.
-Dewarp adds another 18MB one-time download, cached indefinitely in IndexedDB.
+Scanned-mode users load the OpenCV chunk, the ONNX runtime and the int8 text-line model (~1.3 MB) in
+the background as soon as a scan opens; the int8 dewarp model (~8 MB) on the first WARPED page.
+Models are cached indefinitely in IndexedDB.
 
 **Icons + offline (`public/sw.js`, `public/site.webmanifest`, `src/ui/sw_register.ts`):** a
 hand-rolled service worker, not `vite-plugin-pwa`/workbox — the JS/CSS bundle's filenames are

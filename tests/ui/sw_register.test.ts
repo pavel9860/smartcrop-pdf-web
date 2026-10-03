@@ -8,7 +8,7 @@ vi.mock('@pdf/cv', () => ({ ensure_cv }))
 vi.mock('@pdf/dewarp', () => ({ ensure_onnx }))
 vi.mock('@pdf/dbnet', () => ({ ensure_dbnet }))
 
-const { register_service_worker, warm_offline_cache } = await import('@ui/sw_register')
+const { register_service_worker, warm_offline_cache, prefetch_scan_tools } = await import('@ui/sw_register')
 
 describe('register_service_worker', () => {
   it('does nothing outside a production build, even when serviceWorker is supported', () => {
@@ -43,5 +43,16 @@ describe('warm_offline_cache (Settings → Enable offline mode)', () => {
     expect(ensure_cv).toHaveBeenCalledTimes(1)
     expect(ensure_onnx).toHaveBeenCalledTimes(1)
     expect(ensure_dbnet).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('prefetch_scan_tools (SCANNED document open)', () => {
+  it('loads the image engine, then the text-line model — not the dewarp model — and swallows a failure', async () => {
+    ensure_cv.mockClear(); ensure_onnx.mockClear(); ensure_dbnet.mockClear()
+    ensure_dbnet.mockRejectedValueOnce(new Error('offline'))
+    prefetch_scan_tools()
+    await vi.waitFor(() => { expect(ensure_dbnet).toHaveBeenCalledTimes(1) })
+    expect(ensure_cv).toHaveBeenCalledTimes(1)
+    expect(ensure_onnx).not.toHaveBeenCalled()
   })
 })

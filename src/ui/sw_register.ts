@@ -25,6 +25,13 @@ export function register_service_worker(
 // detection model otherwise only get cached the first time SCANNED-mode processing runs online.
 // This runs those same real init paths once so every feature — not just whichever were already
 // used — works offline after.
+// A SCANNED document is open (spec-web §4.3): load the image engine, the ONNX runtime and the
+// text-line model in the background so the first scan action doesn't wait for them. Idempotent;
+// resolves false on failure, which is left for the real call to report.
+export function prefetch_scan_tools(): Promise<boolean> {
+  return ensure_cv().then(ensure_dbnet).then(() => true, () => false)
+}
+
 export async function warm_offline_cache(): Promise<void> {
   await Promise.all([ensure_cv(), ensure_onnx(), ensure_dbnet()])
 }

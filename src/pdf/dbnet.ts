@@ -5,8 +5,8 @@
 // found not warped; imaging.ts calls into this file, not the other way, so there's no import cycle.
 //
 // Licensing: PaddleOCR is Apache-2.0 (github.com/PaddlePaddle/PaddleOCR). The vendored weights
-// (public/models/ch_PP-OCRv4_det.onnx) are a pre-converted export of the official PP-OCRv4 mobile
-// detector, sourced from a community ONNX mirror (huggingface.co/Heliosoph/paddleocr-v4-det-onnx)
+// (models/ch_PP-OCRv4_det.onnx; served int8-quantized from public/models/) are a pre-converted
+// export of the official PP-OCRv4 mobile detector, sourced from a community ONNX mirror (huggingface.co/Heliosoph/paddleocr-v4-det-onnx)
 // rather than converted in this repo — same weights, same Apache-2.0 terms, only the conversion
 // tooling differs from running Paddle2ONNX locally.
 import type { InferenceSession } from 'onnxruntime-web'

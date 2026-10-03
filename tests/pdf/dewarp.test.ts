@@ -1,14 +1,10 @@
 // Direct unit coverage for dewarp.ts's non-ONNX-runtime helpers (fp16 conversion, M3's
 // fetch_with_idb_cache). Excluded from the coverage gate for the rest of dewarp.ts
-// (vitest.config.ts) — ensure_onnx/apply_dewarp need a real ONNX+OpenCV runtime — but these
+// (vitest.config.ts) — ensure_onnx/apply_dewarp need a real ONNX runtime — but these
 // touch only pure bit math, `fetch`, and IndexedDB, all mockable under jsdom.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-
-// dewarp.ts imports ./cv, which imports the real (heavy, WASM) opencv-js package at module
-// scope — mock it so importing @pdf/dewarp in a test doesn't try to load that.
-vi.mock('@techstark/opencv-js', () => ({ default: {} }))
 
 function make_fake_indexeddb(stores: Map<string, Map<string, unknown>>): { open: (name: string, version: number) => any } {
   return {
@@ -88,7 +84,7 @@ describe('resolve_onnx_execution_providers (wasm thread count follows crossOrigi
     vi.stubGlobal('navigator', { hardwareConcurrency: 8 })
     const { resolve_onnx_execution_providers } = await import('@pdf/dewarp')
     const ort = { env: { wasm: {} as { numThreads?: number } } }
-    resolve_onnx_execution_providers(ort)
+    resolve_onnx_execution_providers(ort, false)
     expect(ort.env.wasm.numThreads).toBe(1)
   })
 
@@ -98,7 +94,7 @@ describe('resolve_onnx_execution_providers (wasm thread count follows crossOrigi
     const { resolve_onnx_execution_providers } = await import('@pdf/dewarp')
     const { WASM_MAX_THREADS } = await import('@core/constants')
     const ort = { env: { wasm: {} as { numThreads?: number } } }
-    resolve_onnx_execution_providers(ort)
+    resolve_onnx_execution_providers(ort, false)
     expect(ort.env.wasm.numThreads).toBe(WASM_MAX_THREADS)
   })
 
@@ -107,7 +103,7 @@ describe('resolve_onnx_execution_providers (wasm thread count follows crossOrigi
     vi.stubGlobal('navigator', { hardwareConcurrency: 2 })
     const { resolve_onnx_execution_providers } = await import('@pdf/dewarp')
     const ort = { env: { wasm: {} as { numThreads?: number } } }
-    resolve_onnx_execution_providers(ort)
+    resolve_onnx_execution_providers(ort, false)
     expect(ort.env.wasm.numThreads).toBe(2)
   })
 })
@@ -179,7 +175,7 @@ describe('create_onnx_session (serialized builds, WebGPU → wasm fallback)', ()
   }
 
   it('builds concurrent sessions one at a time', async () => {
-    vi.stubGlobal('navigator', { gpu: {}, hardwareConcurrency: 1 })
+    vi.stubGlobal('navigator', { gpu: { requestAdapter: () => Promise.resolve({}) }, hardwareConcurrency: 1 })
     const { create_onnx_session } = await import('@pdf/dewarp')
     const { ort, calls } = fake_ort(false)
     const buf = new ArrayBuffer(1)
@@ -188,12 +184,20 @@ describe('create_onnx_session (serialized builds, WebGPU → wasm fallback)', ()
   })
 
   it('falls back to the wasm (CPU) provider when the WebGPU build fails', async () => {
-    vi.stubGlobal('navigator', { gpu: {}, hardwareConcurrency: 1 })
+    vi.stubGlobal('navigator', { gpu: { requestAdapter: () => Promise.resolve({}) }, hardwareConcurrency: 1 })
     const { create_onnx_session } = await import('@pdf/dewarp')
     const { ort, calls } = fake_ort(true)
     const s: any = await create_onnx_session(ort, new ArrayBuffer(1))
     expect(s.eps).toEqual(['wasm'])
     expect(calls).toEqual([['webgpu', 'wasm'], ['wasm']])
+  })
+
+  it('skips WebGPU when the browser exposes navigator.gpu but has no adapter', async () => {
+    vi.stubGlobal('navigator', { gpu: { requestAdapter: () => Promise.resolve(null) }, hardwareConcurrency: 1 })
+    const { create_onnx_session } = await import('@pdf/dewarp')
+    const { ort, calls } = fake_ort(false)
+    await create_onnx_session(ort, new ArrayBuffer(1))
+    expect(calls).toEqual([['wasm']])
   })
 
   it('a failed build does not block the next one', async () => {

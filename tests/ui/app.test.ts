@@ -140,6 +140,33 @@ describe('AppController progress for single-page jobs and module loading (spec-w
   })
 })
 
+describe('AppController background scan-tool pre-load (spec-web §4.3)', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.doUnmock('@ui/sw_register'); vi.resetModules() })
+
+  it('a SCANNED document starts the pre-load once, and its loading status never blocks the canvas', async () => {
+    vi.resetModules()
+    let finish: (ok: boolean) => void = () => undefined
+    const prefetch = vi.fn(() => new Promise<boolean>(r => { finish = r }))
+    vi.doMock('@ui/sw_register', () => ({ prefetch_scan_tools: prefetch, warm_offline_cache: vi.fn() }))
+    const { AppController: Ctrl } = await import('@ui/app')
+    const { with_module_status: status } = await import('@pdf/module_status')
+    const { Mode } = await import('@core/enums')
+    stub_canvas_apis()
+    const root = mount()
+    const ctrl = new Ctrl(root, make_adapter(1, Mode.SCANNED))
+    await ctrl.model.load_files([new File(['x'], 'scan.jpg')])
+    await ctrl.refresh_all()
+    await ctrl.refresh_all()
+    expect(prefetch).toHaveBeenCalledTimes(1)
+
+    let done: () => void = () => undefined
+    const loading = status('Loading image engine…', () => new Promise<void>(r => { done = r }))
+    expect(root.querySelector('.overlay')!.classList.contains('hidden')).toBe(true)
+    done(); await loading; finish(true)
+    ctrl.destroy()
+  })
+})
+
 describe('AppController ignores commands while a job runs (spec-web §11)', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
@@ -162,6 +189,21 @@ describe('AppController ignores commands while a job runs (spec-web §11)', () =
     expect(exp).not.toHaveBeenCalled()
     expect(root.querySelector('[data-act="confirm"]')).toBeNull()
     finish()
+    ctrl.destroy()
+  })
+
+  it('disables the controls as soon as a job is dispatched, before the page re-renders', async () => {
+    stub_canvas_apis()
+    const root = mount()
+    const ctrl = new AppController(root, make_adapter())
+    await ctrl.model.load_files([new File(['%PDF'], 'a.pdf')])
+    await ctrl.refresh_all()
+    vi.spyOn(ctrl.model, 'prepare_current_view').mockReturnValue(new Promise(() => undefined))
+    ctrl.dispatch_job(() => ({
+      title: 'Applying filter…', total: 1, done: 0, cancel: () => undefined, onProgress: () => undefined,
+      result: () => new Promise(() => undefined),
+    }))
+    expect(root.querySelector<HTMLButtonElement>('#op-export')!.disabled).toBe(true)
     ctrl.destroy()
   })
 })

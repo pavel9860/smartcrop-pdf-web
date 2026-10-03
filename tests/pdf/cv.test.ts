@@ -19,6 +19,7 @@ describe('ensure_cv (C3)', () => {
     // install its own onRuntimeInitialized callback, clobbering the first's.
     expect(p1).toBe(p2)
 
+    await vi.waitFor(() => { expect(cv_mock.onRuntimeInitialized).toBeTypeOf('function') })
     let settled = false
     const race = Promise.race([
       Promise.all([p1, p2]).then(() => { settled = true }),

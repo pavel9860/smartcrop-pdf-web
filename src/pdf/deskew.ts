@@ -60,9 +60,6 @@ export function estimate_deskew(mat: Mat, downscale_px: number, max_deg: number)
   return { angle_deg: best_angle, sharpness }
 }
 
-// cv.REDUCE_SUM exists at runtime (verified) but is missing from @techstark/opencv-js's .d.ts —
-// same class of gap as dewarp.ts's Float16Array runtime-vs-typing workaround.
-const REDUCE_SUM = (cv as unknown as { REDUCE_SUM: number }).REDUCE_SUM
 
 function _row_variance_at_angle(bw: Mat, angle_deg: number): number {
   const w = bw.cols, h = bw.rows
@@ -73,7 +70,8 @@ function _row_variance_at_angle(bw: Mat, angle_deg: number): number {
   m.delete()
 
   const row_sums = new cv.Mat()
-  cv.reduce(rotated, row_sums, 1, REDUCE_SUM, Number(cv.CV_64F))
+  // REDUCE_SUM exists at runtime but is missing from @techstark/opencv-js's .d.ts.
+  cv.reduce(rotated, row_sums, 1, (cv as unknown as { REDUCE_SUM: number }).REDUCE_SUM, Number(cv.CV_64F))
   rotated.delete()
 
   const mean = new cv.Mat(), stddev = new cv.Mat()

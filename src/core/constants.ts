@@ -67,7 +67,7 @@ export const DESKEW_MIN_DEG = 0.5
 
 // DBNet (PP-OCRv4 mobile det, ONNX, Apache-2.0) text-line detection for §7.1b.
 export const DBNET_MODEL_URL = 'models/ch_PP-OCRv4_det.onnx'
-export const DBNET_MODEL_CACHE_KEY = 'dbnet-ppocrv4-det-v1'
+export const DBNET_MODEL_CACHE_KEY = 'dbnet-ppocrv4-det-int8-v2'
 // Higher than a typical detector's default input size: a small true tilt shifts a text region's
 // contour by under 1px at lower resolutions, which cv.minAreaRect then rounds away to exactly
 // zero before any fitting ever sees it — empirically, raising this cut the exact-zero-angle
@@ -209,18 +209,17 @@ export const DEFAULT_DEWARP_SUPERSAMPLE = 2.0
 export const DEWARP_SUPERSAMPLE_MIN = 1.0
 export const DEWARP_SUPERSAMPLE_MAX = 4.0
 
-// Dewarp model (pdf/imaging.ts) — pstwh/docuwarp, a two-stage ONNX pipeline: uvdoc.onnx (a CNN
-// predicting a coarse warp-field grid) + bilinear_unwarping.onnx (GridSample-based resampler).
+// Dewarp model (pdf/dewarp.ts) — pstwh/docuwarp's uvdoc.onnx CNN predicts a coarse warp-field grid;
+// the resample through it is raster.ts grid_unwarp. Served models are weight-only int8 builds of
+// models/*.onnx (scripts/quantize_models.py); bump a cache key whenever its file changes.
 // DEWARP_MODEL_W/H are the CNN's FIXED input size baked into the trained weights (docuwarp
 // Unwarp.image_size = (488, 712), PIL (width, height) order) — not tunable, not a style choice.
 export const DEWARP_MODEL_W = 488
 export const DEWARP_MODEL_H = 712
 // Relative to the deployment base (import.meta.env.BASE_URL, prepended in pdf/imaging.ts) so the
 // models resolve under a GitHub Pages project-page subpath, not the domain root. No leading slash.
-export const DEWARP_UVDOC_URL          = 'models/uvdoc.onnx'
-export const DEWARP_BILINEAR_URL       = 'models/bilinear_unwarping.onnx'
-export const DEWARP_UVDOC_CACHE_KEY    = 'docuwarp-uvdoc-v1'
-export const DEWARP_BILINEAR_CACHE_KEY = 'docuwarp-bilinear-v1'
+export const DEWARP_UVDOC_URL       = 'models/uvdoc.onnx'
+export const DEWARP_UVDOC_CACHE_KEY = 'docuwarp-uvdoc-int8-v2'
 
 // ONNX Runtime Web wasm EP thread cap (dewarp.ts::resolve_onnx_execution_providers, shared by
 // dbnet.ts's session) — only used when the page is crossOriginIsolated (SharedArrayBuffer

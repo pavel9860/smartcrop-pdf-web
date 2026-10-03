@@ -198,7 +198,10 @@ Processing, Auto-detect, Split-apply, Actions).
 | Strength 1 / 2 / 3 | Always selectable regardless of whether a filter is active; applies once a filter mode is on. |
 
 Nothing here runs automatically — only on a button press. A processing operation persists until
-explicitly undone; there is no separate "reverse" gesture on the same button (§7).
+explicitly undone; there is no separate "reverse" gesture on the same button (§7). Opening a SCANNED
+document does start background *loading*, not processing: the image engine (OpenCV.js), the ONNX
+runtime and the text-line model (§7.1b, ~1.3 MB int8) load so the first scan action doesn't wait for
+them. The dewarp model (~8 MB) still loads only when a page first classifies WARPED.
 
 ### 4.4 Split Each Page Into
 
@@ -643,8 +646,14 @@ three things it needs:
 This exists because a page that has already been correctly dewarped elsewhere and only carries
 incidental skew would otherwise be needlessly re-warped by the ONNX pass, which can introduce its
 own small residual distortion on input that didn't need mesh correction. Execution providers for
-the ONNX path (both UVDoc dewarp and §7.1b's DBNet session) are `['webgpu','wasm']`, gated on
-`navigator.gpu`. Sessions (all models) are created strictly one at a time — ORT's WebGPU EP rejects a
+the ONNX path (both UVDoc dewarp and §7.1b's DBNet session) are `['webgpu','wasm']`, with WebGPU
+requested only when `navigator.gpu.requestAdapter()` returns an adapter (exposing `navigator.gpu`
+without a usable GPU would otherwise cost a failed ~1 s WebGPU attempt). Both models are served as
+weight-only int8 builds (per-output-channel, dequantized back to their original dtype at load —
+compute unchanged; `scripts/quantize_models.py`, sources in `models/`): the dewarp grid differs from
+the fp16 model by < 1 px on average (≤ 3.5 px max) on a full page, the text-line mask by IoU ≥ 0.96.
+Docuwarp's second stage (grid upsample + GridSample, no learned weights) runs as plain code
+(`pdf/raster.ts`), not a model. Sessions (all models) are created strictly one at a time — ORT's WebGPU EP rejects a
 session build while another is in progress (seen on Android Chrome) — and if a WebGPU-backed build
 fails, it is retried once on `['wasm']` (CPU) so the model still loads. The wasm provider's thread count follows `crossOriginIsolated` at runtime —
 multi-threaded (capped at `navigator.hardwareConcurrency`, `WASM_MAX_THREADS`) when the page was
@@ -904,8 +913,10 @@ indeterminate bar and no counter.
 
 First use of a heavy module (OpenCV, the dewarp and text-line ONNX models) is reported too: a
 detail line under the message reads e.g. "Downloading dewarp model 3.1 / 8.4 MB" or "Loading image
-engine…". If no job is running at that moment (e.g. while a scan is being opened), the same card
-shows on its own, without Cancel, until loading finishes.
+engine…". If no job is running at that moment (e.g. Settings → offline mode warming the cache), the
+same card shows on its own, without Cancel, until loading finishes — except for the background
+pre-load a SCANNED document starts (§4.3), which never shows a card on its own (it must not block the
+page); a job started meanwhile still shows the loading line in its card.
 Cancel sets a flag checked before each page (and before a job commits its result or file) and stops
 promptly with no partial file; the job counts as busy until its worker has actually stopped, so no
 new action can overlap a cancelled job still finishing its current page. While a batch
@@ -1062,8 +1073,9 @@ install/PWA-add-to-homescreen step is required either way.
 | Warp classifier per page (§7.1a, classic CV) | < 100ms — flag and investigate if exceeded |
 | Skew correction per page (§7.1b, DBNet + vanishing point) | < 1s — flag and investigate if exceeded; only reached on pages that already skipped the ONNX path; same COOP/COEP threading as the Dewarp row applies to the DBNet session |
 | Export per page (rasterized path) | < 300ms |
-| First OpenCV.js WASM load | < 3s, once per session (~10MB SIMD build, lazy — SCANNED documents only) |
-| First ONNX model fetch + init | < 5s, once per session (cached in IndexedDB after; 0ms on repeat sessions) |
+| Startup to the manual on screen | < 1.2s cold (OpenCV.js and ONNX are separate lazy chunks, not in the startup bundle) |
+| First OpenCV.js WASM load | < 3s, once per session (~11MB SIMD build, lazy — pre-loaded in the background when a SCANNED document opens) |
+| First ONNX model fetch + init | < 2s, once per session (int8 models; text-line model pre-loaded with the SCANNED document; cached in IndexedDB after) |
 
 OpenCV.js is a SIMD (v128) WASM build, single-thread regardless of COOP/COEP — it's a separate WASM
 build from ONNX Runtime Web's (§7.1), and switching it to a threaded variant would be a separate,
@@ -1097,7 +1109,7 @@ WARP_SHARPNESS_MIN = 1.0    DESKEW_CLASSIFY_DOWNSCALE_PX = 400
 # that, not at the originally-hoped-for 0.2deg — see PROGRESS.md)
 DESKEW_MIN_DEG = 0.5
 # DBNet (PP-OCRv4 mobile det, ONNX, Apache-2.0) text-line detection for §7.1b
-DBNET_MODEL_URL = 'models/ch_PP-OCRv4_det.onnx'    DBNET_MODEL_CACHE_KEY = 'dbnet-ppocrv4-det-v1'
+DBNET_MODEL_URL = 'models/ch_PP-OCRv4_det.onnx'    DBNET_MODEL_CACHE_KEY = 'dbnet-ppocrv4-det-int8-v2'
 DBNET_MAX_SIDE_PX = 1920    DBNET_PROB_THRESH = 0.3    DBNET_UNCLIP_RATIO = 1.6
 DBNET_MIN_AREA_PX = 20    DBNET_MIN_WIDTH_PX = 30    DBNET_MIN_ASPECT_RATIO = 3.0
 # vanishing-point estimation (§7.1b) — PROSAC/MSAC/IRLS
@@ -1124,8 +1136,9 @@ DEFAULT_EXPORT_FORMAT = "PDF"    DEFAULT_OUTPUT_POSTFIX = "_cropped"
 DEFAULT_UNDO_DEPTH = 2    UNDO_DEPTH_OPTIONS = [1,2,4,8]    UNDO_DEPTH_MIN/MAX = 1 / 50
 DEFAULT_DEWARP_SUPERSAMPLE = 2.0
 DEFAULT_DETECT_OUTLIER = 2    DETECT_OUTLIER_OPTIONS = [0,1,2,5,10]
-# dewarp model (pstwh/docuwarp, two-stage ONNX)
+# dewarp model (pstwh/docuwarp uvdoc CNN, int8; stage 2 is pdf/raster.ts grid_unwarp)
 DEWARP_MODEL_W/H = 488 / 712   (fixed CNN input size, not tunable)
+DEWARP_UVDOC_CACHE_KEY = 'docuwarp-uvdoc-int8-v2'
 ```
 
 The Undo/redo depth and Dewarp-supersample are runtime `Settings` (§13), not constants.

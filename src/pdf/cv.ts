@@ -30,45 +30,37 @@
 // spec §17 budgets ~150 ms), so this is a UX regression (brief UI block) rather than a
 // correctness one — tracked as follow-up work, not silently accepted as fine.
 
-import * as cvModule from '@techstark/opencv-js'
+import type * as CvNamespace from '@techstark/opencv-js'
 import { CV_INIT_TIMEOUT_MS } from '@core/constants'
 import { with_module_status } from './module_status'
 
-export const cv = (cvModule as unknown as { default: typeof cvModule }).default
+type Cv = typeof CvNamespace
+
+// Loaded on first ensure_cv() (11 MB — kept out of the startup bundle); every caller awaits
+// ensure_cv() before touching it.
+export let cv: Cv
 
 // `cv.Mat` cannot be used as a *type* (cv is a value, not a TS namespace) — alias it via
 // ReturnType<typeof cv.matFromImageData>, as elsewhere.
 export type Mat = ReturnType<typeof cv.matFromImageData>
 
-// Cached at module scope so concurrent callers share one init and one onRuntimeInitialized
-// assignment (C3): previously each call installed its own callback, so a second concurrent
-// call clobbered the first's, and the first caller's `resolve` never fired.
 let _cv_init: Promise<void> | null = null
 
-// Exported for tests/pdf/cv.test.ts only (C3 races need direct unit coverage — jsdom has no
-// WASM cv context to exercise them through detect_content_async/process_page_async).
+// Cached so concurrent callers share one init and one onRuntimeInitialized assignment (C3).
+// Exported for tests/pdf/cv.test.ts only.
 export function ensure_cv(): Promise<void> {
-  if (!_cv_init) {
-    // Fast path: some builds' WASM init can complete before this is ever called (e.g. it
-    // finished during module load), in which case onRuntimeInitialized already fired as a
-    // no-op — assigning a new handler here would never be invoked and we'd eat the full 10s
-    // fallback for nothing every time. cv.Mat existing is proof the runtime is already up.
-    // (cv.Mat is typed as an always-present constructor but is genuinely undefined pre-init —
-    // read through an optional view so the runtime guard isn't type-narrowed away.)
-    const cv_ready = (cv as { Mat?: unknown }).Mat != null
-    _cv_init = cv_ready ? Promise.resolve() : with_module_status('Loading image engine…', () => new Promise<void>((resolve, reject): void => {
+  _cv_init ??= with_module_status('Loading image engine…', async () => {
+    cv = ((await import('@techstark/opencv-js')) as unknown as { default: Cv }).default
+    // cv.Mat existing is proof the runtime is already up (init can finish during module load,
+    // when onRuntimeInitialized has already fired). Typed always-present, so read it loosely.
+    if ((cv as { Mat?: unknown }).Mat != null) return
+    await new Promise<void>((resolve, reject): void => {
       cv.onRuntimeInitialized = (): void => { resolve() }
-      // Fallback timeout in case the callback doesn't fire (matches prior behaviour) — but only
-      // resolve if init actually completed by then; otherwise reject with a diagnosable error
-      // instead of silently proceeding into a "cv.Mat is not a constructor" crash downstream, and
-      // clear the cache so the NEXT call re-checks cv.Mat / re-arms the callback rather than
-      // permanently failing every future call just because init finished a moment late.
       setTimeout(() => {
         if ((cv as { Mat?: unknown }).Mat != null) { resolve(); return }
-        _cv_init = null
         reject(new Error(`OpenCV.js failed to initialize within ${CV_INIT_TIMEOUT_MS / 1000}s`))
       }, CV_INIT_TIMEOUT_MS)
-    }))
-  }
+    })
+  }).catch((e: unknown) => { _cv_init = null; throw e })
   return _cv_init
 }

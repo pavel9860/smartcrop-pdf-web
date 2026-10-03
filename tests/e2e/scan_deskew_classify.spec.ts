@@ -54,9 +54,14 @@ const ink_aspect = (canvas: Locator): Promise<number> => canvas.evaluate((el: HT
 
 // Which path ran is read from which model files the page fetched (each test context starts with an
 // empty IndexedDB model cache), not from wall-clock time, which parallel workers make meaningless.
-async function run_dewarp(page: Page, file: string): Promise<{ canvas: Locator; models: string[] }> {
+// Opening a scan already pre-loads the text-line model (spec-web §4.3), so watch from page start.
+function watch_models(page: Page): string[] {
   const models: string[] = []
   page.on('request', r => { if (r.url().includes('/models/')) models.push(r.url()) })
+  return models
+}
+
+async function run_dewarp(page: Page, file: string, models = watch_models(page)): Promise<{ canvas: Locator; models: string[] }> {
   await open_app(page)
   await page.setInputFiles('#pp-file', file)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
@@ -70,7 +75,7 @@ async function run_dewarp(page: Page, file: string): Promise<{ canvas: Locator; 
 
 const expect_fast_path = (models: string[]): void => {
   expect(models.some(u => u.includes('PP-OCRv4_det'))).toBe(true)
-  expect(models.some(u => /uvdoc|bilinear/i.test(u))).toBe(false)
+  expect(models.some(u => u.includes('uvdoc'))).toBe(false)
 }
 
 test('a skew-only real scan (~5deg, no warp) is corrected via the fast vanishing-point path, not ONNX', async ({ page }) => {
@@ -85,11 +90,12 @@ test('a real skewed scan is corrected via DBNet + vanishing-point, not always-ON
 
 test('the same scan rotated 90deg is corrected without undoing the 90deg orientation', async ({ page }) => {
   test.setTimeout(180_000)
+  const models = watch_models(page)
   await open_app(page)
   await page.setInputFiles('#pp-file', ROTATED_SCAN_PNG)
   await expect(page.locator('#pp-badge')).toHaveText('SCANNED', { timeout: 15_000 })
   const aspect_before = await ink_aspect(page.locator('canvas.page-canvas'))
-  const { canvas, models } = await run_dewarp(page, ROTATED_SCAN_PNG)
+  const { canvas } = await run_dewarp(page, ROTATED_SCAN_PNG, models)
   expect_fast_path(models)
   const aspect_after = await ink_aspect(canvas)
   // A fine skew correction changes the ink aspect only slightly; undoing the page's genuine ~90deg
