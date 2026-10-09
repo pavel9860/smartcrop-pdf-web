@@ -1044,19 +1044,19 @@ subpath deploy.
 **Offline:** a hand-rolled service worker (`public/sw.js`, registered only in production builds —
 never in dev, to avoid intercepting Vite's HMR with stale cached responses) caches every
 same-origin GET response opportunistically as the running app requests it: cache-first on repeat
-requests, falling back to network and populating the cache on a miss. There is no static
-build-time precache manifest (the JS/CSS bundle's filenames are content-hashed per build); instead,
-a normal boot plus one scanned-mode run naturally pulls the app shell, OpenCV wasm, ONNX models,
-pdf.js worker/cmaps/fonts and icons through the cache at least once, which is what "the app works
-offline after one online load" requires. No `SharedArrayBuffer`/COOP-COEP dependency.
+requests, falling back to network and populating the cache on a miss — so the app works offline
+for whatever a session has already used. No `SharedArrayBuffer`/COOP-COEP dependency.
 
-Settings → **"Enable offline mode"** — off by default. The passive caching above only covers
-whatever a session actually used, so a user who has only used NORMAL mode online would find
-SCANNED-mode dewarp/filters failing offline despite the app otherwise working offline. Turning the
-switch on runs the real OpenCV/ONNX/DBNet init paths once (the same ones SCANNED mode itself uses,
-including §7.1b's text-line detector, not just UVDoc), so their downloads populate the cache
-immediately — every feature works offline right after, not just whichever were already used. No
-install/PWA-add-to-homescreen step is required either way.
+Settings → **"Enable offline mode"** — off by default. Turning it on downloads **every built file**
+once (the build writes `precache.json`: app code, OpenCV, the ONNX runtime and models, pdf.js
+worker/cmaps/fonts, icons, the manual), with a status card while it runs. From then on the app makes
+**no network requests at all**: same-origin requests are answered from the cache only; anything
+else — cross-origin requests (e.g. the host's analytics beacon), non-GET requests, files not in the
+cache — gets an empty response instead of reaching the network. The setting lives in the service
+worker, so it survives reloads, and the checkbox shows the worker's actual state on startup. While
+it is on, the app does not update itself; turning it off restores normal network behaviour. If the
+download fails or no service worker is running (dev server, unsupported browser), the switch stays
+off and a dialog says so. No install/PWA-add-to-homescreen step is required.
 
 ---
 

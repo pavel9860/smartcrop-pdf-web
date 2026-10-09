@@ -136,9 +136,9 @@ const SECTIONS: readonly HelpSection[] = [
       + 'Ctrl 0 to reset).\n\n'
       + 'Output: postfix appended to the exported file name; Custom DPI and Paper size — shared '
       + 'with the sidebar Output Quality card, so either control always reflects the other.\n\n'
-      + 'Behaviour: remember the last-used folder; Enable offline mode — off by default, turn it on '
-      + 'to make every feature, including scanned-mode dewarp and filters, work offline right away '
-      + 'instead of only after first use (downloads more up front); Undo/redo depth; '
+      + 'Behaviour: remember the last-used folder; Enable offline mode — off by default: downloads '
+      + 'the whole app once, then makes no requests to the website at all until you switch it off; '
+      + 'Undo/redo depth; '
       + 'Ignore N outlier pages (§6 above).\n\n'
       + 'Scan: Dewarp supersample — renders a scanned page larger before straightening it, '
       + 'trading time for a sharper result.',
@@ -163,8 +163,8 @@ const SECTIONS: readonly HelpSection[] = [
     id: 'about', title: 'About',
     body: `SmartCrop PDF — Web Edition, version ${__APP_VERSION__}. All processing runs in your browser; no files are uploaded. `
       + 'No install needed — the app works offline after being loaded once, for whichever features '
-      + 'you\'ve already used (see Settings, below, for making every feature available offline '
-      + 'right away).',
+      + 'you\'ve already used; Settings → Enable offline mode downloads everything and stops all '
+      + 'requests to the website.',
   },
   {
     id: 'contacts', title: 'Contacts',

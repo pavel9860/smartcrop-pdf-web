@@ -6,7 +6,7 @@ import type { BatchJob } from '@core/batch'
 import { Failed } from '@core/batch'
 import { Mode } from '@core/enums'
 import { PdfRendererAdapter } from '@pdf/loader'
-import { on_module_status } from '@pdf/module_status'
+import { on_module_status, with_module_status } from '@pdf/module_status'
 import { CanvasView } from './canvas_view'
 import { ProgressOverlay } from './overlay'
 import { confirm_dialog, alert_dialog } from './confirm'
@@ -23,7 +23,7 @@ import {
 } from './constants'
 import { requireEl } from './dom'
 import { load_output_prefs, save_output_prefs } from './persist'
-import { warm_offline_cache, prefetch_scan_tools } from './sw_register'
+import { prefetch_scan_tools, set_offline_mode, get_offline_mode, type OfflineState } from './sw_register'
 
 // UIConfig — presentation-only state that drives NO domain computation (ARCHITECTURE §10);
 // owned here, invisible to core/. theme/font_size/ui_scale/remember_folder/offline_enabled.
@@ -32,11 +32,8 @@ export interface UIConfig {
   font_size: number
   ui_scale: number
   remember_folder: boolean
-  // Off by default (spec-web §15) — the service worker (public/sw.js) always registers in
-  // production and passively caches whatever's actually used, but SCANNED-mode assets (ONNX
-  // wasm, the ONNX models) are otherwise only cached the first time a user exercises that
-  // mode online. Turning this on proactively runs that same real init path once, so every feature
-  // works offline after, not just whichever ones were already used.
+  // Mirrors the service worker's own persisted state (spec-web §15) — read on startup, set via
+  // set_offline_enabled; never assumed.
   offline_enabled: boolean
 }
 
@@ -132,6 +129,7 @@ export class AppController {
     // it can't be fetched.
     apply_theme('dark')
     this.dispatch_async(() => this._open_manual())
+    void get_offline_mode().then(state => { this._apply_offline_state(state, false) })
   }
 
   private async _open_manual(): Promise<void> {
@@ -366,8 +364,14 @@ export class AppController {
   }
 
   set_offline_enabled(on: boolean): void {
-    this._ui_config.offline_enabled = on
-    if (on) void warm_offline_cache()
+    const change = set_offline_mode(on)
+    void (on ? with_module_status('Downloading the app for offline use…', () => change) : change)
+      .then(state => { this._apply_offline_state(state) })
+  }
+
+  private _apply_offline_state(state: OfflineState, report = true): void {
+    this._ui_config.offline_enabled = state.ok && state.on
+    if (report && !state.ok) void this.alert(`Offline mode could not be changed. ${state.error ?? ''}`)
     void this._refresh_async()
   }
 

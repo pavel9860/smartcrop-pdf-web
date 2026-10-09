@@ -1,7 +1,24 @@
 import { defineConfig } from 'vite'
-import { readFileSync } from 'fs'
-import { resolve } from 'path'
+import { readFileSync, readdirSync, writeFileSync } from 'fs'
+import { resolve, relative } from 'path'
 import { viteStaticCopy } from 'vite-plugin-static-copy'
+
+// Offline mode (spec-web §15) caches every built file up front: dist/precache.json lists them all
+// (relative to the deploy base) for public/sw.js. Written after everything else, incl. static copies.
+const NOT_PRECACHED = new Set(['sw.js', 'precache.json', '_headers', '.nojekyll'])
+const precache_manifest = {
+  name: 'precache-manifest',
+  apply: 'build' as const,
+  enforce: 'post' as const,
+  closeBundle(): void {
+    const dist = resolve(__dirname, 'dist')
+    const files = readdirSync(dist, { recursive: true, withFileTypes: true })
+      .filter(e => e.isFile())
+      .map(e => relative(dist, resolve(e.parentPath, e.name)).split('\\').join('/'))
+      .filter(f => !NOT_PRECACHED.has(f))
+    writeFileSync(resolve(dist, 'precache.json'), JSON.stringify(['', ...files.sort()]))
+  },
+}
 
 export default defineConfig({
   define: {
@@ -67,6 +84,7 @@ export default defineConfig({
     // node_modules directly and masking the gap. (Dewarp model weights don't need this plugin —
     // they're vendored directly under public/models/, which Vite serves as-is in both dev and
     // build with no extra config.)
+    precache_manifest,
     viteStaticCopy({
       targets: [
         { src: 'node_modules/pdfjs-dist/cmaps/*',          dest: 'cmaps' },

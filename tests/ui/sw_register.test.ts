@@ -2,13 +2,11 @@
 import { describe, it, expect, vi } from 'vitest'
 
 const ensure_cv = vi.fn().mockResolvedValue(undefined)
-const ensure_onnx = vi.fn().mockResolvedValue(undefined)
 const ensure_dbnet = vi.fn().mockResolvedValue(undefined)
 vi.mock('@pdf/cv', () => ({ ensure_cv }))
-vi.mock('@pdf/dewarp', () => ({ ensure_onnx }))
 vi.mock('@pdf/dbnet', () => ({ ensure_dbnet }))
 
-const { register_service_worker, warm_offline_cache, prefetch_scan_tools } = await import('@ui/sw_register')
+const { register_service_worker, prefetch_scan_tools, set_offline_mode, get_offline_mode } = await import('@ui/sw_register')
 
 describe('register_service_worker', () => {
   it('does nothing outside a production build, even when serviceWorker is supported', () => {
@@ -36,23 +34,36 @@ describe('register_service_worker', () => {
   })
 })
 
-describe('warm_offline_cache (Settings → Enable offline mode)', () => {
-  it('runs the real OpenCV + ONNX + DBNet init paths so their assets get cached, not a hardcoded URL list', async () => {
-    ensure_cv.mockClear(); ensure_onnx.mockClear(); ensure_dbnet.mockClear()
-    await warm_offline_cache()
-    expect(ensure_cv).toHaveBeenCalledTimes(1)
-    expect(ensure_onnx).toHaveBeenCalledTimes(1)
-    expect(ensure_dbnet).toHaveBeenCalledTimes(1)
+describe('set_offline_mode / get_offline_mode (Settings → Enable offline mode, spec-web §15)', () => {
+  // A fake active worker that answers on the transferred MessageChannel port, as public/sw.js does.
+  function container(reply: (msg: { type: string; on?: boolean }) => unknown): Pick<ServiceWorkerContainer, 'getRegistration'> {
+    const active = {
+      postMessage: (msg: { type: string; on?: boolean }, ports: MessagePort[]) => { ports[0]!.postMessage(reply(msg)) },
+    }
+    return { getRegistration: () => Promise.resolve({ active } as unknown as ServiceWorkerRegistration) }
+  }
+
+  it('sends the switch to the worker and resolves with the state it reports', async () => {
+    const seen: unknown[] = []
+    const sw = container(msg => { seen.push(msg); return { ok: true, on: msg.on ?? true } })
+    await expect(set_offline_mode(true, sw)).resolves.toEqual({ ok: true, on: true })
+    await expect(get_offline_mode(sw)).resolves.toEqual({ ok: true, on: true })
+    expect(seen).toEqual([{ type: 'set-offline', on: true }, { type: 'get-offline' }])
+  })
+
+  it('reports not-ok, off, when no service worker is active (dev server, unsupported browser)', async () => {
+    const none = { getRegistration: () => Promise.resolve(undefined) }
+    await expect(set_offline_mode(true, none)).resolves.toMatchObject({ ok: false, on: false })
+    await expect(get_offline_mode(null)).resolves.toMatchObject({ ok: false, on: false })
   })
 })
 
 describe('prefetch_scan_tools (SCANNED document open)', () => {
-  it('loads the image engine, then the text-line model — not the dewarp model — and swallows a failure', async () => {
-    ensure_cv.mockClear(); ensure_onnx.mockClear(); ensure_dbnet.mockClear()
+  it('loads the image engine, then the text-line model, and swallows a failure', async () => {
+    ensure_cv.mockClear(); ensure_dbnet.mockClear()
     ensure_dbnet.mockRejectedValueOnce(new Error('offline'))
     void prefetch_scan_tools()
     await vi.waitFor(() => { expect(ensure_dbnet).toHaveBeenCalledTimes(1) })
     expect(ensure_cv).toHaveBeenCalledTimes(1)
-    expect(ensure_onnx).not.toHaveBeenCalled()
   })
 })

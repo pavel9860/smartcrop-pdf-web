@@ -103,7 +103,7 @@ export class SettingsView {
         </div>
         <div class="settings-row">
           <span class="settings-label">Enable offline mode</span>
-          <label class="toggle-label"><input type="checkbox" id="sv-offline" title="Proactively cache everything needed to work with no connection, including scanned-mode dewarp/filters — off by default, no install required" /></label>
+          <label class="toggle-label"><input type="checkbox" id="sv-offline" title="Download the whole app once, then make no requests to the website at all until switched off — off by default, no install required" /></label>
         </div>
         <div class="settings-row">
           <span class="settings-label">Undo / redo depth</span>

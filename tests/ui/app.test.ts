@@ -75,7 +75,7 @@ describe('progress and module status (spec-web §11)', () => {
     vi.resetModules()
     let finish: (ok: boolean) => void = () => undefined
     const prefetch = vi.fn(() => new Promise<boolean>(r => { finish = r }))
-    vi.doMock('@ui/sw_register', () => ({ prefetch_scan_tools: prefetch, warm_offline_cache: vi.fn() }))
+    vi.doMock('@ui/sw_register', () => ({ prefetch_scan_tools: prefetch, set_offline_mode: vi.fn(), get_offline_mode: () => Promise.resolve({ ok: false, on: false }) }))
     try {
       const { AppController: Ctrl } = await import('@ui/app')
       const { with_module_status: status } = await import('@pdf/module_status')

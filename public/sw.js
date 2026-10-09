@@ -1,17 +1,11 @@
-// Offline auto-precache service worker (spec-web offline support). Hand-rolled — no
-// vite-plugin-pwa/workbox dependency: the app JS/CSS bundle's filenames are content-hashed by
-// Vite at build time, so there is no static list to precache ahead of a build without adding a
-// manifest-generation plugin. Instead: cache-first for every same-origin GET, populated
-// opportunistically as the app actually requests things. A normal boot plus one scanned-mode run
-// pulls the app shell, OpenCV wasm, ONNX models, pdf.js worker/cmaps/fonts and icons through the
-// fetch handler below at least once, which is what "works offline after one online load" needs —
-// this repo doesn't lazy-load anything a real session wouldn't already touch. No COOP/COEP
-// requirement, no SharedArrayBuffer — this file uses neither.
+// Service worker (spec-web §15). Hand-rolled, no workbox. Online: cache-first for every same-origin
+// GET, populated opportunistically as the app requests things. Offline mode (Settings): the build's
+// precache.json — every built file — is cached up front and the app then makes no network
+// requests at all (below).
 //
 // Plain JS, not TypeScript: files under public/ are copied verbatim by Vite, not compiled, and a
 // service worker needs a stable, un-hashed root-scoped URL (this file, registered as `sw.js`) to
-// control the whole origin — bundling it through the app's normal TS build would both hash its
-// filename and pull in the wrong module graph for a worker with no window/DOM.
+// control the whole origin.
 
 const CACHE_VERSION = 'v1'
 const CACHE_NAME = `smartcrop-${CACHE_VERSION}`
@@ -47,28 +41,76 @@ self.addEventListener('activate', (event) => {
   })())
 })
 
+// Offline mode (spec-web §15, Settings → "Enable offline mode"): every built file (precache.json,
+// written by the build) is cached up front, then the app makes NO network requests — same-origin
+// requests are answered from the cache only, everything else (cross-origin, non-GET, analytics
+// beacons) gets an empty response. The flag lives in the cache so it survives reloads.
+const FLAG = 'offline-mode-flag'
+let offline = null   // loaded lazily from the cache
+
+async function is_offline() {
+  if (offline === null) offline = !!(await (await caches.open(CACHE_NAME)).match(self.registration.scope + FLAG))
+  return offline
+}
+
+async function set_offline(on) {
+  const cache = await caches.open(CACHE_NAME)
+  const scope = self.registration.scope
+  if (on) {
+    const files = await (await fetch(scope + 'precache.json', { cache: 'no-store' })).json()
+    await cache.addAll(files.map((f) => scope + f))
+    await cache.put(scope + FLAG, new Response('1'))
+  } else {
+    await cache.delete(scope + FLAG)
+  }
+  offline = on
+}
+
+self.addEventListener('message', (event) => {
+  const port = event.ports[0]
+  const { type, on } = event.data ?? {}
+  const done = type === 'set-offline' ? set_offline(!!on).then(() => on) : is_offline()
+  done.then((state) => port?.postMessage({ ok: true, on: state }), (e) => port?.postMessage({ ok: false, error: String(e) }))
+})
+
+const EMPTY = () => new Response(null, { status: 204 })
+
+async function cache_only(req) {
+  const cache = await caches.open(CACHE_NAME)
+  // ignoreVary: precached entries were fetched without the Origin header module scripts send.
+  return (await cache.match(req, { ignoreVary: true })) ??
+    (req.mode === 'navigate' ? await cache.match(self.registration.scope + 'index.html') : undefined) ??
+    EMPTY()
+}
+
 self.addEventListener('fetch', (event) => {
   const req = event.request
-  if (req.method !== 'GET') return
-  if (new URL(req.url).origin !== self.location.origin) return   // never cache cross-origin requests
-
+  const same_origin = new URL(req.url).origin === self.location.origin
+  if (offline === false && (req.method !== 'GET' || !same_origin)) return   // fast path, online
   event.respondWith((async () => {
-    const cache = await caches.open(CACHE_NAME)
-    const cached = await cache.match(req)
-    if (cached) return cached
-    try {
-      const res = await fetch(req)
-      // Only cache real, successful, same-origin (non-opaque) responses.
-      if (res.ok && res.type === 'basic') cache.put(req, res.clone())
-      return res
-    } catch (err) {
-      // Offline and never cached: for a navigation, fall back to the cached shell so the app
-      // still boots to its synthetic-document state; any other asset failure propagates as-is.
-      if (req.mode === 'navigate') {
-        const shell = await cache.match(self.registration.scope + 'index.html')
-        if (shell) return shell
-      }
-      throw err
-    }
+    if (await is_offline()) return req.method === 'GET' && same_origin ? cache_only(req) : EMPTY()
+    if (req.method !== 'GET' || !same_origin) return fetch(req)
+    return online(req)
   })())
 })
+
+// Online: cache-first for same-origin GETs, populated as the app requests things.
+async function online(req) {
+  const cache = await caches.open(CACHE_NAME)
+  const cached = await cache.match(req)
+  if (cached) return cached
+  try {
+    const res = await fetch(req)
+    // Only cache real, successful, same-origin (non-opaque) responses.
+    if (res.ok && res.type === 'basic') cache.put(req, res.clone())
+    return res
+  } catch (err) {
+    // Offline and never cached: for a navigation, fall back to the cached shell so the app
+    // still boots to its synthetic-document state; any other asset failure propagates as-is.
+    if (req.mode === 'navigate') {
+      const shell = await cache.match(self.registration.scope + 'index.html')
+      if (shell) return shell
+    }
+    throw err
+  }
+}

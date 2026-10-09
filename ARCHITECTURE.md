@@ -1003,9 +1003,9 @@ Models are cached indefinitely in IndexedDB.
 
 **Icons + offline (`public/sw.js`, `public/site.webmanifest`, `src/ui/sw_register.ts`):** a
 hand-rolled service worker, not `vite-plugin-pwa`/workbox — the JS/CSS bundle's filenames are
-content-hashed per build, so there's no static precache manifest to generate without adding a
-plugin dependency; instead the SW caches same-origin GET responses opportunistically (cache-first,
-populate-on-miss) as the running app requests them. `sw_register.ts` registers it only when
+content-hashed per build, so a small build plugin in vite.config.ts (`precache_manifest`, after
+static copies) writes `dist/precache.json` listing every built file. Online, the SW caches
+same-origin GET responses opportunistically (cache-first, populate-on-miss). `sw_register.ts` registers it only when
 `import.meta.env.PROD` (never under `vite dev` — a dev-mode SW would intercept fetches and serve
 stale cached responses instead of Vite's HMR updates; stopping the `npm run dev` process itself is
 unrelated to offline capability either way — it just kills the local server the dev browser talks
@@ -1016,13 +1016,11 @@ icon path 404s under a GitHub Pages project-page subpath). Playwright e2e runs a
 offline-after-online-load e2e check yet — verify that manually against a production build
 (`vite build && vite preview`) before relying on the offline behavior at deploy time.
 
-`sw_register.ts::warm_offline_cache()` (spec-web §15) — Settings → "Enable offline mode" (off by
-default). The SW's opportunistic caching above only ever covers what a session actually used, so a
-user who never exercised SCANNED-mode processing online would find dewarp/filters failing offline
-despite the SW being registered and otherwise working. Turning the switch on calls `ensure_cv()`
-(`pdf/cv.ts`), `ensure_onnx()` (`pdf/dewarp.ts`), and `ensure_dbnet()` (`pdf/dbnet.ts`) directly —
-the same real init paths SCANNED mode already uses — so their same-origin fetches populate the
-SW's cache as a side effect, with no separate hardcoded asset-URL list to keep in sync.
+Offline mode (spec-web §15) is owned by the SW: `sw_register.ts::set_offline_mode/get_offline_mode`
+message it over a `MessageChannel`. On `set-offline` it `cache.addAll`s every `precache.json` entry,
+then stores a flag in Cache Storage (survives reloads); while flagged, its fetch handler answers
+same-origin GETs cache-only and every other request with an empty 204 — never `fetch()`.
+Tested by running the real `public/sw.js` against a fake worker scope (tests/ui/sw_worker.test.ts).
 
 ---
 

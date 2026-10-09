@@ -280,7 +280,7 @@ newPage()
   g(PX[2] + 65, PY[1] + 80).path('M0 0v-7a8 8 0 0 1 16 0v7', { stroke: INK })
   g(PX[2] + 168, PY[1] + 86).path('M0 0a18 12 0 0 1 34 -6a14 10 0 0 1 16 18h-46a10 8 0 0 1 -4 -12z', { stroke: DIM, sw: 1.8 })
   g(PX[2] + 132, PY[1] + 62).path('M0 0l36 36M36 0l-36 36', { stroke: INK, sw: 3, cap: true })
-  cap(PX[2], PY[1] + 136, ['Files never leave your browser.', 'Offline mode: turn on in Settings.'], 17)
+  cap(PX[2], PY[1] + 136, ['Files never leave your browser anyway.', 'Use “Offline mode” in Settings to avoid', 'any requests to the website.'], 17)
 
   panel(PX[2], PY[2], 'Help')
   top.circle(PX[2] + 22, PY[2] + 66, 18, { stroke: INK, sw: 2.4 })
