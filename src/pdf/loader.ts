@@ -26,14 +26,28 @@ const VECTOR_OPS = new Set<number>([
   pdfjs.OPS.shadingFill,
 ])
 
-// Page is "native" (has real text or vector drawing) vs. a scanned raster (spec §4).
+const TEXT_SHOW_OPS = new Set<number>([
+  pdfjs.OPS.showText, pdfjs.OPS.showSpacedText,
+  pdfjs.OPS.nextLineShowText, pdfjs.OPS.nextLineSetSpacingShowText,
+])
+const INVISIBLE_TEXT_MODES = new Set<number>([3, 7])
+
+// Page is "native" (visible text or vector drawing) vs. a scanned raster (spec §1). Text in an
+// invisible render mode is an OCR layer over the scan and does not count.
 async function is_native_page(page: pdfjs.PDFPageProxy): Promise<boolean> {
-  const text = await page.getTextContent()
-  const char_count = text.items.reduce(
-    (n: number, it) => n + ('str' in it ? it.str.length : 0), 0)
-  if (char_count >= MODE_TEXT_MIN) return true
-  const ops = await page.getOperatorList()
-  return ops.fnArray.some(fn => VECTOR_OPS.has(fn))
+  const { fnArray, argsArray } = await page.getOperatorList()
+  let visible = true
+  let chars = 0
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i] as number
+    if (VECTOR_OPS.has(fn)) return true
+    if (fn === pdfjs.OPS.setTextRenderingMode) visible = !INVISIBLE_TEXT_MODES.has((argsArray[i] as number[])[0] as number)
+    else if (visible && TEXT_SHOW_OPS.has(fn)) {
+      chars += ((argsArray[i] as unknown[][])[0])?.length ?? 0
+      if (chars >= MODE_TEXT_MIN) return true
+    }
+  }
+  return false
 }
 
 // How far detect_text_box's edge-outlier check requires the widest/tallest item to lead the
@@ -336,13 +350,13 @@ export class PdfRendererAdapter implements RendererAdapter {
     return info
   }
 
-  async get_source_image(page_idx: number, dpi: number, rotation = 0): Promise<ImageBitmap> {
+  async get_source_image(page_idx: number, dpi: number, rotation = 0, min_long_px = 0): Promise<ImageBitmap> {
     const source = this._source(page_idx)
     // Image pages are native-resolution rasters; dpi does not add real pixels (they are treated as
     // SCANNED source @ their own pixel size, spec §4), so it is not applied.
     const bitmap = source.kind === 'image'
       ? await createImageBitmap(source.blob)
-      : await this._render_pdf(source, dpi / PT_PER_INCH)
+      : await this._render_pdf(source, dpi / PT_PER_INCH, min_long_px)
     return rotate_bitmap_cw(bitmap, rotation)
   }
 
@@ -358,9 +372,12 @@ export class PdfRendererAdapter implements RendererAdapter {
     if (!this._renders.get(page)) page.cleanup()
   }
 
-  private async _render_pdf(source: Extract<PageSource, { kind: 'pdf' }>, scale: number): Promise<ImageBitmap> {
+  private async _render_pdf(
+    source: Extract<PageSource, { kind: 'pdf' }>, scale: number, min_long_px: number,
+  ): Promise<ImageBitmap> {
     const page   = await source.pdf.getPage(source.page_num)
-    const vp     = page.getViewport({ scale })
+    const unit   = page.getViewport({ scale: 1 })
+    const vp     = page.getViewport({ scale: Math.max(scale, min_long_px / Math.max(unit.width, unit.height)) })
     const canvas = new OffscreenCanvas(Math.max(1, Math.round(vp.width)), Math.max(1, Math.round(vp.height)))
     const ctx    = canvas.getContext('2d')
     if (!ctx) throw new Error(CONTEXT_2D_UNAVAILABLE)

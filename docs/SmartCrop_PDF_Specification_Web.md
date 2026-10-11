@@ -18,7 +18,7 @@ On load, every page of the combined document (§9) is classified, and the docume
 from whether *any* page carries vector data:
 
 ```
-page_is_native = extractable text length >= MODE_TEXT_MIN  OR  page has any vector drawing path
+page_is_native = VISIBLE text length >= MODE_TEXT_MIN  OR  page has any vector drawing path
 document_mode  = NORMAL if any page_is_native else SCANNED     # SCANNED only when *every* page is a raster image
 ```
 
@@ -26,6 +26,12 @@ A document is **NORMAL** if it contains any vector data — real text or vector 
 one page. It is **SCANNED** only when every page is a raster image with no vector content. A page's
 own incidental text below `MODE_TEXT_MIN` characters does not by itself make the *page* native, but
 one genuinely native page anywhere in the document is enough to make the whole *document* NORMAL.
+Text drawn in an invisible text render mode (3 = neither fill nor stroke, 7 = clip only) is an OCR
+layer over a scan and does not count: an OCR'd scan classifies SCANNED, same as one without OCR.
+
+A SCANNED PDF page is rendered at `SRC_DPI`, but never below `SCAN_MIN_LONG_PX` on its long edge
+(an A4 page at `SRC_DPI`). A scan whose PDF page box is tiny (e.g. 15 × 21 pt around a 1240 × 1753
+image) would otherwise rasterize to a ~30 px bitmap and look blurred.
 
 | Mode | Page unit | Stage chain |
 |---|---|---|
@@ -1095,7 +1101,7 @@ duplicate values into logic). UI-only tunables live in `src/ui/constants.ts`.
 
 ```
 # DPI / caches
-SRC_DPI = 150.0    NORMAL_DPI = 150.0    NORMAL_DISPLAY_DPI_MAX = 450.0
+SRC_DPI = 150.0    SCAN_MIN_LONG_PX = 1754    NORMAL_DPI = 150.0    NORMAL_DISPLAY_DPI_MAX = 450.0
 # raster cache capacity = Undo/redo-depth setting + 1, per page (§7) — not a separate constant
 # crop geometry
 HANDLE_R = 10    HANDLE_SLACK = 6    CANVAS_MARGIN = 0    OFFSET_LIMIT = 100.0    MIN_RECT = 5.0 (geometry.ts)

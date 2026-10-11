@@ -52,7 +52,7 @@ export interface VectorExportPage {
 
 export interface RendererAdapter {
   load_files(files: File[]): Promise<DocInfo>
-  get_source_image(page_idx: number, dpi: number, rotation: number): Promise<ImageBitmap>
+  get_source_image(page_idx: number, dpi: number, rotation: number, min_long_px?: number): Promise<ImageBitmap>
   // Scan processing (dewarp/filter) applied to an ALREADY-rendered source bitmap. Taking the
   // source (not a page index) means the model renders each page exactly once and hands that raster
   // straight to processing — no second internal rasterization (spec-web §W2 row 5). With a no-op

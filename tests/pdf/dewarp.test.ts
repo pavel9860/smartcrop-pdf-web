@@ -26,6 +26,7 @@ function make_fake_indexeddb(stores: Map<string, Map<string, unknown>>): { open:
                 return r
               },
               put(value: unknown, key: string) { map.set(key, value) },
+              delete(key: string) { map.delete(key) },
             })
             queueMicrotask(() => tx.oncomplete?.())
             return tx
@@ -131,6 +132,29 @@ describe('fetch_with_idb_cache (M3)', () => {
     expect(new Uint8Array(bytes)).toEqual(new Uint8Array([1, 2, 3]))
     expect(fetch_mock).toHaveBeenCalledTimes(2)
     expect(stores.get('models')?.has('k')).toBe(true)
+  })
+
+  it('does not cache an empty 204 (the offline-mode worker\'s answer for an uncached file)', async () => {
+    const { fetch_with_idb_cache } = await import('@pdf/dewarp')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })))
+    await expect(fetch_with_idb_cache('k', 'u')).rejects.toThrow('204')
+    expect(stores.get('models')?.has('k')).toBe(false)
+  })
+
+  it('load_model_session evicts a model ORT rejects and builds from a fresh fetch', async () => {
+    const { load_model_session } = await import('@pdf/dewarp')
+    stores.set('models', new Map([['k', new Uint8Array([9, 9]).buffer]]))
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(new Uint8Array([1, 2, 3]))))
+    const seen: number[][] = []
+    const create = vi.fn((bytes: Uint8Array) => {
+      seen.push([...bytes])
+      return seen.length === 1 ? Promise.reject(new Error('ERROR_CODE: 7')) : Promise.resolve({ ok: true })
+    })
+    const ort = { env: { wasm: {} }, InferenceSession: { create } }
+    const session = await load_model_session(ort as never, 'k', 'u', 'dewarp model')
+    expect(session).toEqual({ ok: true })
+    expect(seen).toEqual([[9, 9], [1, 2, 3]])
+    expect(new Uint8Array(stores.get('models')!.get('k') as ArrayBuffer)).toEqual(new Uint8Array([1, 2, 3]))
   })
 
   it('reports download progress in MB while fetching, then goes idle', async () => {

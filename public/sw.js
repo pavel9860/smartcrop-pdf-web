@@ -78,7 +78,8 @@ const EMPTY = () => new Response(null, { status: 204 })
 async function cache_only(req) {
   const cache = await caches.open(CACHE_NAME)
   // ignoreVary: precached entries were fetched without the Origin header module scripts send.
-  return (await cache.match(req, { ignoreVary: true })) ??
+  // ignoreSearch: versioned URLs (model files carry ?v=<version>) resolve to the precached path.
+  return (await cache.match(req, { ignoreVary: true, ignoreSearch: true })) ??
     (req.mode === 'navigate' ? await cache.match(self.registration.scope + 'index.html') : undefined) ??
     EMPTY()
 }

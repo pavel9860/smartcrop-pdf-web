@@ -11,7 +11,7 @@ import type { RendererAdapter, PageSize } from './model'
 import type { PageIndexMap } from './page_index_map'
 import { Mode } from './enums'
 import { LRUCache } from './lru'
-import { SRC_DPI, SYNTH_W, SYNTH_H, MAX_SPLIT } from './constants'
+import { SRC_DPI, SCAN_MIN_LONG_PX, SYNTH_W, SYNTH_H, MAX_SPLIT } from './constants'
 
 // Live reads into AppModel state that the pipeline itself doesn't own (mode/display DPI/rotation
 // are UI- and DocumentState-driven; process_intent is derived from DocumentState's scan flags).
@@ -141,9 +141,10 @@ export class PageRasterPipeline {
 
   private _source(o: number, rotation: number): Promise<ImageBitmap> {
     return this._cached(this._source_versions, o, `s${rotation}`, () => {
-      const dpi = this._ctx.mode() === Mode.SCANNED ? SRC_DPI : this._ctx.display_dpi()
+      const scanned = this._ctx.mode() === Mode.SCANNED
       return !this._ctx.is_synthetic()
-        ? this._adapter.get_source_image(o, dpi, rotation)
+        ? this._adapter.get_source_image(o, scanned ? SRC_DPI : this._ctx.display_dpi(), rotation,
+          scanned ? SCAN_MIN_LONG_PX : 0)
         : this._adapter.make_synth_page(o, SYNTH_W, SYNTH_H)
     })
   }

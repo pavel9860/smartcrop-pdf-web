@@ -91,8 +91,7 @@ async function _load_onnx_sessions(): Promise<void> {
   try {
     const ort = await import('onnxruntime-web/webgpu')
     const base = import.meta.env.BASE_URL
-    _uvdoc_session = await create_onnx_session(ort,
-      await fetch_with_idb_cache(DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL, 'dewarp model'))
+    _uvdoc_session = await load_model_session(ort, DEWARP_UVDOC_CACHE_KEY, base + DEWARP_UVDOC_URL, 'dewarp model')
   } catch (e) {
     throw new MissingDependencyError(`Failed to load the dewarp model: ${String(e)}`)
   }
@@ -279,22 +278,46 @@ function mat_to_resized_chw_f32(mat: Mat, target_w: number, target_h: number): F
 // IndexedDB cache for ONNX model
 // ---------------------------------------------------------------------------
 
+// Builds a model's session from the IndexedDB-cached bytes. A cached or served file that ONNX
+// Runtime rejects (corrupt, truncated, not a model) is evicted and fetched once more, bypassing
+// the service worker's cache — otherwise the bad entry would fail every later load identically.
+// The ?v=<key> query gives each model version its own service-worker cache entry, so a redeployed
+// model is never answered with the previous build's file under the same path.
+export async function load_model_session(
+  ort: Pick<OrtModule, 'env' | 'InferenceSession'>, key: string, url: string, label: string,
+): Promise<InferenceSession> {
+  const versioned = `${url}?v=${key}`
+  try {
+    return await create_onnx_session(ort, await fetch_with_idb_cache(key, versioned, label))
+  } catch (e) {
+    console.warn(`[smartcrop] ${label} rejected, refetching:`, e)
+    const db = await open_idb('smartcrop-models', 'models')
+    const tx = db.transaction('models', 'readwrite')
+    tx.objectStore('models').delete(key)
+    await idb_tx(tx)
+    return create_onnx_session(ort, await fetch_with_idb_cache(key, `${versioned}&t=${Date.now()}`, label))
+  }
+}
+
 // Exported for tests/pdf/dewarp.test.ts only (see ./cv's ensure_cv note).
 export async function fetch_with_idb_cache(key: string, url: string, label = 'model'): Promise<ArrayBuffer> {
   const db  = await open_idb('smartcrop-models', 'models')
   const tx  = db.transaction('models', 'readonly')
   const req = tx.objectStore('models').get(key) as IDBRequest<ArrayBuffer | undefined>
   const cached = await idb_req(req)
-  if (cached) return cached
+  if (cached?.byteLength) return cached
 
   const bytes = await with_module_status(`Downloading ${label}…`, async update => {
     const resp = await fetch(url)
     // M3: a failed fetch (404/500) must not be cached — caching it would permanently poison the
-    // IDB entry for `key`, since a truthy `cached` short-circuits every future call above.
-    if (!resp.ok) throw new Error(`Fetch failed for ${url}: ${resp.status} ${resp.statusText}`)
-    return read_with_progress(resp, (got, total) => {
+    // IDB entry for `key`. Exactly 200: the offline-mode service worker answers an uncached file
+    // with an empty 204, which `ok` accepts.
+    if (resp.status !== 200) throw new Error(`Fetch failed for ${url}: ${resp.status} ${resp.statusText}`)
+    const body = await read_with_progress(resp, (got, total) => {
       update(`Downloading ${label} ${mb(got)}${total ? ` / ${mb(total)}` : ''} MB`)
     })
+    if (body.byteLength === 0) throw new Error(`Empty response for ${url}`)
+    return body
   })
 
   const tx2   = db.transaction('models', 'readwrite')

@@ -16,6 +16,7 @@ vi.mock('pdfjs-dist', () => ({
     constructPath: 1, fill: 2, eoFill: 3, fillStroke: 4, eoFillStroke: 5,
     stroke: 6, closeStroke: 7, closeFillStroke: 8, closeEOFillStroke: 9, shadingFill: 10,
     save: 11, restore: 12, transform: 13, clip: 14, eoClip: 15, beginText: 16,
+    setTextRenderingMode: 20, showText: 21, showSpacedText: 22, nextLineShowText: 23, nextLineSetSpacingShowText: 24,
   },
   Util: {
     transform: (_vp: number[], it: number[]): number[] => it,   // identity passthrough
@@ -55,7 +56,8 @@ function fake_pdf(page_count: number, native: boolean, base_w = 100, base_h = 20
     getPage: vi.fn((_n: number) => Promise.resolve({
       getViewport: ({ scale }: { scale: number }) => ({ width: base_w * scale, height: base_h * scale }),
       getTextContent: () => Promise.resolve({ items: native ? [{ str: 'x'.repeat(20) }] : [] }),
-      getOperatorList: () => Promise.resolve({ fnArray: native ? [2] : [] }),
+      getOperatorList: () => Promise.resolve(native
+        ? { fnArray: [21], argsArray: [[new Array(20).fill({})]] } : { fnArray: [], argsArray: [] }),
       render: () => ({ promise: Promise.resolve() }),
       cleanup: () => { /* no-op */ },
     })),
@@ -99,6 +101,37 @@ describe('multi-file load (§W2 row 3)', () => {
     const a = new PdfRendererAdapter()
     const info = await a.load_files([pdf_file('scan.pdf'), pdf_file('native.pdf')])
     expect(info.mode).toBe(Mode.NORMAL)
+  })
+})
+
+describe('text visibility in classification (spec §1)', () => {
+  const classify = async (fnArray: number[], argsArray: unknown[]): Promise<Mode> => {
+    const pdf = fake_pdf(1, false)
+    const page = await pdf.getPage(1)
+    page.getOperatorList = () => Promise.resolve({ fnArray, argsArray })
+    pdf.getPage = () => Promise.resolve(page)
+    shared.pdfQueue = [pdf]
+    return (await new PdfRendererAdapter().load_files([pdf_file('p.pdf')])).mode
+  }
+  const glyphs = [new Array(20).fill({})]
+
+  it('an OCR layer drawn in invisible render mode 3 stays SCANNED', async () => {
+    expect(await classify([20, 21], [[3], glyphs])).toBe(Mode.SCANNED)
+  })
+  it('visible text after the mode is reset to 0 is native', async () => {
+    expect(await classify([20, 21, 20, 21], [[3], glyphs, [0], glyphs])).toBe(Mode.NORMAL)
+  })
+})
+
+describe('SCANNED render floor (spec §1)', () => {
+  it('a tiny page box is rendered up to the minimum long edge; a large one is untouched', async () => {
+    shared.pdfQueue = [fake_pdf(1, false, 15, 21), fake_pdf(1, false, 1000, 1200)]
+    const a = new PdfRendererAdapter()
+    await a.load_files([pdf_file('tiny.pdf'), pdf_file('big.pdf')])
+    const tiny = await a.get_source_image(0, 150, 0, 1754)
+    expect(Math.max(tiny.width, tiny.height)).toBeGreaterThanOrEqual(1753)
+    const big = await a.get_source_image(1, 150, 0, 1754)
+    expect(big.height).toBe(Math.round(1200 * 150 / 72))
   })
 })
 
@@ -239,7 +272,7 @@ describe('detect_text_box clip detection (ghost-width fix, spec-web §5)', () =>
       { str: 'aaaa', transform: [1, 0, 0, 12, 50, 12], width: 510 },
       { str: 'bbbb', transform: [1, 0, 0, 12, 50, 12], width: 505 },
     ]
-    const getOperatorList = vi.fn()
+    const getOperatorList = vi.fn(() => Promise.resolve({ fnArray: [], argsArray: [] }))
     const page = {
       getViewport: ({ scale }: { scale: number }) =>
         ({ width: 700, height: 850, scale, transform: [1, 0, 0, 1, 0, 0] }),
@@ -252,6 +285,7 @@ describe('detect_text_box clip detection (ghost-width fix, spec-web §5)', () =>
     }]
     const a = new PdfRendererAdapter()
     await a.load_files([pdf_file('a.pdf')])
+    getOperatorList.mockClear()          // load-time classification reads it once
     const box = await a.detect_text_box(0)
     expect(box).not.toBeNull()
     expect(box!.x1).toBe(560)          // 50 + 510, the widest item — unclamped, no clip involved
@@ -273,6 +307,7 @@ describe('detect_text_box whitespace trim (ghost-width fix, spec-web §5)', () =
       getTextContent: () => Promise.resolve({
         items: [{ str, transform: [1, 0, 0, font_h, left, font_h], width: full_width }],
       }),
+      getOperatorList: () => Promise.resolve({ fnArray: [], argsArray: [] }),
       cleanup: () => { /* no-op */ },
     }
     shared.pdfQueue = [{
@@ -295,7 +330,7 @@ describe('overlapping renders of one page (e.g. a display-DPI re-render)', () =>
     const page = {
       getViewport: ({ scale }: { scale: number }) => ({ width: 100 * scale, height: 200 * scale }),
       getTextContent: () => Promise.resolve({ items: [{ str: 'x'.repeat(20) }] }),
-      getOperatorList: () => Promise.resolve({ fnArray: [2] }),
+      getOperatorList: () => Promise.resolve({ fnArray: [2], argsArray: [[]] }),
       render: () => ({ promise: new Promise<void>(r => { finish.push(r) }) }),
       cleanup,
     }

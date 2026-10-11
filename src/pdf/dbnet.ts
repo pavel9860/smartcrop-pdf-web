@@ -16,7 +16,7 @@ import {
   DBNET_MIN_AREA_PX, DBNET_MIN_WIDTH_PX, DBNET_MIN_ASPECT_RATIO,
 } from '@core/constants'
 import { cv, type Mat } from './cv'
-import { fetch_with_idb_cache, create_onnx_session } from './dewarp'
+import { load_model_session } from './dewarp'
 import type { Point } from './vanishing_point'
 
 let _session: InferenceSession | null = null
@@ -40,8 +40,7 @@ async function _load_session(): Promise<void> {
   try {
     const ort = await import('onnxruntime-web/webgpu')
     const base = import.meta.env.BASE_URL
-    const bytes = await fetch_with_idb_cache(DBNET_MODEL_CACHE_KEY, base + DBNET_MODEL_URL, 'text-line model')
-    _session = await create_onnx_session(ort, bytes)
+    _session = await load_model_session(ort, DBNET_MODEL_CACHE_KEY, base + DBNET_MODEL_URL, 'text-line model')
   } catch (e) {
     throw new MissingDependencyError(`Failed to load the text-line detection model: ${String(e)}`)
   }

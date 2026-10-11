@@ -4,6 +4,7 @@
 // DPI / raster
 export const SRC_DPI    = 150.0   // scanned-mode source render DPI — fixed, never display-scaled
                                    // (the scan pipeline's perf budgets are tuned against it, §16)
+export const SCAN_MIN_LONG_PX = 1754   // A4 long edge @ SRC_DPI: floor for a scanned page whose PDF box is tiny
 export const NORMAL_DPI = 150.0   // normal-mode baseline/minimum render DPI
 // Normal-mode preview re-renders sharper than NORMAL_DPI when the canvas' actual display size
 // needs it (spec-web §2) — never below NORMAL_DPI, never above this cap (bounds memory/CPU on an
